@@ -6,14 +6,17 @@ use roaring::RoaringBitmap;
 
 use crate::ast::query::glob_matches;
 use crate::filter::{
-    TOPK_THRESHOLD, apply_clauses, collect_top_k, eval_predicate, eval_predicate_on, order_cmp,
+    TOPK_THRESHOLD, apply_clauses_counted, collect_top_k, eval_predicate, eval_predicate_on,
+    order_cmp,
 };
 use crate::ir::{Clauses, CompareOp, GroupBy, OrderBy, PredicateValue, SortDirection};
 use crate::result::SymbolMatch;
+use crate::storage::FindPage;
 
 use super::super::overlay::{Overlay, RowPtr};
 use super::super::segment_reader::{SegRowRef, SegmentReader};
 use super::ColumnarStorage;
+use super::query::find::dedupe_symbol_matches;
 
 /// Over-fetch factor for the running top-K trim in [`ColumnarStorage::materialize_all`].
 const TOPK_OVER_FETCH: usize = 4;
@@ -94,20 +97,18 @@ fn row_budget_exceeded(max_rows: usize) -> anyhow::Error {
          more selective WHERE. An ORDER BY <field> LIMIT k also \
          completes: every segment is still scanned, but a running \
          top-K trim holds the working set to a few thousand rows, so \
-         the answer is the true top K. That needs k <= 1000, no \
-         OFFSET, no GROUP BY and no HAVING — a HAVING runs after the \
-         page is cut, so the trim is not armed alongside one and the \
-         scan is refused here instead. Duplicates are collapsed after \
-         every place that stops reading early — the trim, the \
-         name-index streams and the segment fetch cap — so enough \
-         rows agreeing on name, fql_kind, path and line inside the \
-         window that was read can still shorten any page. A bare \
-         LIMIT is not a substitute — with no ORDER BY it bounds the \
-         scan by truncating it, so OFFSET pages past rows that were \
-         never fetched. Under any explicit LIMIT the reported total \
-         is just the row count returned, never the number of rows \
-         that matched. FORGEQL_FIND_MAX_ROWS overrides the bound in \
-         rows; 0 disables it.",
+         the answer is the true top K, a full page of it, and a \
+         `total` counting every row that matched rather than only the \
+         ones a page could hold. That needs k <= 1000, no OFFSET, no \
+         GROUP BY and no HAVING — a HAVING runs after the page is \
+         cut, so the trim is not armed alongside one and the scan is \
+         refused here instead. A bare LIMIT is not a substitute — \
+         with no ORDER BY it bounds the scan by truncating it, so \
+         OFFSET pages past rows that were never fetched, duplicates \
+         collapsing afterwards can still shorten the page, and the \
+         reported total is the row count fetched rather than the \
+         number that matched. FORGEQL_FIND_MAX_ROWS overrides the \
+         bound in rows; 0 disables it.",
         max_rows.saturating_mul(FIND_BYTES_PER_ROW) / (1024 * 1024 * 1024)
     )
 }
@@ -170,6 +171,91 @@ fn segment_ranks_from_columns(seg: &SegmentReader, order_field: &str) -> bool {
         .all(|field| seg.ranks_field_like_a_built_row(field, true))
 }
 
+/// Whether two of a segment's rows carry the same Stage 4 key.
+///
+/// Read from the stored columns, so no row has to be built to answer it. The
+/// path half of the key is the segment's own for both rows and cannot differ.
+fn same_row_key(seg: &SegmentReader, source_path: &Path, a: u32, b: u32) -> bool {
+    let left = SegRowRef {
+        seg,
+        row: a,
+        source_path: Some(source_path),
+    };
+    let right = SegRowRef {
+        seg,
+        row: b,
+        source_path: Some(source_path),
+    };
+    left.str_value("name") == right.str_value("name")
+        && left.str_value("fql_kind") == right.str_value("fql_kind")
+        && left.num_value("line") == right.num_value("line")
+}
+
+/// A hash of one row's Stage 4 key, read from the stored columns.
+fn row_key_hash(seg: &SegmentReader, source_path: &Path, row: u32) -> u64 {
+    use std::hash::{Hash as _, Hasher as _};
+
+    let view = SegRowRef {
+        seg,
+        row,
+        source_path: Some(source_path),
+    };
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    view.str_value("name").hash(&mut hasher);
+    view.str_value("fql_kind").hash(&mut hasher);
+    view.num_value("line").hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Collapse the rows a segment holds more than once, without building any.
+///
+/// One file's row table can already carry two rows agreeing on `(name,
+/// fql_kind, path, line)`, which is the key the pass over built rows collapses
+/// on. Doing it here instead lets a bounded top-K choose among rows that are
+/// all going to survive, so it can no longer discard a row that belonged in
+/// the answer in favour of one that was about to collapse into another.
+///
+/// The admission test is [`SegmentReader::answers_field`] and NOT the weaker
+/// [`SegmentReader::ranks_field_like_a_built_row`] the ordering uses, and the
+/// difference runs the other way. Ranking needs the view and the built row
+/// only to AGREE, so a field neither holds ranks the same on both. A key needs
+/// the view to be RIGHT: a field the view reports absent while the built row
+/// fills it in would file two different rows under one key and drop one of
+/// them. Returns `None` where any key field is not answerable — the caller
+/// then keeps every row and leaves the collapse to the pass over built rows,
+/// which is slower and never wrong.
+///
+/// The hash only groups candidates; membership is decided by comparing the
+/// fields, so a collision costs a comparison and never a row.
+fn dedupe_rows_of_segment(
+    seg: &SegmentReader,
+    source_path: &Path,
+    rows: &RoaringBitmap,
+) -> Option<RoaringBitmap> {
+    if !["name", "fql_kind", "line"]
+        .iter()
+        .all(|field| seg.answers_field(field, true))
+    {
+        return None;
+    }
+
+    let mut kept = RoaringBitmap::new();
+    let mut under_hash: HashMap<u64, Vec<u32>> = HashMap::new();
+    for row in rows {
+        let hash = row_key_hash(seg, source_path, row);
+        let seen = under_hash.entry(hash).or_default();
+        if seen
+            .iter()
+            .any(|&earlier| same_row_key(seg, source_path, earlier, row))
+        {
+            continue;
+        }
+        seen.push(row);
+        let _ = kept.insert(row);
+    }
+    Some(kept)
+}
+
 /// One segment's rows narrowed to what survives everything testable before a
 /// row is built, together with what is left to test once they are.
 ///
@@ -202,7 +288,7 @@ impl ColumnarStorage {
     ///
     /// Sums `SegmentMeta.row_count` per source path in O(segments) time.
     /// No individual symbol rows are materialised.
-    pub(super) fn fast_group_by_file(&self, clauses: &Clauses) -> Vec<SymbolMatch> {
+    pub(super) fn fast_group_by_file(&self, clauses: &Clauses) -> FindPage {
         let mut counts: HashMap<PathBuf, usize> = HashMap::new();
 
         let path_floor = clauses
@@ -254,8 +340,8 @@ impl ColumnarStorage {
         no_group.in_glob = None;
         no_group.exclude_globs.clear();
         no_group.where_predicates.clear();
-        apply_clauses(&mut results, &no_group);
-        results
+        let total = apply_clauses_counted(&mut results, &no_group);
+        FindPage::of(results, total)
     }
 
     /// Fast-path for `FIND symbols GROUP BY fql_kind ORDER BY count DESC LIMIT N`
@@ -263,7 +349,7 @@ impl ColumnarStorage {
     ///
     /// Deserialises each kind bitmap and reads its cardinality in O(n_kinds) time.
     /// For IN-glob queries, intersects each kind bitmap with the path range bitmap.
-    pub(super) fn fast_group_by_kind(&self, clauses: &Clauses) -> Vec<SymbolMatch> {
+    pub(super) fn fast_group_by_kind(&self, clauses: &Clauses) -> FindPage {
         // Build an optional path mask for IN/EXCLUDE glob filtering.
         let path_mask: Option<RoaringBitmap> =
             if clauses.in_glob.is_some() || !clauses.exclude_globs.is_empty() {
@@ -299,8 +385,8 @@ impl ColumnarStorage {
         no_group.group_by = None;
         no_group.in_glob = None;
         no_group.exclude_globs.clear();
-        apply_clauses(&mut results, &no_group);
-        results
+        let total = apply_clauses_counted(&mut results, &no_group);
+        FindPage::of(results, total)
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -843,21 +929,47 @@ impl ColumnarStorage {
 
     /// Stage 3 — turn the surviving row IDs into result rows.
     ///
-    /// Segment by segment: narrow to the rows worth building, build them, then
-    /// trim the accumulated working set. For a bounded top-K a segment whose
-    /// ordering its own columns can answer picks its contribution *before*
-    /// building it ([`Self::topk_rows_of_segment`]); every other segment builds
-    /// what it matched, as it always did. Both feed the same running trim, with
-    /// one comparator and one pair of constants between them, so which of the
-    /// two a segment takes changes the work and not the rows.
+    /// Segment by segment: narrow to the rows worth building, build them,
+    /// collapse that segment's duplicates, then trim the accumulated working
+    /// set. For a bounded top-K a segment whose ordering its own columns can
+    /// answer picks its contribution *before* building it
+    /// ([`Self::topk_rows_of_segment`]); every other segment builds what it
+    /// matched, as it always did. Both feed the same running trim, with one
+    /// comparator and one pair of constants between them, so which of the two
+    /// a segment takes changes the work and not the rows.
+    ///
+    /// Returns the working set and, beside it, how many rows were shed on rank
+    /// alone. Those rows matched and were distinct, so they belong to the size
+    /// of the answer even though no page can hold them; without the count the
+    /// caller would report the retained window as the `total`, which is
+    /// neither the page nor the answer.
+    ///
+    /// The collapse before the trim is what makes that count mean anything.
+    /// Two rows carry the same `(name, fql_kind, path, line)` only if they
+    /// carry the same path, and a path belongs to one segment unless two
+    /// segments were built from it — so where that does not happen the
+    /// per-segment pass IS the whole collapse, and nothing the trim discards
+    /// was about to merge into a survivor. Where it does happen the trim is
+    /// not armed at all rather than shed on an incomplete collapse.
     pub(super) fn materialize_all(
         &self,
         by_segment: &HashMap<u32, RoaringBitmap>,
         clauses: &Clauses,
-    ) -> anyhow::Result<Vec<SymbolMatch>> {
+    ) -> anyhow::Result<(Vec<SymbolMatch>, usize)> {
         let seg_order = self.ordered_segments(by_segment);
         let fetch_cap = Self::fetch_cap_for(clauses);
-        let topk_trim = Self::topk_trim_for(clauses);
+        // The running trim discards a row on rank alone, so it is sound only
+        // while every row still in the working set is a distinct answer row.
+        // Each segment's own duplicates are collapsed below before anything is
+        // appended, and a duplicate pair spans two segments only where two
+        // segments carry the same source path — there the per-segment pass
+        // cannot see the pair, so the trim stays off rather than shed a row
+        // that was about to collapse into the survivor it lost to.
+        let topk_trim = if self.overlay().has_duplicate_paths() {
+            None
+        } else {
+            Self::topk_trim_for(clauses)
+        };
         // Residual WHERE runs per segment so non-matching rows never
         // accumulate.  `count` is excluded: it is only assigned by GROUP BY
         // in Stage 5, so no materialised row carries it yet.
@@ -870,6 +982,7 @@ impl ColumnarStorage {
         let max_rows = find_max_rows();
 
         let mut results = Vec::new();
+        let mut shed = 0usize;
         for seg_idx in seg_order {
             // Early-exit: checked before opening the segment file so we don't pay
             // I/O cost once the fetch budget is exhausted.
@@ -881,8 +994,21 @@ impl ColumnarStorage {
             else {
                 continue;
             };
-            let mut seg_results =
+            let (mut seg_results, seg_shed) =
                 self.materialize_one_segment(&narrowed, clauses, fetch_cap, results.len());
+            shed = shed.saturating_add(seg_shed);
+
+            // Collapse this segment's own duplicates before anything can shed
+            // a row on rank. Two rows carry the same `(name, fql_kind, path,
+            // line)` only if they carry the same path, and a path belongs to
+            // one segment unless two segments were built from it — so wherever
+            // that does not happen, this IS the Stage 4 pass, and the trim
+            // below can no longer discard a row that was going to collapse
+            // into one of the survivors it lost to. The unconditional Stage 4
+            // pass still runs afterwards and covers the rest.
+            if seg_results.len() > 1 {
+                dedupe_symbol_matches(&mut seg_results);
+            }
             results.append(&mut seg_results);
 
             // Running top-K trim: shed rows that cannot make the final top-K.
@@ -890,9 +1016,16 @@ impl ColumnarStorage {
             if let Some(k) = topk_trim {
                 let trim_at = k.saturating_mul(TOPK_OVER_FETCH);
                 if results.len() > trim_at {
+                    let before = results.len();
                     results = collect_top_k(std::mem::take(&mut results), topk_keep(k), |a, b| {
                         order_cmp(a, b, clauses)
                     });
+                    // A shed row is a distinct row that matched — the dedupe
+                    // above has already run — so it belongs to the count even
+                    // though it will never be delivered. Without this the
+                    // reported `total` would be the size of the retained
+                    // window, which is neither the page nor the answer.
+                    shed = shed.saturating_add(before.saturating_sub(results.len()));
                 }
             }
 
@@ -904,7 +1037,7 @@ impl ColumnarStorage {
                 return Err(row_budget_exceeded(max_rows));
             }
         }
-        Ok(results)
+        Ok((results, shed))
     }
 
     /// The rows of one segment worth building for a bounded top-K, chosen
@@ -944,7 +1077,9 @@ impl ColumnarStorage {
     /// - a residual `WHERE` still has to run against this segment's built rows,
     ///   so a row discarded on rank alone might be the one that survives it;
     /// - the segment cannot rank an ordering field the way its built rows would
-    ///   (see [`segment_ranks_from_columns`]).
+    ///   (see [`segment_ranks_from_columns`]);
+    /// - the segment cannot key its own rows from its columns, so it cannot
+    ///   collapse them before choosing (see [`dedupe_rows_of_segment`]).
     ///
     /// The decision is per segment, and that is not a detail. Made once for the
     /// whole query it would be hostage to the worst segment in the corpus: a
@@ -954,16 +1089,14 @@ impl ColumnarStorage {
     /// workspace. A segment that cannot rank its own rows now only builds its
     /// own rows.
     ///
-    /// What this does not change: the Stage 4 dedupe on
-    /// `(name, fql_kind, path, line)` still runs after the trim, so a window
-    /// filled with rows that later collapse can still shorten a page. That is
-    /// the open defect reproduced by
-    /// `crates/forgeql-core/tests/topk_trim_before_dedupe.rs`; retaining a
-    /// superset can only help it, and it is not fixed here.
+    /// Beside the rows it returns how many it shed, which the caller adds to
+    /// the answer's size. Those rows are distinct — the collapse ran first —
+    /// so each one is an answer the page could not hold rather than a row that
+    /// was about to merge into a survivor.
     fn topk_rows_of_segment(
         narrowed: &NarrowedSegment<'_>,
         clauses: &Clauses,
-    ) -> Option<RoaringBitmap> {
+    ) -> Option<(RoaringBitmap, usize)> {
         let k = Self::topk_trim_for(clauses)?;
         if !narrowed.late.is_empty() {
             return None;
@@ -977,8 +1110,19 @@ impl ColumnarStorage {
             return None;
         }
 
-        let views: Vec<SegRowRef<'_>> = narrowed
-            .rows
+        // Collapse first, choose second. Choosing first would let this shed a
+        // row that belonged in the answer to keep one that was about to
+        // collapse into another survivor — the whole reason the pass over
+        // built rows was too late to be the only one. A segment that cannot
+        // key its own rows from its columns declines the route entirely
+        // rather than rank a set it cannot collapse.
+        let rows = dedupe_rows_of_segment(narrowed.seg, narrowed.source_path, &narrowed.rows)?;
+        let keep = topk_keep(k);
+        let shed = usize::try_from(rows.len())
+            .unwrap_or(usize::MAX)
+            .saturating_sub(keep);
+
+        let views: Vec<SegRowRef<'_>> = rows
             .iter()
             .map(|row| SegRowRef {
                 seg: narrowed.seg,
@@ -986,12 +1130,13 @@ impl ColumnarStorage {
                 source_path: Some(narrowed.source_path),
             })
             .collect();
-        Some(
-            collect_top_k(views, topk_keep(k), |a, b| order_cmp(a, b, clauses))
+        Some((
+            collect_top_k(views, keep, |a, b| order_cmp(a, b, clauses))
                 .into_iter()
                 .map(|view| view.row)
                 .collect(),
-        )
+            shed,
+        ))
     }
 
     /// Segment indices sorted by source path (then line) — matches the legacy
@@ -1016,18 +1161,18 @@ impl ColumnarStorage {
     /// already decided which segments were read, so without it the answer is the
     /// rows fetched minus those failing the predicate.  It fetches
     /// cap+1, which was meant to keep `total > results.len()` a reliable "more
-    /// results exist" signal — but that signal does not survive this path:
-    /// `apply_ordering` truncates to the LIMIT before `exec_find` takes `total`,
-    /// so under an explicit LIMIT the two are equal and `total` is the returned
-    /// row count rather than the number of rows that matched.  An OFFSET also
-    /// pages past rows that were never fetched.  Four `expect_fail` cases in
+    /// results exist" signal — but that signal does not survive this path: the
+    /// rows this stops short of are never counted, so under an explicit LIMIT
+    /// `total` is the number of rows fetched rather than the number that
+    /// matched.  An OFFSET also pages past rows that were never fetched.  Four
+    /// `expect_fail` cases in
     /// `crates/forgeql/tests/golden/clause_pipeline.json` pin that, and it is why
     /// the row-budget refusal offers an ORDER BY'd LIMIT rather than a bare one.
-    /// The Stage 4 dedupe on `(name, fql_kind, path, line)` also runs after this
-    /// cap and is NOT excluded, so a bare LIMIT can return fewer than LIMIT rows
-    /// where enough of the fetched rows collapse — the same open defect the trim
-    /// and the name-index streams carry, reproduced by
-    /// `crates/forgeql-core/tests/topk_trim_before_dedupe.rs`.
+    /// The Stage 4 collapse of duplicates on `(name, fql_kind, path, line)` also
+    /// runs after this cap and is NOT excluded, so a bare LIMIT can return fewer
+    /// than LIMIT rows where enough of the fetched rows merge — this is now the
+    /// last place that shape survives, the running trim and the per-segment
+    /// bounded choice having both been moved behind the collapse.
     /// When `limit` is None we deliberately do NOT inject DEFAULT_QUERY_LIMIT
     /// here — exec_find injects an explicit limit before calling find_symbols, so
     /// direct callers (tests) still receive all matching rows.
@@ -1042,19 +1187,22 @@ impl ColumnarStorage {
         }
     }
 
-    /// Running top-K trim budget (Phase 8): set when ORDER BY is present, LIMIT
-    /// is small, OFFSET is zero, and both GROUP BY and HAVING are absent.  Bounds
-    /// peak result memory to O(K * TOPK_OVER_FETCH) by periodically discarding
-    /// rows that cannot make the final top-K.
+    /// Running top-K trim budget: set when ORDER BY is present, LIMIT is small,
+    /// OFFSET is zero, and both GROUP BY and HAVING are absent.  Bounds peak
+    /// result memory to O(K * TOPK_OVER_FETCH) by periodically discarding rows
+    /// that cannot make the final top-K.
     ///
-    /// "Cannot make the final top-K" holds only against the ORDER BY, so the trim
-    /// is only sound while nothing else can remove a row afterwards.  HAVING can,
-    /// which is why it is excluded here.  The Stage 4 dedupe on
-    /// `(name, fql_kind, path, line)` also still runs after this trim and is NOT
-    /// excluded: a row this trim discards can turn out to have belonged in the
-    /// answer once the survivors it was ranked against collapse into one.  That
-    /// is an open defect, reproduced by
-    /// `crates/forgeql-core/tests/topk_trim_before_dedupe.rs`.
+    /// "Cannot make the final top-K" holds only against the ORDER BY, so the
+    /// trim is only sound while nothing else can remove a row afterwards.
+    /// HAVING can, which is why it is excluded here. The Stage 4 collapse of
+    /// duplicates on `(name, fql_kind, path, line)` also could, and used to:
+    /// a row this discarded could turn out to have belonged in the answer once
+    /// the survivors it was ranked against merged into one. That is why both
+    /// this trim and [`ColumnarStorage::topk_rows_of_segment`] now collapse
+    /// their input before they choose from it — see
+    /// [`ColumnarStorage::materialize_all`] for why a per-segment collapse is
+    /// the whole collapse, and for the one workspace shape where it is not and
+    /// the trim stays off instead.
     fn topk_trim_for(clauses: &Clauses) -> Option<usize> {
         if clauses.order_by.is_some()
             && clauses.group_by.is_none()
@@ -1136,20 +1284,25 @@ impl ColumnarStorage {
         })
     }
 
-    /// Build one narrowed segment's rows: row materialisation → usage-count
-    /// stamping → the residual WHERE that needed a built row → fetch-budget
-    /// trim.
+    /// Build one narrowed segment's rows: choose which to build → row
+    /// materialisation → usage-count stamping → the residual WHERE that needed
+    /// a built row → fetch-budget trim.
+    ///
+    /// Returns the rows and how many the choice shed, which the caller adds to
+    /// the answer's size — a row not built is still a row that matched.
     fn materialize_one_segment(
         &self,
         narrowed: &NarrowedSegment<'_>,
         clauses: &Clauses,
         fetch_cap: Option<usize>,
         results_len: usize,
-    ) -> Vec<SymbolMatch> {
+    ) -> (Vec<SymbolMatch>, usize) {
         // Choose the rows worth building before building any of them, where the
         // query lets that be decided from the columns.
         let pruned = Self::topk_rows_of_segment(narrowed, clauses);
-        let rows = pruned.as_ref().unwrap_or(&narrowed.rows);
+        let (rows, shed) = pruned
+            .as_ref()
+            .map_or((&narrowed.rows, 0), |(kept, shed)| (kept, *shed));
 
         let mut seg_results = narrowed
             .seg
@@ -1174,7 +1327,7 @@ impl ColumnarStorage {
             let remaining = cap.saturating_sub(results_len);
             seg_results.truncate(remaining);
         }
-        seg_results
+        (seg_results, shed)
     }
 }
 // ─────────────────────────────────────────────────────────────────────────────

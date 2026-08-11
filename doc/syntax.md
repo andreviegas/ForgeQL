@@ -174,10 +174,10 @@ FIND files [clauses]
 > `total` is the true site count across the whole worktree **even under an
 > explicit `LIMIT`** — it is what a rename campaign measures progress against,
 > and `total` greater than the row count is how you see that files were left
-> out. (`FIND symbols` still reports a `LIMIT`-capped total; the difference is
-> deliberate.) A result with files left out arms no `found_rev`, so every
-> `FOUND` verb refuses.
->
+> out. (`FIND symbols` reports the true match count too, except for a bare
+> `LIMIT` with no `ORDER BY` and for `ORDER BY name` with a small one, where the
+> scan stops early and nothing counts what it did not read.) A result with files
+> left out arms no `found_rev`, so every `FOUND` verb refuses.
 > A second cap bounds the response itself: a hot name can hold hundreds of
 > sites in each of twenty files. Past that ceiling the listing **withholds
 > whole files from the tail** — file order never changes and no file is ever
@@ -1000,21 +1000,26 @@ and the query is refused as before. A `HAVING` is deliberately excluded — it r
 after the page is cut, so a query carrying one is refused here rather than
 answered from a page chosen before the predicate ran.
 
-One caveat, and it is not confined to the ordered form: duplicate rows are
-collapsed *after* every one of the places that stops reading early — the top-K
-trim, the name-index streams and the segment fetch cap — so where enough rows
-agreeing on `name`, `fql_kind`, path and line sit inside the window that was
-read, the page can come back shorter than `k`. That reaches `ORDER BY name`
-through the name-index streams, any ordering through the trim, and an unordered
-`LIMIT` through the fetch cap; it is reproduced by an ignored test in
-`crates/forgeql-core/tests/topk_trim_before_dedupe.rs`.
+One caveat, and it is now confined to the two places that still stop reading
+early: duplicate rows are collapsed *after* the name-index streams and after the
+segment fetch cap, so where enough rows agreeing on `name`, `fql_kind`, path and
+line sit inside the window one of those read, the page can come back shorter
+than `k`. That reaches `ORDER BY name` through the streams and an unordered
+`LIMIT` through the fetch cap. The running top-K trim no longer carries it —
+both it and the bounded choice a segment makes over its own row IDs collapse
+duplicates before they shed anything, which
+`crates/forgeql-core/tests/topk_trim_before_dedupe.rs` now enforces rather than
+reproduces.
 
 A bare `LIMIT` is **not** a substitute: with no `ORDER BY` it bounds the scan by
 truncating it, so an `OFFSET` pages past rows that were never fetched — a known
 defect, pinned by four `expect_fail` cases in
-`crates/forgeql/tests/golden/clause_pipeline.json`. Under any explicit `LIMIT`,
-ordered or not, the reported `total` is the returned row count and not the number
-of rows that matched: the `LIMIT` is applied before the `total` is taken.
+`crates/forgeql/tests/golden/clause_pipeline.json`. Its `total` is the returned
+row count rather than the number of rows that matched, for the same reason:
+nothing counts what was never read. The ordered form does not share that — an
+`ORDER BY … LIMIT k` reports the true size of the answer, the trim counting the
+rows it discards — and the one other exception is `ORDER BY name` with a small
+`LIMIT`, which streams `k` rows out of the name index and reports `k`.
 `FORGEQL_FIND_MAX_ROWS` overrides the bound in rows and `0` disables it.
 
 That bound is roughly 3.7x lower than the five million rows it replaced, so a

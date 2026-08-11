@@ -820,8 +820,25 @@ pub(crate) const fn no_having_after_paging(clauses: &Clauses) -> bool {
 /// 6. `ORDER BY <field>` — sort
 /// 7. `OFFSET N`         — skip N items
 /// 8. `LIMIT N`          — truncate to N items
+///
+/// Use [`apply_clauses_counted`] where the size of the answer has to be
+/// reported alongside the page.
 pub fn apply_clauses<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Clauses) {
-    apply_clauses_inner(results, clauses, true);
+    let _ = apply_clauses_inner(results, clauses, true);
+}
+
+/// [`apply_clauses`], returning how many rows survived steps 1–5.
+///
+/// That is the size of the answer before steps 7 and 8 cut a page out of it,
+/// and it is what a caller reports as `total`. Taking `results.len()`
+/// afterwards instead is what made `total` equal to the page size under every
+/// explicit `LIMIT`, which reads as "this is all of it" on every first page.
+///
+/// It counts only what reached this function. A caller that stopped reading
+/// early hands in fewer rows than matched and gets a count of what it handed
+/// in, so such a caller must either not stop early or supply the count itself.
+pub fn apply_clauses_counted<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Clauses) -> usize {
+    apply_clauses_inner(results, clauses, true)
 }
 
 /// Like [`apply_clauses`] but keeps the caller's insertion order when there is
@@ -831,7 +848,7 @@ pub fn apply_clauses<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Clauses) {
 /// default order, and the usual `(name, line, path)` tie-break sort would
 /// flatten the structural tree into an alphabetical list.
 pub fn apply_clauses_keep_order<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Clauses) {
-    apply_clauses_inner(results, clauses, false);
+    let _ = apply_clauses_inner(results, clauses, false);
 }
 
 /// How many site rows one `FIND usages` response renders before it starts
@@ -939,7 +956,7 @@ fn apply_clauses_inner<T: ClauseTarget>(
     results: &mut Vec<T>,
     clauses: &Clauses,
     default_sort: bool,
-) {
+) -> usize {
     // 1. IN glob
     if let Some(ref glob) = clauses.in_glob {
         results.retain(|item| item.path().is_some_and(|p| path_glob_matches(p, glob)));
@@ -963,7 +980,7 @@ fn apply_clauses_inner<T: ClauseTarget>(
     }
 
     // 6-8. ORDER BY (+ top-K fast path), then OFFSET and LIMIT.
-    apply_ordering(results, clauses, default_sort);
+    apply_ordering(results, clauses, default_sort)
 }
 
 /// Apply WHERE predicates with compile-once MATCHES / NOT MATCHES handling.
@@ -1056,7 +1073,17 @@ fn apply_group_by<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Clauses) {
 /// then OFFSET and LIMIT.  A deterministic order is established before
 /// truncation so backends (legacy ↔ columnar) pick identical rows; even without
 /// an explicit ORDER BY a stable `(name, line, path)` sort is applied.
-fn apply_ordering<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Clauses, default_sort: bool) {
+fn apply_ordering<T: ClauseTarget>(
+    results: &mut Vec<T>,
+    clauses: &Clauses,
+    default_sort: bool,
+) -> usize {
+    // Every stage that can remove a row has already run, and nothing below
+    // here does anything but choose which of the survivors to hand back. So
+    // this is the last moment at which the size of the answer is still the
+    // size of the answer, and it is the number the caller reports as `total`.
+    let matched = results.len();
+
     // Fast path: ORDER BY present, LIMIT <= TOPK_THRESHOLD, OFFSET zero, no
     // GROUP BY → `collect_top_k` (introselect O(N) avg) instead of an O(N log N)
     // sort; byte-identical via the shared `order_cmp` comparator.
@@ -1068,7 +1095,7 @@ fn apply_ordering<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Clauses, defa
     if let (Some(k), true) = (clauses.limit, want_topk) {
         let taken = std::mem::take(results);
         *results = collect_top_k(taken, k, |a, b| order_cmp(a, b, clauses));
-        return; // OFFSET == 0 and LIMIT already applied by collect_top_k.
+        return matched; // OFFSET == 0 and LIMIT already applied by collect_top_k.
     }
 
     // Default tie-break sort (name, line, path) runs unless the caller asked to
@@ -1088,6 +1115,8 @@ fn apply_ordering<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Clauses, defa
     if let Some(max) = clauses.limit {
         results.truncate(max);
     }
+
+    matched
 }
 
 #[cfg(test)]

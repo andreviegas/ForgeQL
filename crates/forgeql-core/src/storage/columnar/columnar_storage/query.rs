@@ -11,11 +11,11 @@ use crate::workspace::Workspace;
 use super::super::bytes_to_hex;
 use super::ColumnarStorage;
 use crate::storage::git_sha1_provider::git_blob_sha1;
-use crate::storage::{StorageEngine, SymbolLocation};
+use crate::storage::{FindPage, StorageEngine, SymbolLocation};
 
 mod reindex;
 
-mod find;
+pub(super) mod find;
 
 mod resolve;
 
@@ -63,7 +63,7 @@ impl StorageEngine for ColumnarStorage {
         self.root_ordinals_within_impl(rel_path, root, start, end)
     }
 
-    fn find_symbols(&self, clauses: &Clauses, root: &Path) -> Result<Vec<SymbolMatch>> {
+    fn find_symbols(&self, clauses: &Clauses, root: &Path) -> Result<FindPage> {
         self.find_symbols_impl(clauses, root)
     }
 

@@ -22,7 +22,7 @@ use anyhow::Result;
 
 use crate::{ast::index::IndexStats, ir::Clauses, result::SymbolMatch, workspace::Workspace};
 
-use super::{StorageEngine, SymbolLocation};
+use super::{FindPage, StorageEngine, SymbolLocation};
 
 /// Throwaway stub for trait-shape validation in Phase 01.
 ///
@@ -35,8 +35,8 @@ impl StorageEngine for StubColumnarStorage {
         "stub"
     }
 
-    fn find_symbols(&self, _clauses: &Clauses, _root: &Path) -> Result<Vec<SymbolMatch>> {
-        Ok(vec![])
+    fn find_symbols(&self, _clauses: &Clauses, _root: &Path) -> Result<FindPage> {
+        Ok(FindPage::whole(vec![]))
     }
 
     fn find_usages(

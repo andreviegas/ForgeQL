@@ -6,9 +6,10 @@ use std::path::Path;
 use roaring::RoaringBitmap;
 
 use crate::ast::trigram::TRIGRAM_WIDTH;
-use crate::filter::{ClauseTarget as _, apply_clauses};
+use crate::filter::{ClauseTarget as _, apply_clauses, apply_clauses_counted};
 use crate::ir::{Clauses, CompareOp, GroupBy, PredicateValue};
 use crate::result::SymbolMatch;
+use crate::storage::FindPage;
 use crate::storage::columnar::columnar_storage::fast_paths::{
     glob_to_path_prefix, group_by_file_fast_path_eligible, group_by_kind_fast_path_eligible,
     has_any_indexed_predicate, order_by_name_desc_fast_path, order_by_name_fast_path,
@@ -57,7 +58,7 @@ impl ColumnarStorage {
         &self,
         clauses: &Clauses,
         _root: &Path,
-    ) -> anyhow::Result<Vec<SymbolMatch>> {
+    ) -> anyhow::Result<FindPage> {
         // Query pipeline:
         //   Stage 0 — reject WHERE fields that exist neither as core fields nor
         //             as enrichment columns anywhere in this index: they can
@@ -69,10 +70,16 @@ impl ColumnarStorage {
         //   Stage 2 — partition by segment, then prune the survivors: IN/EXCLUDE
         //             path globs, dirty-overlay shadows, and numeric zone maps.
         //   Stage 3 — materialise the surviving rows per segment: stamp usage
-        //             counts, apply residual WHERE, enforce the row budget
-        //             (FORGEQL_FIND_MAX_ROWS) — then union the dirty overlay.
-        //   Stage 4 — deduplicate on (name, fql_kind, path, line).
-        //   Stage 5 — apply residual WHERE, ORDER BY, LIMIT, OFFSET.
+        //             counts, apply residual WHERE, collapse each segment's own
+        //             duplicates before anything sheds on rank, enforce the row
+        //             budget (FORGEQL_FIND_MAX_ROWS) — then union the dirty
+        //             overlay.
+        //   Stage 4 — deduplicate on (name, fql_kind, path, line). Stage 3 has
+        //             already done this within each segment; what is left for
+        //             here is a pair split across two segments built from one
+        //             source path, and the dirty overlay.
+        //   Stage 5 — apply residual WHERE, ORDER BY, LIMIT, OFFSET, and count
+        //             the answer before the last two cut a page out of it.
         // GROUP BY and ORDER BY name fast-paths short-circuit the pipeline. The
         // count-based GROUP BY paths are only valid when source paths are unique;
         // duplicates overcount, so fall through to the deduplicating pipeline.
@@ -88,15 +95,15 @@ impl ColumnarStorage {
         if group_by_file_fast_path_eligible(clauses, self.dirty.is_empty()) && no_dup_paths {
             return Ok(self.fast_group_by_file(clauses));
         }
-        if let Some(mut results) = self.try_order_by_name_fast_paths(clauses) {
-            self.stamp_usage_counts(&mut results);
-            return Ok(results);
+        if let Some(mut page) = self.try_order_by_name_fast_paths(clauses) {
+            self.stamp_usage_counts(&mut page.rows);
+            return Ok(page);
         }
 
         let mut by_segment = self.build_candidate_segments(clauses);
         self.prune_candidate_segments(&mut by_segment, clauses);
 
-        let mut results = self.materialize_all(&by_segment, clauses)?;
+        let (mut results, shed) = self.materialize_all(&by_segment, clauses)?;
         // Stage 3b — union dirty overlay rows (empty when the overlay is empty).
         // Persistent rows were stamped during materialisation; dirty rows still
         // need their workspace usage counts before Stage 5 evaluates them.
@@ -116,8 +123,10 @@ impl ColumnarStorage {
         // behind those rows is not established here; the counterexample is
         // enough to keep the pass unconditional.
         dedupe_symbol_matches(&mut results);
-        apply_clauses(&mut results, clauses);
-        Ok(results)
+        // Rows the running trim discarded matched and were distinct, so they
+        // are part of the answer's size even though no page can hold them.
+        let total = apply_clauses_counted(&mut results, clauses).saturating_add(shed);
+        Ok(FindPage::of(results, total))
     }
 
     /// Stage 0 — fail fast on WHERE fields that cannot match anything.
@@ -731,7 +740,25 @@ impl ColumnarStorage {
     /// an empty dirty overlay because dirty rows are not path-sorted and could
     /// carry names that precede committed rows already streamed. Returns `None`
     /// when no name-ordered fast-path applies, so the caller runs the pipeline.
-    fn try_order_by_name_fast_paths(&self, clauses: &Clauses) -> Option<Vec<SymbolMatch>> {
+    ///
+    /// **A page these return is whole or they decline it.** Duplicates are
+    /// collapsed after the stream, so a window holding two rows that are one
+    /// row leaves the page short — and asking for more means the walk the
+    /// stream exists to avoid. So a stream that stopped at `need` and then
+    /// collapsed hands the query back to the pipeline instead, which reads
+    /// every segment and collapses before it pages. A stream that returned
+    /// fewer than `need` ran out of index rather than stopping, and its answer
+    /// is whole however many of its rows collapsed.
+    ///
+    /// **The page is right and the `total` beside it is not.** A stream stops
+    /// at `limit + offset` rows by construction, so the count handed back is
+    /// the size of the page and never the number of rows that matched —
+    /// `FIND symbols ORDER BY name ASC LIMIT 5` answers `total: 5` on an index
+    /// of any size. That is the same defect the segment fetch cap carries, in
+    /// the one place the row-ID pipeline does not reach, because counting the
+    /// matches here means walking the whole FST. Pinned as an `expect_fail`
+    /// case in `crates/forgeql/tests/golden/total_counts_the_answer.json`.
+    fn try_order_by_name_fast_paths(&self, clauses: &Clauses) -> Option<FindPage> {
         if !self.dirty.is_empty() {
             return None;
         }
@@ -751,9 +778,22 @@ impl ColumnarStorage {
         } else {
             return None;
         };
+        // Collapse before deciding whether the page is whole. A stream stops
+        // after `need` rows, so if collapsing those leaves fewer, the rows the
+        // page is now short of are still unread — and this path cannot ask for
+        // more without the walk it exists to avoid. Hand the query back to the
+        // pipeline, which reads every segment and collapses before it pages.
+        // A stream that returned fewer than `need` ran out of index instead,
+        // so its answer is whole however many of them collapsed.
+        let streamed = results.len();
         dedupe_symbol_matches(&mut results);
-        apply_clauses(&mut results, clauses);
-        Some(results)
+        if results.len() < streamed && streamed >= need {
+            return None;
+        }
+        // A count of the streamed rows, not of the matching ones — see the
+        // note above this function.
+        let total = apply_clauses_counted(&mut results, clauses);
+        Some(FindPage::of(results, total))
     }
 
     /// Build the initial `segment index -> local row bitmap` candidate map.
@@ -1065,7 +1105,9 @@ fn in_scope(path: &Path, clauses: &Clauses) -> bool {
 /// output is exactly what the owned-key set produced: a collision costs a
 /// field comparison against each row already kept under that hash, never a
 /// wrong answer in either direction.
-fn dedupe_symbol_matches(results: &mut Vec<SymbolMatch>) {
+pub(in crate::storage::columnar::columnar_storage) fn dedupe_symbol_matches(
+    results: &mut Vec<SymbolMatch>,
+) {
     fn key_hash(r: &SymbolMatch) -> u64 {
         use std::hash::{Hash as _, Hasher as _};
 

@@ -1,26 +1,30 @@
-//! The running top-K trim sheds rows before duplicates are collapsed.
+//! An `ORDER BY … LIMIT` page must hold `LIMIT` distinct rows.
 //!
-//! `materialize_all` trims its working set to `LIMIT * 2` as soon as it exceeds
-//! `LIMIT * TOPK_OVER_FETCH`, ordering by the query's own comparator. Stage 4
-//! collapses duplicates on `(name, fql_kind, path, line)` afterwards, and the
-//! final top-K runs after that. So rows the trim discarded are gone before
-//! anything knows how many of the rows it kept were the same row.
+//! Rows agreeing on `(name, fql_kind, path, line)` are one answer row, and
+//! every place that stops reading early used to stop before they were
+//! collapsed. Where a group of them sorted to the front, the window that was
+//! read filled with rows that later merged into one and the page came back
+//! short, the distinct rows that belonged in it having already been passed
+//! over. The fixture below is that shape: `DUPS` rows agreeing on every key
+//! field, sorting ahead of `DISTINCT` rows that do not.
 //!
-//! Where a group of duplicates sorts to the front, the retained window can be
-//! filled by rows that later collapse into one, leaving a page shorter than the
-//! `LIMIT` while distinct rows that belonged in the answer were already shed.
+//! **This case does not exercise the mechanism it was written for, and that
+//! is worth keeping.** It was recorded as reproducing the running top-K trim
+//! in `materialize_all`. It never reaches it: `ORDER BY name ASC` with no
+//! `WHERE` and an empty dirty overlay is answered by the name-index stream,
+//! which returns `LIMIT + OFFSET` rows and stops, so the trim is never armed
+//! and `materialize_all` is never called. Making the trim collapse first left
+//! this red, unchanged, and only then did varying the ordering field separate
+//! the two. Three places carried one defect and a working reproduction of it
+//! named the wrong one — which is the shape most likely to be believed
+//! without checking.
 //!
-//! **The failing case is `#[ignore]`d, which is weaker than this repo's usual
-//! marker for an open defect.** A known defect is normally pinned by an
-//! `expect_fail` case in the golden suite, which the gate prints as an open
-//! defect rather than silently skipping. The shape itself is production
-//! reachable — `crates/forgeql-core/src/storage/columnar/overlay/parse.rs` line
-//! 482 carries four rows agreeing on every field of the dedupe key, already
-//! `2 * LIMIT` for a `LIMIT` of 2 — but a golden case also needs a query whose
-//! candidate set puts such a group at the HEAD of the retained window, and no
-//! corpus query is known that does. Building the rows directly is also what
-//! makes the counts exact, so the reproduction lives here and announces itself
-//! in its `ignore` reason instead. Removing that attribute is the promotion.
+//! What makes it pass is the stream declining a page it cannot fill: a stream
+//! that stopped at its own limit and then lost rows to a collapse hands the
+//! query back to the pipeline, which reads every segment. The trim and the
+//! per-segment bounded choice collapse before they shed as well, and the
+//! sibling case below covers the trim directly by ordering on a field no
+//! stream serves.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -156,7 +160,6 @@ fn the_index_holds_more_distinct_rows_than_a_page_asks_for() {
 
 /// A page is a window onto the answer, so asking for `LIMIT` rows when far more
 /// than `LIMIT` distinct rows match has to return `LIMIT` of them.
-#[ignore = "reproduces an open defect and fails: the running top-K trim sheds rows before Stage 4 collapses duplicates, so an ORDER BY + LIMIT page can come back shorter than its LIMIT while distinct rows that belonged in the answer were already discarded. Remove this attribute once the pipeline dedupes over row IDs before the top-K"]
 #[test]
 fn order_by_limit_returns_a_full_page_of_distinct_rows() {
     let (_tmp, storage) = storage_with_duplicate_heavy_head(DUPS, DISTINCT);
@@ -184,5 +187,52 @@ fn order_by_limit_returns_a_full_page_of_distinct_rows() {
         unique.len(),
         LIMIT,
         "the page must hold {LIMIT} distinct rows, got {names:?}"
+    );
+}
+
+/// The same shape ordered on a field no name stream serves, so it reaches the
+/// pipeline and the two trims that shed on rank.
+///
+/// The duplicates share line 1 and every distinct row is at 100 or above, so
+/// an ascending order on `line` puts the group that collapses at the front
+/// exactly as an ascending order on `name` does — but `ORDER BY line` has no
+/// index stream behind it, so the query is answered by `materialize_all`, the
+/// per-segment bounded choice picks this segment's contribution from its row
+/// IDs, and the running trim cuts the accumulated set. Both collapse first.
+/// Remove either collapse and the retained window fills with rows that are
+/// one row, and this page comes back holding one.
+#[test]
+fn ordering_on_a_field_no_stream_serves_still_returns_a_full_page() {
+    let (_tmp, storage) = storage_with_duplicate_heavy_head(DUPS, DISTINCT);
+
+    let clauses = Clauses {
+        order_by: Some(OrderBy {
+            field: "line".to_owned(),
+            direction: SortDirection::Asc,
+        }),
+        limit: Some(LIMIT),
+        ..Clauses::default()
+    };
+    let page = storage
+        .find_symbols(&clauses, Path::new("."))
+        .expect("find_symbols");
+    let names: Vec<&str> = page.iter().map(|r| r.name.as_str()).collect();
+
+    assert_eq!(
+        page.rows.len(),
+        LIMIT,
+        "ORDER BY line LIMIT {LIMIT} returned a short page: {names:?}"
+    );
+    let unique: HashSet<&str> = names.iter().copied().collect();
+    assert_eq!(
+        unique.len(),
+        LIMIT,
+        "the page must hold {LIMIT} distinct rows, got {names:?}"
+    );
+    assert_eq!(
+        page.total,
+        DISTINCT + 1,
+        "the count beside the page is the size of the answer, so the rows the \
+         trim shed on rank are in it and the ones that collapsed are not"
     );
 }

@@ -45,7 +45,7 @@ use crate::{
     workspace::Workspace,
 };
 
-use super::{StorageEngine, SymbolLocation, row_to_location};
+use super::{FindPage, StorageEngine, SymbolLocation, row_to_location};
 
 // -----------------------------------------------------------------------
 // LegacyMemoryStorage
@@ -213,7 +213,7 @@ impl StorageEngine for LegacyMemoryStorage {
 
     // ---- read-only queries ---------------------------------------------
 
-    fn find_symbols(&self, clauses: &Clauses, root: &Path) -> Result<Vec<SymbolMatch>> {
+    fn find_symbols(&self, clauses: &Clauses, root: &Path) -> Result<FindPage> {
         let index = self
             .table
             .as_ref()
@@ -222,15 +222,15 @@ impl StorageEngine for LegacyMemoryStorage {
 
         // Fast path: GROUP BY fql_kind / language with no WHERE/IN/EXCLUDE
         if let Some((mut results, remaining)) = try_group_by_stats_fast_path(index, clauses) {
-            crate::filter::apply_clauses(&mut results, &remaining);
-            return Ok(results);
+            let total = crate::filter::apply_clauses_counted(&mut results, &remaining);
+            return Ok(FindPage::of(results, total));
         }
 
-        let (mut results, remaining) =
+        let (mut results, remaining, capped_total) =
             prefilter::find_symbols_prefilter(index, clauses, root, &configs);
         prefilter::validate_order_by_field(&remaining, &results, &configs)?;
-        crate::filter::apply_clauses(&mut results, &remaining);
-        Ok(results)
+        let total = crate::filter::apply_clauses_counted(&mut results, &remaining);
+        Ok(FindPage::of(results, capped_total.unwrap_or(total)))
     }
 
     fn find_usages(

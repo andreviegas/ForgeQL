@@ -333,7 +333,7 @@ fn a_predicate_still_to_run_keeps_every_matched_row() {
         rows: rows.clone(),
         late: Vec::new(),
     };
-    let pruned = ColumnarStorage::topk_rows_of_segment(&ready, &clauses)
+    let (pruned, _shed) = ColumnarStorage::topk_rows_of_segment(&ready, &clauses)
         .expect("nine rows is past K * TOPK_OVER_FETCH for K = 1");
     assert_eq!(
         pruned.len(),
@@ -542,4 +542,223 @@ fn every_admitted_field_reads_the_same_on_a_view_as_on_the_row_it_builds() {
     };
     assert_eq!(view.field_num("usages"), None);
     assert_eq!(built[0].field_num("usages"), Some(0));
+}
+
+/// A segment holding the same row more than once, with the duplicates sorting
+/// ahead of the distinct ones under `ORDER BY name ASC`.
+///
+/// Six rows agree on every field of the Stage 4 key and are therefore one
+/// answer row. A seventh shares their name and line but not their kind, so it
+/// is a second one — a key that forgot `fql_kind` would swallow it. Six more
+/// follow on distinct lines. Thirteen rows, eight answers.
+fn duplicate_heavy_segment() -> (tempfile::TempDir, SegmentReader) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("dups.fqsf");
+    let content_id = [0x7C_u8; 20];
+    let mut b = SegmentBuilder::new("test", &content_id);
+    for _ in 0..6 {
+        let row = b.emit_row(SymbolRow {
+            name: "aaa",
+            fql_kind: "function",
+            language: "rust",
+            line: 1,
+            byte_start: 0,
+            byte_end: 10,
+            usages_count: 0,
+        });
+        b.set_field(row, "param_count", "0");
+    }
+    let odd = b.emit_row(SymbolRow {
+        name: "aaa",
+        fql_kind: "struct",
+        language: "rust",
+        line: 1,
+        byte_start: 0,
+        byte_end: 10,
+        usages_count: 0,
+    });
+    b.set_field(odd, "param_count", "0");
+    for i in 0..6_u32 {
+        let row = b.emit_row(SymbolRow {
+            name: "bbb",
+            fql_kind: "function",
+            language: "rust",
+            line: 10 + i,
+            byte_start: 0,
+            byte_end: 10,
+            usages_count: 0,
+        });
+        b.set_field(row, "param_count", "0");
+    }
+    b.flush(&path).expect("flush");
+    let reader = SegmentReader::open(&path).expect("open");
+    (tmp, reader)
+}
+
+/// A segment that can rank its rows but cannot key them.
+///
+/// An enrichment column named `fql_kind` shadows the struct-backed field, so a
+/// row view withholds it. `fql_kind` is not one of the fields the comparator
+/// consults, so ranking is unaffected — which is exactly what makes this the
+/// case that tells the two admission tests apart.
+fn shadowed_kind_segment() -> (tempfile::TempDir, SegmentReader) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("shadowed.fqsf");
+    let content_id = [0x3D_u8; 20];
+    let mut b = SegmentBuilder::new("test", &content_id);
+    for i in 0..12_u32 {
+        let row = b.emit_row(SymbolRow {
+            name: "aaa",
+            fql_kind: "function",
+            language: "rust",
+            line: 1 + i,
+            byte_start: 0,
+            byte_end: 10,
+            usages_count: 0,
+        });
+        b.set_field(row, "fql_kind", "shadow");
+    }
+    b.flush(&path).expect("flush");
+    let reader = SegmentReader::open(&path).expect("open");
+    (tmp, reader)
+}
+
+/// The bounded choice collapses before it chooses.
+///
+/// Six of these rows are one row and they sort to the front, so choosing first
+/// would fill the retained window with them and hand back a page holding two
+/// rows where four were retained — having already discarded distinct rows that
+/// belonged in the answer. This is the unit-level form of the failure
+/// `crates/forgeql-core/tests/topk_trim_before_dedupe.rs` reproduces end to end.
+#[test]
+fn duplicates_collapse_before_the_bounded_choice_sheds_anything() {
+    let (_tmp, seg) = duplicate_heavy_segment();
+    let source_path = Path::new("src/dups.rs");
+    let clauses = Clauses {
+        order_by: Some(OrderBy {
+            field: "name".to_owned(),
+            direction: SortDirection::Asc,
+        }),
+        limit: Some(2),
+        ..Default::default()
+    };
+    let narrowed = NarrowedSegment {
+        seg: &seg,
+        source_path,
+        rows: (0..seg.row_count).collect(),
+        late: Vec::new(),
+    };
+
+    let (kept, shed) = ColumnarStorage::topk_rows_of_segment(&narrowed, &clauses)
+        .expect("thirteen rows is past K * TOPK_OVER_FETCH for K = 2");
+
+    let mut built = seg.materialize_rows(&kept, Some(source_path));
+    let retained = built.len();
+    assert_eq!(
+        retained,
+        topk_keep(2),
+        "the retained size is the trim's own, and it is counted in answer rows"
+    );
+    dedupe_symbol_matches(&mut built);
+    assert_eq!(
+        built.len(),
+        retained,
+        "every row kept must already be distinct — collapsing them again must \
+         not shorten the page"
+    );
+    assert_eq!(
+        shed,
+        8 - topk_keep(2),
+        "thirteen rows are eight answers, so what is shed is counted in \
+         answers too: a `total` built from this must not report the thirteen \
+         nor the four"
+    );
+}
+
+/// A segment that cannot key its own rows from its columns builds all of them.
+///
+/// The two admission tests are not the same test and this is the case that
+/// separates them. Ranking needs the view and the built row only to AGREE, so
+/// a field neither holds is fine; a key needs the view to be RIGHT, because a
+/// field the view withholds while the built row carries it files two different
+/// rows under one key and drops one of them. Here the segment ranks perfectly
+/// and still must not collapse anything.
+#[test]
+fn a_segment_that_cannot_key_its_own_rows_stays_off_the_view_path() {
+    let (_tmp, seg) = shadowed_kind_segment();
+    let source_path = Path::new("src/shadowed.rs");
+    let rows: RoaringBitmap = (0..seg.row_count).collect();
+
+    assert!(
+        segment_ranks_from_columns(&seg, "line"),
+        "the comparator reads the ORDER BY field and name, line and path, and \
+         this segment shadows none of them"
+    );
+    assert!(
+        !seg.answers_field("fql_kind", true),
+        "an enrichment column named fql_kind shadows the struct-backed field"
+    );
+    assert!(
+        dedupe_rows_of_segment(&seg, source_path, &rows).is_none(),
+        "a key field the view withholds must decline the collapse, not guess"
+    );
+
+    let clauses = Clauses {
+        order_by: Some(OrderBy {
+            field: "line".to_owned(),
+            direction: SortDirection::Asc,
+        }),
+        limit: Some(2),
+        ..Default::default()
+    };
+    let narrowed = NarrowedSegment {
+        seg: &seg,
+        source_path,
+        rows,
+        late: Vec::new(),
+    };
+    assert!(
+        ColumnarStorage::topk_rows_of_segment(&narrowed, &clauses).is_none(),
+        "a segment that cannot collapse its own rows must not choose among \
+         them either"
+    );
+}
+
+/// The key read from the columns and the key read from the built row put the
+/// same rows together.
+///
+/// This is the invariant the whole collapse rests on, and it is checked as a
+/// partition rather than field by field on purpose: the two readings do not
+/// have to SPELL an absent value the same way — a row view reports an empty
+/// `fql_kind` as absent where the built row carries `None`, and line zero the
+/// same way — they only have to agree on which rows are the same row.
+#[test]
+fn the_column_key_and_the_built_row_key_agree_on_every_pair() {
+    let (_tmp, seg) = duplicate_heavy_segment();
+    let source_path = Path::new("src/dups.rs");
+    let all: RoaringBitmap = (0..seg.row_count).collect();
+    let built = seg.materialize_rows(&all, Some(source_path));
+    assert_eq!(
+        built.len(),
+        seg.row_count as usize,
+        "materialize_rows must answer one row per selected row id, in order, \
+         or the pairing below compares the wrong rows"
+    );
+
+    for a in 0..seg.row_count {
+        for b in 0..seg.row_count {
+            let left = built.get(a as usize).expect("row a is inside the batch");
+            let right = built.get(b as usize).expect("row b is inside the batch");
+            let by_built_row = left.name == right.name
+                && left.fql_kind == right.fql_kind
+                && left.path == right.path
+                && left.line == right.line;
+            assert_eq!(
+                same_row_key(&seg, source_path, a, b),
+                by_built_row,
+                "rows {a} and {b} are the same row on one reading and not on \
+                 the other"
+            );
+        }
+    }
 }

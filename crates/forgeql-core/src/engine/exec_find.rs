@@ -22,17 +22,18 @@ impl ForgeQLEngine {
         let root = session.worktree_path.clone();
 
         // Delegate all filtering, fast-path GROUP BY, ORDER BY, explicit LIMIT
-        // to the storage engine.  The engine returns sorted/filtered results
-        // WITHOUT the implicit DEFAULT_QUERY_LIMIT cap — that is applied below.
-        // The columnar backend uses clauses.limit for early-exit in
-        // materialize_all, so explicit LIMIT queries avoid a full segment scan.
-        // That early exit is not free: with no ORDER BY it truncates the scan
-        // rather than paging it, so the `total` taken below is the count of rows
-        // FETCHED, not of rows that matched.  It is why the budget refusal no
-        // longer offers a bare LIMIT as a way to bound an oversized scan.
-        let mut results = session.engine_for(backend)?.find_symbols(clauses, &root)?;
+        // and OFFSET to the storage engine.  The engine returns the page those
+        // clauses ask for WITHOUT the implicit DEFAULT_QUERY_LIMIT cap — that is
+        // applied below — and, beside it, how many rows matched before the page
+        // was cut.  That count is what `total` reports: taking `results.len()`
+        // here instead is what made `total` equal the page size under every
+        // explicit LIMIT, so an agent could not tell a first page from a whole
+        // answer.  Where an engine path stops reading early it says so at the
+        // place it stops.
+        let page = session.engine_for(backend)?.find_symbols(clauses, &root)?;
 
-        let total = results.len();
+        let total = page.total;
+        let mut results = page.rows;
         if clauses.limit.is_none() {
             results.truncate(session.output_config().find_limit);
         }

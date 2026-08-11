@@ -1,0 +1,48 @@
+{
+ "suite": "total_counts_the_answer",
+ "description": "`total` is how many rows matched, not how many the page holds. LIMIT bounds delivery; it is the only thing an agent has to tell a first page from a whole answer, and a total clipped to the page size says 'this is all of it' about every first page. These cases pin the count against a ground truth taken at a limit high enough that nothing pages at all. Two mechanisms had to change for that and each has its own case: the clause pipeline now reports its size before OFFSET and LIMIT cut it, and the running top-K trim counts the rows it discards on rank. The fourth case is the one place neither reaches, and it is enforced as a known failure rather than described in a comment. Both mechanisms were checked by mutation rather than assumed: with the trim's count disabled the same query reads '1 of 2 shown' through the built binary on the sibling workspace and '1 of 8 shown' with it on, against an unlimited answer of 8. What no case here can see is whether the collapse that now runs before the trim is reached at all, because it is defined not to move answers; that was measured separately with a panic in place -- one ordinary query collapsed 8 of 108 row ids inside a single segment, before any of them was built -- and it is pinned by the unit tests in fast_paths/tests.rs, which do go red.",
+ "cases": [
+  {
+   "name": "the_answer_this_suite_measures_against",
+   "description": "Ground truth. A limit above TOPK_THRESHOLD (1000) arms no top-K, so every matching row is built and nothing is shed or truncated: seven functions in this corpus exceed 150 lines. Every total below is this seven.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' WHERE lines > 150 ORDER BY lines DESC LIMIT 1001",
+   "assert": {
+    "row_count": 7,
+    "total": 7
+   }
+  },
+  {
+   "name": "a_page_reports_the_size_of_the_answer_it_came_from",
+   "description": "LIMIT 2 over the same seven rows. Two rows come back and the count says seven. K * TOPK_OVER_FETCH is eight here, so the working set never reaches the trim's threshold and nothing is shed — this case isolates the pipeline's own count, taken before OFFSET and LIMIT rather than after them.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' WHERE lines > 150 ORDER BY lines DESC LIMIT 2",
+   "assert": {
+    "row_count": 2,
+    "total": 7
+   }
+  },
+  {
+   "name": "the_running_trim_counts_what_it_sheds",
+   "description": "The same seven rows at LIMIT 1, which puts K * TOPK_OVER_FETCH at four and so does arm the trim: the working set passes four while the segments are still being read and is cut back to two, three times over. Those discarded rows never reach the clause pipeline, so the pipeline's own count cannot see them and the trim has to hand back how many it dropped. Without that the answer here reads as four rows, or two — the size of a window nobody asked for. The rows are distinct because duplicates are collapsed before anything sheds; that is what makes them countable at all.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' WHERE lines > 150 ORDER BY lines DESC LIMIT 1",
+   "assert": {
+    "row_count": 1,
+    "total": 7
+   }
+  },
+  {
+   "name": "a_name_ordered_stream_reports_its_own_page_as_the_total",
+   "description": "The one path where the count is still the page. `ORDER BY name [DESC]`, with at most an `fql_kind` equality beside it, is answered by streaming the name FST in order and stopping after LIMIT + OFFSET rows. Nothing counts what the stream did not walk, and counting it means walking the whole FST — which is the walk the stream exists to avoid. So this query answers `total: 5` on a corpus of 59636 rows, and would answer 5 on one of any size. It is the fourth member of the same family as the segment fetch cap: an early exit that assumes LIMIT bounds the answer.",
+   "use": "forgeql-pub.frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "the name-ordered fast paths (columnar_storage/query/find.rs try_order_by_name_fast_paths) stream LIMIT + OFFSET rows out of the name FST and stop, so the count they hand back is the size of the page they streamed and never the number of rows that matched",
+   "fql": "FIND symbols ORDER BY name ASC LIMIT 5",
+   "assert": {
+    "row_count": 5,
+    "total": 59636
+   }
+  }
+ ]
+}

@@ -310,6 +310,92 @@ pub struct SymbolLocation {
 }
 
 // -----------------------------------------------------------------------
+// FindPage
+// -----------------------------------------------------------------------
+
+/// One page of a `FIND symbols` answer, together with the size of the answer
+/// it was cut from.
+///
+/// `rows` is what the query returns after `OFFSET` and `LIMIT`; `total` is how
+/// many rows matched before either of them applied. The two travel together
+/// because an agent cannot act on the page without the count: `total ==
+/// rows.len()` is the only thing that says "this is all of it", and a `total`
+/// silently clipped to the page size says that about every first page.
+///
+/// `total` is the number of rows the clause pipeline was given, not an
+/// independent recount of the corpus, so it is exact only where nothing
+/// stopped reading before the pipeline ran. Each such place says so where it
+/// stops.
+#[derive(Debug, Clone, Default)]
+pub struct FindPage {
+    /// The rows this query answers with, after `OFFSET` and `LIMIT`.
+    pub rows: Vec<SymbolMatch>,
+    /// How many rows matched, before `OFFSET` and `LIMIT` cut the page.
+    pub total: usize,
+}
+
+impl FindPage {
+    /// A page that is the whole answer — every matched row is present.
+    ///
+    /// This is the honest construction for any backend that filters and pages
+    /// in one pass over rows it already holds, because there `total` really is
+    /// the length. A backend that stops reading early must NOT use it.
+    #[must_use]
+    pub const fn whole(rows: Vec<SymbolMatch>) -> Self {
+        Self {
+            total: rows.len(),
+            rows,
+        }
+    }
+
+    /// A page cut from a larger answer of `total` rows.
+    #[must_use]
+    pub const fn of(rows: Vec<SymbolMatch>, total: usize) -> Self {
+        Self { rows, total }
+    }
+}
+
+impl std::ops::Deref for FindPage {
+    type Target = Vec<SymbolMatch>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.rows
+    }
+}
+
+impl std::ops::DerefMut for FindPage {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.rows
+    }
+}
+
+impl IntoIterator for FindPage {
+    type Item = SymbolMatch;
+    type IntoIter = std::vec::IntoIter<SymbolMatch>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.rows.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a FindPage {
+    type Item = &'a SymbolMatch;
+    type IntoIter = std::slice::Iter<'a, SymbolMatch>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.rows.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut FindPage {
+    type Item = &'a mut SymbolMatch;
+    type IntoIter = std::slice::IterMut<'a, SymbolMatch>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.rows.iter_mut()
+    }
+}
+// -----------------------------------------------------------------------
 // -----------------------------------------------------------------------
 // StorageEngine trait
 // -----------------------------------------------------------------------
@@ -331,11 +417,14 @@ pub trait StorageEngine: Send + Sync + 'static {
     /// Execute a `FIND symbols` query.
     ///
     /// Applies all fast-path index shortcuts, predicate evaluation, ORDER BY,
-    /// and GROUP BY internally. The caller is responsible for DEFAULT_QUERY_LIMIT
-    /// truncation and result formatting.
+    /// GROUP BY, OFFSET and LIMIT internally. The caller is responsible for
+    /// DEFAULT_QUERY_LIMIT truncation and result formatting.
     ///
-    /// Returns the full result set (no truncation).
-    fn find_symbols(&self, clauses: &Clauses, root: &Path) -> Result<Vec<SymbolMatch>>;
+    /// Returns the page the clauses asked for and, beside it, how many rows
+    /// matched before `OFFSET` and `LIMIT` cut that page. `LIMIT` bounds
+    /// delivery, never the search, so an implementation must not answer a
+    /// smaller `total` because a smaller page was asked for.
+    fn find_symbols(&self, clauses: &Clauses, root: &Path) -> Result<FindPage>;
 
     /// Execute a `FIND usages OF 'name'` query.
     ///

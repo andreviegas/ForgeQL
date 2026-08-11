@@ -331,7 +331,7 @@ pub(super) fn find_symbols_prefilter(
     clauses: &Clauses,
     root: &Path,
     lang_configs: &[&LanguageConfig],
-) -> (Vec<SymbolMatch>, Clauses) {
+) -> (Vec<SymbolMatch>, Clauses, Option<usize>) {
     use crate::ast::index::RowRef;
 
     // Extract a `fql_kind = value` predicate for the fql_kind_index shortcut (preferred).
@@ -488,12 +488,18 @@ pub(super) fn find_symbols_prefilter(
 
     let mut seen = HashSet::new();
     let mut results: Vec<SymbolMatch> = Vec::new();
+    let mut matched = 0usize;
     for def in filtered {
-        if results.len() >= early_limit {
-            break;
-        }
         let key = (def.name_id, def.path_id, def.node_kind_id, def.line);
         if !seen.insert(key) {
+            continue;
+        }
+        matched += 1;
+        // The LIMIT bounds delivery, not the search: every remaining row is
+        // still tested, deduplicated and counted, it is just no longer built.
+        // Stopping the scan here instead is what made `total` the size of the
+        // page rather than the number of rows that matched.
+        if matched > early_limit {
             continue;
         }
         // usages_count is precomputed at index-build time; no HashMap lookup needed.
@@ -541,7 +547,13 @@ pub(super) fn find_symbols_prefilter(
         depth: None,
     };
 
-    (results, remaining)
+    // The third element is the true match count, and only when this function
+    // capped delivery: there `remaining` carries nothing that can drop a row,
+    // so the clause pipeline would count the page instead of the answer.
+    // Where nothing was capped it is `None`, because the pipeline still has
+    // filtering to do and its own count is the one that tells the truth.
+    let capped_total = (matched > results.len()).then_some(matched);
+    (results, remaining, capped_total)
 }
 
 /// Validate that the ORDER BY field is either a known built-in field, a known
