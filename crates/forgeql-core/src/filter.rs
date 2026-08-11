@@ -683,7 +683,7 @@ pub(crate) const TOPK_THRESHOLD: usize = 1_000;
 /// order it consults them.
 ///
 /// A caller that wants to reproduce this ordering *without* building rows —
-/// `ColumnarStorage::materialize_top_k` chooses the page from segment columns
+/// `ColumnarStorage::topk_rows_of_segment` chooses a page from segment columns
 /// read in place — needs every one of these answerable as well as the ORDER BY
 /// field itself. The list lives beside the comparator so that adding a
 /// tie-breaker cannot leave such a caller ordering by fewer fields than the
@@ -699,7 +699,7 @@ pub(crate) const ORDER_TIE_BREAKERS: &[&str] = &["name", "line", "path"];
 /// - the bounded top-K path (`collect_top_k`), and
 /// - the running trim in `ColumnarStorage::materialize_all`, which applies it
 ///   to built rows, and to `SegRowRef` views of rows not yet built when
-///   `ColumnarStorage::materialize_top_k` chooses the page from the columns.
+///   `ColumnarStorage::topk_rows_of_segment` ranks a segment from its columns.
 ///
 /// Returning [`Ordering::Less`] means `a` sorts *before* `b` (i.e. `a` is
 /// the "better" row that should appear first in the output).

@@ -82,11 +82,10 @@ const fn topk_keep(k: usize) -> usize {
 
 /// The refusal raised when a `FIND` would spend more than the row budget.
 ///
-/// Both budget checks quote it: the build-then-trim loop counts rows it has
-/// already built, and the pre-materialisation top-K counts the row views it has
-/// selected to build. That is the same number — one view per row the other path
-/// would hold by the same point in the scan — so the two share this wording
-/// rather than drifting into two descriptions of one bound.
+/// There is one check, between segments in the accumulation loop, counting
+/// rows already built. Choosing a segment's contribution from its columns does
+/// not add a second: a segment admitted to that route contributes at most `2k`
+/// rows, so it can only make the count this bound watches smaller.
 fn row_budget_exceeded(max_rows: usize) -> anyhow::Error {
     anyhow::anyhow!(
         "FIND materialised more than {max_rows} rows before \
@@ -925,6 +924,16 @@ impl ColumnarStorage {
     /// used to contribute everything and be cut to `2k` against the segments
     /// before it — and the true top `k` is inside both, so the page does not
     /// move.
+    ///
+    /// One qualification, and it is about what the ordering never specified.
+    /// [`collect_top_k`] partitions with `select_nth_unstable_by`, so where
+    /// more rows than it retains compare *equal* — equal on the ORDER BY field
+    /// and on all of `name`, `line` and `path`, which two rows can be while
+    /// differing in `fql_kind` and therefore in their handle — which of them
+    /// survives is not decided by the comparator, and the two routes can keep
+    /// different ones. That was already true of the trim between one run of a
+    /// query and a differently-scoped one; it is stated here because "the page
+    /// does not move" is otherwise read as more than it means.
     ///
     /// Returns `None` — the segment contributes everything it matched —
     /// whenever the choice could differ from the trim's:

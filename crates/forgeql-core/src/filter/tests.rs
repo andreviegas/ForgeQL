@@ -1203,7 +1203,7 @@ fn apply_clauses_order_by_tiebreaker_is_name() {
 /// `order_cmp` must consult nothing beyond the ORDER BY field and the
 /// tie-breakers it publishes in [`ORDER_TIE_BREAKERS`].
 ///
-/// The pre-materialisation top-K in `ColumnarStorage::materialize_top_k` ranks
+/// The column-ranked page in `ColumnarStorage::topk_rows_of_segment` ranks
 /// segment row views rather than built rows, and decides a segment is eligible
 /// by asking whether it can answer that published list. A tie-breaker added to
 /// the comparator but not to the list would leave that path ranking by fewer

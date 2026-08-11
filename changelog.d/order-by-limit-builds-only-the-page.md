@@ -4,7 +4,10 @@
   place, and builds only the ones that survive. The rows returned do not change:
   the ranking uses the same comparator that sorts the built rows, at the same
   threshold and keeping the same number, so what it sheds is what the trim would
-  have shed on the very next statement.
+  have shed on the very next statement. Rows the comparator ranks equal are the
+  one exception, and only in the sense they always were — where more rows tie on
+  the `ORDER BY` field and on `name`, `line` and `path` than a page can hold,
+  which of them it shows was never decided by the ordering and still is not.
 - The choice is made per file, so one file cannot switch it off for the rest. It
   is made only where a file can rank by every field that comparator reads — the
   `ORDER BY` field and the `name`, `line`, `path` tie-breakers — and where no

@@ -170,7 +170,7 @@ fn ranked_segment() -> (tempfile::TempDir, SegmentReader) {
 /// Choosing the page from row views must pick the rows that choosing it from
 /// built rows picks.
 ///
-/// This is the whole of what `ColumnarStorage::materialize_top_k` claims: it
+/// This is the whole of what `ColumnarStorage::topk_rows_of_segment` claims: it
 /// ranks `SegRowRef`s so that the rows losing the ranking are never built, and
 /// that is only the same query while a view orders exactly as the row it would
 /// have become. The two are compared for real here rather than argued from the
@@ -397,13 +397,18 @@ fn nothing_is_shed_below_the_threshold_the_trim_uses() {
 
 /// The two row builders must produce the same row.
 ///
-/// The build-then-trim path calls `materialize_rows`, which resolves each
-/// column once for a whole batch; the pre-materialisation top-K calls
-/// `materialize_one_row`, because by then it holds a handful of scattered rows
-/// rather than a bitmap worth batching. Two builders for one row is exactly the
-/// shape that drifts — one gains a field the other does not — and the drift
-/// would show up as a query answering differently depending on which path took
-/// it, which no test of either path alone can see.
+/// `materialize_rows` resolves each column once for a whole batch and serves
+/// every scan; `materialize_one_row` builds one row at a time and serves the
+/// symbol resolvers (`query/resolve.rs`) and the overlay's name streams
+/// (`overlay.rs`). The same query can reach a row through either, so two
+/// builders for one row is exactly the shape that drifts — one gains a field
+/// the other does not — and the drift shows up as a query answering
+/// differently depending on which verb asked, which no test of either builder
+/// alone can see.
+///
+/// This lives here rather than beside the builders because the ranking added
+/// in this module made the two paths comparable for the first time, and the
+/// fixture it needs already exists here.
 ///
 /// Compared through `serde_json` rather than field by field so that a field
 /// added to `SymbolMatch` later is covered without anyone remembering to add it
@@ -472,7 +477,7 @@ fn the_view_path_gate_covers_every_published_tie_breaker() {
 /// Every field the gate admits must read the same on a row view as on the row
 /// that view would build.
 ///
-/// `segment_orders_from_columns` is a promise about two readers; this checks
+/// `segment_ranks_from_columns` is a promise about two readers; this checks
 /// the promise against the readers rather than restating it. The page-level
 /// test above would catch a divergence only where it happens to change the
 /// ranking, which a field that ties on every fixture row never does — so a
