@@ -27,10 +27,17 @@ public repository. They must stand on their own:
   describing what changed, in the same self-contained public language the
   commit message uses. A fragment is a new file, so two changes in flight
   never collide on it. See `changelog.d/README.md`.
-- **The integrator releases.** At promotion the version is chosen across
-  everything released together, the fragments are assembled into a dated
-  section of `CHANGELOG.md`, the manifests are bumped, and the fragments are
-  deleted — all in one release commit.
+- **The integrator numbers every merge.** A change that reaches `main` gets a
+  version there and then: its fragments are assembled into a dated section of
+  `CHANGELOG.md`, the manifests are bumped, and the fragments are deleted, in
+  a commit that follows the merge. Waiting for a release instead left ten
+  engine changes all answering `0.158.0`, which made `SHOW VERSION` useless
+  for telling one build from another — the check that has caught a stale
+  binary here twice. Numbering at merge costs nothing and keeps that check
+  working, and it does not reintroduce the collision above: merges are
+  serialised through one person, so the order is never in doubt.
+- **A version is not a release.** Numbering happens at merge; tagging and
+  publishing are separate acts.
 - Docs-only commits need neither a fragment nor a version bump.
 
 ## Workflow for agents editing this repository

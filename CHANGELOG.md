@@ -6,6 +6,337 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.159.0] — 2026-08-11 — a page holds what the query asked for, and one decode serves every session
+
+### Added
+
+- `RUN`, `VERIFY build` and `JOB START` accept a heredoc for their
+  arguments, not only a quoted literal. A quoted argument cannot carry the
+  quote that delimits it, and this DSL escapes neither by doubling nor by
+  backslash — `''` split the
+  argument in two and `\'` failed to parse. Any prose holding both an
+  apostrophe and a double quote was therefore unwritable as a step argument
+  at any length, which ruled out passing a message, a report, or an issue
+  body to a step. The argument was already bound to the step's stdin rather
+  than to its command line, so the limit was never size; it was quoting.
+
+      RUN 'file_issue' <<BODY
+      `WHERE name = 'x'` answers with a row that carries no handle,
+      and the message reads "not found". It doesn't refuse.
+      BODY
+
+  All three take arguments through the same binding — `JOB START` submits a
+  verify step, so the two spellings of one step now accept the same
+  arguments. Quoted arguments are unchanged.
+
+  One constraint worth knowing when the body is prose: a line that is itself
+  all-uppercase reads as a closing tag, so a bare `TODO` or `NOTE` line ends
+  the body early and the statement is refused for a tag mismatch. Choose a
+  tag, or indent the line.
+
+### Fixed
+
+- **A `HAVING` predicate now decides which rows a page contains, rather than
+  which of an already-chosen page survive.** `FIND symbols … HAVING … ORDER BY
+  name LIMIT k` returned the wrong rows, silently: ordering by name walks the
+  name index and stops once it holds `k` rows, and `HAVING` is applied after
+  that, so the answer was the first `k` rows by name minus those failing the
+  predicate instead of the first `k` rows by name that satisfy it. Rows that
+  qualified were never fetched, nothing was truncated in the reply, and no error
+  was raised. A limit far larger than the answer truncated it just the same, and
+  reversing the direction changed which rows came back at all — on one corpus a
+  seven-row answer came back as three ascending and one descending.
+- The same omission was in three more places, found by asking where else the
+  engine stops reading early: the running top-K trim, which sheds rows mid-scan
+  by the ORDER BY; the segment fetch cap, which stops opening segments once it
+  holds `LIMIT + 1` rows and so broke the same query shape with no `ORDER BY` at
+  all — a seven-row answer came back as none at `LIMIT 3` and as two at
+  `LIMIT 1001`; and the in-memory backend's own early exit, which had the same
+  gap. That backend answers every query for a source with no `.forgeql.yaml`,
+  since no columnar index is built for one, so the gap was reachable in ordinary
+  use rather than only through an explicit choice of backend. All are now gated
+  on `HAVING` being absent through one shared predicate, so the two backends
+  cannot drift apart on it again and the next stage added after paging has a
+  single place to declare itself.
+- One gap in the coverage, stated because it would otherwise be invisible: the
+  in-memory backend's fix is not pinned by a test. The query-level cases run
+  against the columnar backend — every corpus they can use carries a
+  `.forgeql.yaml`, and installing a columnar index drops the in-memory table — so
+  removing that one condition leaves the whole suite green. The fix is derived
+  from the code path rather than demonstrated by a failing case, and the test
+  file says so where a reader will meet it.
+- **This is the third defect of one shape**, and worth naming: an early exit that
+  assumes `LIMIT` bounds the answer while a later stage still filters. The other
+  two are still open, each pinned as a known defect rather than fixed. A bare
+  `LIMIT` with no `ORDER BY` truncates the scan instead of paging it, so the
+  reported `total` falls short and an `OFFSET` pages past rows never fetched —
+  four `expect_fail` cases in
+  `crates/forgeql/tests/golden/clause_pipeline.json`. And duplicate rows are
+  collapsed only after the top-K trim and the name-index streams have stopped
+  reading, so an `ORDER BY … LIMIT k` page can come back shorter than `k` — an
+  ignored test, `crates/forgeql-core/tests/topk_trim_before_dedupe.rs`. Each was
+  found separately, and each cost a separate investigation to attribute. Anything
+  that stops reading early has to account for every stage that still removes
+  rows.
+
+- `WHERE file MATCHES ...` and `WHERE file NOT MATCHES ...` silently ignored the
+  `file`/`path` alias and every other alias the field table declares. Every other
+  operator (`=`, `LIKE`, `>`, `HAVING`, `ORDER BY`, `GROUP BY`) resolved an alias
+  to its canonical field before reading a row; the regex operators read the
+  written field name as-is. An alias that named no struct field and no
+  enrichment map entry then read as absent on every row, so `MATCHES` matched
+  nothing and `NOT MATCHES` matched everything — both silently, with no error.
+
+  The regex operators now resolve the field the same way every other operator
+  does, once, before compiling the pattern. `WHERE file MATCHES` now answers
+  identically to `WHERE path MATCHES`.
+
+- An index that names a segment the disk no longer holds no longer serves rows
+  through it. The readers are addressed by position, so a reader that would not
+  open did not merely remove that file's rows: it shifted every later position,
+  and rows were then served against a different file's reader — the right name
+  and line under another file's path and content, and node handles addressing a
+  file the query never named. An answer, not an error, and wrong. The state is
+  reachable without anything exotic — an external cleaner, or a reclaim that
+  removed a segment file while leaving the index that names it — though
+  ForgeQL's own `VACUUM` cannot produce it, since it removes whole cache-version
+  directories, index and segments together.
+- What happens instead depends on whether the segment can be written again.
+  Rebuilding an index by shadow-writing from a merged symbol table can write a
+  segment that is absent, so where one is available the rebuild is allowed to
+  run — and the open then checks that the segment is really there before
+  answering from it. That check is what makes this safe rather than hopeful: a
+  rebuild skips a segment whose first few bytes still look right even when
+  opening it fails, a failed write leaves nothing behind, and the assembly step
+  that ends every rebuild drops what it cannot read. So the index is repaired,
+  or the open refuses; it is never quietly one file smaller.
+- A rebuild that could only assemble the segments already on disk — which is
+  what runs whenever the caller carries an inline set of them — cannot write a
+  missing one back, and refuses without running. Having *a* rebuild available is
+  not enough; it has to be one that can write the segment.
+- A refusal names the index, the file, where the open looked for it and why it
+  would not open. A readable index file is never deleted on the strength of a
+  missing segment, in either direction — removing one cannot be undone, and the
+  repairing rebuild replaces it atomically without needing it gone. An index
+  file that is itself unreadable is still removed and rebuilt, exactly as before.
+- A refused open caches nothing, so putting the missing segment back by hand is
+  enough for the very next open to succeed, without a restart.
+- Two boundaries this does not cross. A session whose commit is in this state
+  still answers completely and does not report the refusal: the columnar open
+  declines, the refusal is logged, and the session falls back to its full
+  in-memory index. And assembling an index from the segments on disk still drops
+  one it cannot read wherever that assembly is reached other than through an
+  open — the open is guarded by the check above, nothing else is.
+
+### Performance
+
+- Sessions reading the same commit now share one copy of the committed index.
+  Opening a session decoded that commit's overlay and one reader per indexed
+  file, and every session on the commit repeated the whole of that work.
+  Measured on a large repository with three sessions open on one commit in a
+  single process, the second and later sessions each cost 617 MB of private
+  heap at peak; they now cost 2-3 MB. A few sessions warming together has been
+  enough to exhaust the memory on the machine serving them.
+
+  The overlay and its readers cannot change once opened, and every file behind
+  them is addressed by its content, so they are now opened once per commit and
+  handed to each session, behind a per-commit gate so that sessions starting
+  together decode once between them rather than once each. The background
+  warmer's "is this commit already built?" is answered from that same state,
+  where it previously decoded an index only to discard it.
+
+  A session's own uncommitted edits are untouched by this: they were never part
+  of the shared state, and still take precedence over it at query time.
+
+  Opening those sessions is also faster, for the same reason: three sessions on
+  one commit previously performed three decodes and now perform one, and the
+  measured time to open them fell to roughly a third.
+
+  The saving is per *additional* session on a commit, so a benchmark that opens
+  a single session cannot see this change at all. Nothing is held back for a
+  session that has not arrived either: an entry lives exactly as long as some
+  session is holding it.
+
+- A query with a `WHERE` the index cannot answer used to build every candidate
+  row and then throw the non-matching ones away. `FIND symbols WHERE fql_kind =
+  'if' WHERE line >= 100 WHERE line <= 105` built a full row — its name, kind,
+  language, path, node handle and enrichment map — for every `if` in the corpus
+  in order to keep the few hundred on those lines.
+
+  The residual `WHERE` is now tested against the segment's columns first, in
+  place, and only the rows that pass are built. Answers are unchanged: same
+  rows, same order, same totals, same paging.
+
+  A predicate the columns cannot answer is not dropped — it is handed to the
+  filter that runs after the rows are built, exactly as before. That covers a
+  workspace usage count, which is only known once a row exists; a node handle,
+  which is built as the row is; a field no column of that segment holds; and a
+  regular expression, which is cheaper compiled once for a batch than once per
+  row. A segment that stores an enrichment column named after a field a result
+  row answers from a struct field of its own answers no fixed column early at
+  all, because the two would disagree.
+
+  Measured on a three-million-symbol corpus, this is a saving of time and not
+  of memory, and the saving is confined to queries that ask for a large
+  filtered answer: streaming twenty thousand name-ordered rows runs 1.7x
+  faster, while queries capped at a small number of rows, and unfiltered scans
+  with nothing to discard, are unchanged. Peak resident memory does not move on
+  any of them, because the discarded rows were already built and released one
+  file at a time — they cost processor time, never footprint. What a large
+  answer holds in memory is the rows it returns, and a filter cannot reduce
+  those.
+
+- `FIND symbols` no longer copies each candidate row's name, kind, path and line
+  into an owned key while it removes duplicates. Collapsing duplicates means
+  comparing every candidate against the ones already kept, and it did that by
+  building a set of owned keys -- three heap allocations per candidate row, held
+  for the whole pass on top of the result set it was scanning. It now stores a
+  64-bit hash of those same four fields and confirms each hash match against the
+  fields themselves, so a collision costs a comparison rather than changing the
+  answer. The answer is unchanged for every input.
+
+  Measured on a 2.9-million-symbol corpus with `FIND symbols`, which builds
+  every row, over two runs: peak private memory 7,219 MB before against
+  6,912 MB after, and 7,225 before against 6,915 after -- a saving of 307 MB
+  and 310 MB. The same query ran 17.5 s before against 15.3 s after, and
+  16.6 s before against 15.0 s after. Run-to-run variation on the "before"
+  figures is larger than the gap between the two savings -- 6 MB against 3 MB
+  for memory, 0.9 s against 0.6 s for time -- so read the pair of deltas rather
+  than either single run.
+
+  Both results are for a query that materialises every row. The memory saving
+  was flat on a 20,000-row query -- 2,550 MB against 2,548 MB -- which is what
+  a per-row saving of this size looks like at that scale; the time was not
+  measured there, so nothing is claimed about it.
+
+- `Overlay`'s enrichment-field lookups (equality, existence, and the
+  numeric `>=`/`<=` prefilters) now binary-search the on-disk index
+  directly instead of first copying every distinct `field=value` key into
+  an owned `String` at session open. The on-disk array was already sorted
+  and already binary-searched by key, so the copy reproduced work the file
+  format had already done; removing it drops one heap allocation per
+  distinct enrichment key from every session's private memory. No on-disk
+  format change.
+
+  Measured on a 3M-row corpus: resident private memory right after opening
+  a session did not move outside rounding (2,516 MB before and after, at
+  megabyte-granularity sampling). The eliminated allocations are real, but
+  they are small next to a multi-gigabyte baseline whose bulk is per-row
+  segment decode, not this index -- a few hundred distinct keys at roughly
+  sixty bytes each does not register against 2.5 GB. The query class
+  measured for timing does not exercise this code path (it reads the
+  unrelated kind-bitmap index instead), so no timing claim is made here.
+
+- Reading that index in place makes its ordering load-bearing, so the blob
+  is now validated once when the file is opened: every key must lie inside
+  the key region and must not sort before its predecessor. A blob that
+  fails is refused whole: the enrichment tier then reports no opinion and
+  those queries fall back to reading the segments — slower, never fewer
+  rows — rather than a single corrupt entry silently misdirecting a binary
+  search past its well-formed neighbours. This can only trigger on an overlay file
+  truncated or damaged on disk -- never on one this build wrote -- and
+  costs one allocation-free pass over the entries at open.
+
+- Also corrected the file's own module doc, which had drifted three format
+  revisions out of date: it still described a 9-blob, 600-byte table of
+  contents, and still gave the header's schema version as 3. The format in
+  use has 13 named blobs behind an 856-byte header + TOC region, and a
+  schema version of 15 -- a value the reader refuses to open a file without.
+  The doc now lists all thirteen blobs, including the four it had never
+  mentioned.
+
+- A segment carrying an enrichment column named after one of a result row's own
+  fields no longer stops answering *every* such field from its columns — only
+  the colliding name falls back. The two have to be told apart because an
+  operator whose type does not match the struct accessor falls through to the
+  enrichment map of the built row and finds the shadow column there, which the
+  row view would never consult; but a collision on one name says nothing about
+  the others, and the whole segment was being sent to the slower path for it.
+  No query answer changes — only how early a predicate is decided. Predicates on
+  the fields a segment does not shadow are filtered before their rows are built
+  again, as they are in every other segment. The effect on a real corpus has not
+  been measured; segments carrying such a column are the unusual case.
+
+### Changed
+
+- The bound on how much one `FIND symbols` may materialise is now stated as the
+  memory it is meant to protect — 2 GiB of result rows — rather than as a row
+  count. It had been a bare five million rows, chosen when a result row was much
+  smaller and never revisited as the row grew; measured against today's rows
+  that authorised roughly 7.5 GB, against a budget of 2 GiB. The count is now
+  derived from the budget and the working cost of a row, which works out at
+  about 1.34 million, and a test pins the derivation so the next growth of the
+  row moves the bound instead of quietly widening what a query may spend.
+- **This lowers the effective ceiling about 3.7x, so a scan that used to
+  complete can now be refused.** That is a reachability change rather than a
+  restatement, and where the new line falls on a multi-million-symbol corpus has
+  not been measured. The case to watch is a `GROUP BY` that no fast path
+  accepts: its answer is a handful of rows, but it materialises every matching
+  row to get there. `FORGEQL_FIND_MAX_ROWS` raises the bound in rows and `0`
+  disables it.
+- The refusal is unchanged in kind — past the bound a query has always been
+  refused rather than truncated, which is what keeps a partial answer from
+  passing for a complete one — and it now names two remedies that hold. Narrow
+  the scan with `IN 'path/**'` or a more selective `WHERE`; or order it, since an
+  `ORDER BY <field> LIMIT k` with `k` no greater than 1000, no `OFFSET` and no
+  `GROUP BY` still scans every segment while a running top-K trim holds the
+  working set to a few thousand rows, so that form returns the true top K and
+  never reaches the default bound. Outside that gate nothing is trimmed and the
+  query is refused as before. The ordered form has one hole of its own, described
+  in its own entry: the trim sheds rows before duplicates are collapsed, so the
+  page can come back short.
+- The bound is now documented, in `doc/syntax.md` and in each of the agent
+  guides. It was enforced but written down nowhere, so the first an agent knew
+  of it was a refusal citing an environment variable it had never been told
+  about.
+- What the bound does not cover, stated wherever it is claimed: it is enforced
+  on the `FIND symbols` scan over the on-disk index and nowhere else — and there
+  it is tested once per segment rather than once per row, so the real peak is
+  the budget plus the one segment being materialised. `FIND usages` builds its
+  rows in one step on both backends, `FIND files` pushes one entry per file with
+  no bound at all, the in-memory backend materialises its whole result before any
+  clause applies, and a session's uncommitted rows are unioned in after the
+  check. A query answered by one of those can still exhaust host memory.
+
+- A bare `LIMIT` is documented as what it is: delivery paging, not a way to bound
+  an oversized scan. Without an `ORDER BY` a `LIMIT` stops the scan early rather
+  than paging its result, so an `OFFSET` pages past rows that were never fetched
+  and which rows come back depends on the limit itself. Four `expect_fail` cases
+  in `crates/forgeql/tests/golden/clause_pipeline.json` pin that defect. An
+  `ORDER BY <field> LIMIT k` — with `k` no greater than 1000, no `OFFSET` and no
+  `GROUP BY` — does not have that problem: it scans every segment and a running
+  top-K trim bounds the working set, so it is the ordered form, not the bare one,
+  that the result-budget refusal now offers as a remedy. Outside that gate
+  nothing is trimmed. The ordered form has a separate hole, described in its own
+  entry: the trim sheds rows before duplicates are collapsed, so the page can
+  come back short.
+- Related, and stated at each of those sites: under any explicit `LIMIT` the
+  `total` that `FIND symbols` reports is the number of rows returned, not the
+  number that matched, because the `LIMIT` is applied before the total is taken.
+  `FIND usages` deliberately differs — its `total` is the true site count, which
+  is what a rename campaign measures progress against.
+
+### Notes
+
+- Known defect, now reproduced and written down: an `ORDER BY <field> LIMIT k`
+  can return fewer than `k` rows even when far more than `k` distinct rows match.
+  While a scan runs, a top-K trim sheds rows down to `k * 2` whenever the working
+  set passes `k * 4`, and duplicate rows are only collapsed afterwards. So where
+  enough rows agreeing on `name`, `fql_kind`, path and line sort ahead of the
+  distinct ones, the retained window can be filled by rows that later become one,
+  and distinct rows that belonged in the answer were already discarded. The page
+  comes back short without saying so.
+- This is stated wherever the ordered form is recommended — the refusal text,
+  `doc/syntax.md` and each of the agent guides — because that form is the remedy
+  offered for a scan too large to materialise, and recommending it without naming
+  its hole is the failure that advice is supposed to prevent. The reproduction is
+  an ignored test, `crates/forgeql-core/tests/topk_trim_before_dedupe.rs`, which
+  builds the rows directly so the counts are exact; the control beside it asserts
+  the same index answers with more distinct rows than the page asks for, so the
+  case cannot quietly stop reproducing. Nothing changes in what a query returns:
+  the defect is unchanged, only no longer undocumented.
+
+
 ## [0.158.0] — 2026-08-09 — a segment's columns are found once, not once per value
 
 ### Changed

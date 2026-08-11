@@ -32,8 +32,10 @@ that claims nothing.
 
 ## What happens to it
 
-At release the integrator assembles every fragment into a dated, versioned
-section of `CHANGELOG.md`, bumps `Cargo.toml` and `Cargo.lock`, and deletes
-the fragments in the same commit. Contributors never choose a version
+When the change reaches `main` the integrator assembles its fragments into a
+dated, versioned section of `CHANGELOG.md`, bumps `Cargo.toml` and
+`Cargo.lock`, and deletes the fragments in the same commit. Numbering happens
+at merge rather than at release, so every build on `main` can be told apart by
+the version it reports; tagging and publishing are separate acts. Contributors never choose a version
 number and never edit a version heading — the version depends on everything
 released together, which only the integrator can see.
