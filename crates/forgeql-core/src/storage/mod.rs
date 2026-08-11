@@ -324,12 +324,16 @@ pub struct SymbolLocation {
 ///
 /// `total` is the number of rows the clause pipeline was given, not an
 /// independent recount of the corpus, so it is exact only where nothing
-/// stopped reading before the pipeline ran. Two places in the columnar
-/// backend do stop, and their `total` is the size of the page rather than of
-/// the answer: a bare `LIMIT` with no `ORDER BY`, which halts the scan at
-/// `limit + 1` rows, and `ORDER BY name` with a small `LIMIT`, which walks
-/// `limit + offset` keys of the name index and stops. Both are pinned as
-/// `expect_fail` cases in the golden suites, and each says so where it stops.
+/// stopped reading before the pipeline ran. Two shapes in the columnar
+/// backend can stop, and there `total` is the size of the page rather than of
+/// the answer: a bare `LIMIT` with no `ORDER BY`, which always halts the scan
+/// at `limit + 1` rows, and `ORDER BY name` with a small `LIMIT`, which walks
+/// `limit + offset` keys of the name index — that one only where no
+/// `IN`/`EXCLUDE` narrows it, the session holds no uncommitted edits, and its
+/// streamed page survives the duplicate collapse, since a stream whose page
+/// would be short hands the query back to the full scan and is counted
+/// honestly there. Both are pinned as `expect_fail` cases in the golden
+/// suites, and each says so where it stops.
 #[derive(Debug, Clone, Default)]
 pub struct FindPage {
     /// The rows this query answers with, after `OFFSET` and `LIMIT`.

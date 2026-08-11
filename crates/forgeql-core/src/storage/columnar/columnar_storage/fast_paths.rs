@@ -98,12 +98,15 @@ fn row_budget_exceeded(max_rows: usize) -> anyhow::Error {
          completes: every segment is still scanned, but a running \
          top-K trim holds the working set to a few thousand rows, so \
          the answer is the true top K, a full page of it, and a \
-         `total` counting every row that matched — except where \
-         <field> is `name` and nothing but an fql_kind equality sits \
-         beside it, which is streamed out of the name index k rows at \
-         a time and reports k as its total, the page itself still \
-         being whole. That needs k <= 1000, no OFFSET, no GROUP BY \
-         and no HAVING — a HAVING runs after the page is cut, so the \
+         `total` counting every row that matched — unless <field> is \
+         `name` with at most an fql_kind equality beside it, no IN or \
+         EXCLUDE, and no uncommitted edits in the session, which is \
+         the shape the name index streams k rows at a time: that \
+         route reports k as its total, and hands the query back to \
+         the full scan whenever its page would be short, so the same \
+         query is sometimes counted honestly and sometimes not. That \
+         needs k <= 1000, no OFFSET, no GROUP BY and no HAVING — a \
+         HAVING runs after the page is cut, so the \
          trim is not armed alongside one and the scan is refused here \
          instead. A bare LIMIT is not a substitute — with no ORDER BY \
          it bounds the scan by truncating it, so OFFSET pages past \
@@ -986,13 +989,8 @@ impl ColumnarStorage {
             else {
                 continue;
             };
-            let (mut seg_results, seg_shed) = self.materialize_one_segment(
-                &narrowed,
-                clauses,
-                topk_trim,
-                fetch_cap,
-                results.len(),
-            );
+            let (mut seg_results, seg_shed) =
+                self.materialize_one_segment(&narrowed, clauses, fetch_cap, results.len());
             shed = shed.saturating_add(seg_shed);
 
             // Collapse this segment's own duplicates before anything can shed
@@ -1318,13 +1316,13 @@ impl ColumnarStorage {
         &self,
         narrowed: &NarrowedSegment<'_>,
         clauses: &Clauses,
-        topk_trim: Option<usize>,
         fetch_cap: Option<usize>,
         results_len: usize,
     ) -> (Vec<SymbolMatch>, usize) {
         // Choose the rows worth building before building any of them, where the
-        // query lets that be decided from the columns.
-        let pruned = Self::topk_rows_of_segment(narrowed, clauses, topk_trim);
+        // query lets that be decided from the columns. The budget comes from
+        // `trim_budget` and nowhere else, here as in the loop above.
+        let pruned = Self::topk_rows_of_segment(narrowed, clauses, self.trim_budget(clauses));
         let (rows, shed) = pruned
             .as_ref()
             .map_or((&narrowed.rows, 0), |(kept, shed)| (kept, *shed));
