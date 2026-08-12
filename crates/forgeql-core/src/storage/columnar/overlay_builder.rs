@@ -93,7 +93,7 @@ impl OverlayBuilder {
         segs.sort_by(|a, b| a.0.cmp(&b.0));
         info!(
             ms = t_step.elapsed().as_millis(),
-            "TIMING step2: sort segments"
+            mem = %crate::mem::snapshot(), "TIMING step2: sort segments"
         );
 
         if segs.is_empty() {
@@ -170,7 +170,7 @@ impl OverlayBuilder {
             segments = segs.len(),
             file_only = file_only.len(),
             rows = total_rows,
-            "TIMING total: build_and_persist",
+            mem = %crate::mem::snapshot(), "TIMING total: build_and_persist",
         );
 
         Ok(())
@@ -305,7 +305,7 @@ impl OverlayBuilder {
         info!(
             ms = t_step.elapsed().as_millis(),
             n = segs.len(),
-            "TIMING step1: open segments (parallel)",
+            mem = %crate::mem::snapshot(), "TIMING step1: open segments (parallel)",
         );
         Ok(segs)
     }
@@ -322,7 +322,7 @@ impl OverlayBuilder {
         info!(
             ms = t_step.elapsed().as_millis(),
             n = file_only.len(),
-            "TIMING step2.5: collect file-only entries",
+            mem = %crate::mem::snapshot(), "TIMING step2.5: collect file-only entries",
         );
         file_only
     }
@@ -353,7 +353,7 @@ impl OverlayBuilder {
         info!(
             ms = t_step.elapsed().as_millis(),
             rows = total_rows,
-            "TIMING step3-4: row offsets + global_row_table",
+            mem = %crate::mem::snapshot(), "TIMING step3-4: row offsets + global_row_table",
         );
         Ok((row_offsets, total_rows, global_row_table))
     }
@@ -386,7 +386,7 @@ impl OverlayBuilder {
         info!(
             ms = t_step.elapsed().as_millis(),
             segs = segs.len(),
-            "TIMING step4.5: per-segment dedup canonical row sets",
+            mem = %crate::mem::snapshot(), "TIMING step4.5: per-segment dedup canonical row sets",
         );
         seg_dedup
     }
@@ -426,7 +426,7 @@ impl OverlayBuilder {
         info!(
             ms = t_step.elapsed().as_millis(),
             kinds = kind_postings.len(),
-            "TIMING step5: kind postings merge",
+            mem = %crate::mem::snapshot(), "TIMING step5: kind postings merge",
         );
         Ok(kind_postings)
     }
@@ -468,7 +468,7 @@ impl OverlayBuilder {
             entries = enrich_raw.len(),
             pruned = pruned_fields.len(),
             bytes = enrich_bitmaps_bytes.len(),
-            "TIMING step5.5: enrichment bitmaps",
+            mem = %crate::mem::snapshot(), "TIMING step5.5: enrichment bitmaps",
         );
         Ok(enrich_bitmaps_bytes)
     }
@@ -686,7 +686,7 @@ impl OverlayBuilder {
             unique_names = merged_names_len,
             trigrams = name_trigram_postings.len(),
             fst_bytes = name_fst_bytes.len(),
-            "TIMING step6: name FST + trigrams",
+            mem = %crate::mem::snapshot(), "TIMING step6: name FST + trigrams",
         );
         Ok((name_fst_bytes, name_postings_bytes, name_trigram_postings))
     }
@@ -727,7 +727,7 @@ impl OverlayBuilder {
             ms = t_step.elapsed().as_millis(),
             names,
             bytes = bytes.len(),
-            "TIMING step6.5: usages-count FST"
+            mem = %crate::mem::snapshot(), "TIMING step6.5: usages-count FST"
         );
         Ok(bytes)
     }
@@ -793,7 +793,7 @@ impl OverlayBuilder {
             .with_context(|| format!("persisting overlay to {}", overlay_path.display()))?;
         info!(
             ms = t_step.elapsed().as_millis(),
-            "TIMING step8: write v3 overlay (atomic)",
+            mem = %crate::mem::snapshot(), "TIMING step8: write v3 overlay (atomic)",
         );
         Ok(())
     }

@@ -213,8 +213,23 @@ impl ColumnarStorage {
         overlay_path: &Path,
     ) -> Result<Arc<SharedOpen>> {
         open_cache::shared_open(&Self::open_key(ctx, overlay_path), || {
+            // Timed separately from the overlay build even though a cold index
+            // runs both back to back: this opens every segment a second time,
+            // the build having opened and dropped its own set, and without a
+            // line of its own that second open is invisible — it lands after
+            // the build's "total" and before the session is announced, so it
+            // reads as time nothing accounts for.
+            let t_open = std::time::Instant::now();
             let overlay = Overlay::open(overlay_path)?;
+            let t_overlay = t_open.elapsed();
             let segments = Self::open_segments_from_overlay(ctx, &overlay, overlay_path)?;
+            info!(
+                ms = t_open.elapsed().as_millis(),
+                overlay_ms = t_overlay.as_millis(),
+                n = segments.len(),
+                mem = %crate::mem::snapshot(),
+                "TIMING shared_open: open overlay + segments",
+            );
             // `open_segments_from_overlay` fails rather than dropping a reader
             // it cannot open, so `segments` is positionally aligned with the
             // overlay's own segment table by the time it reaches here. The
@@ -296,7 +311,7 @@ impl ColumnarStorage {
                 ms = t_sw.elapsed().as_millis(),
                 %commit_sha,
                 segments = segment_map.len(),
-                "TIMING warm_or_open: inline segments (no shadow-write)"
+                mem = %crate::mem::snapshot(), "TIMING warm_or_open: inline segments (no shadow-write)"
             );
             let builder = OverlayBuilder::new(
                 &ctx.provider_id,
@@ -326,7 +341,7 @@ impl ColumnarStorage {
                         ms = t_sw.elapsed().as_millis(),
                         %commit_sha,
                         segments = result.count,
-                        "TIMING warm_or_open: shadow-write"
+                        mem = %crate::mem::snapshot(), "TIMING warm_or_open: shadow-write"
                     );
                     let builder = OverlayBuilder::new(
                         &ctx.provider_id,

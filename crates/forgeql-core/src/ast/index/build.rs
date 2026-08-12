@@ -98,7 +98,7 @@ impl SymbolTable {
         info!(
             ms = t_step.elapsed().as_millis(),
             macro_defs = macro_table.def_count(),
-            "TIMING build pass1: macro collection"
+            mem = %crate::mem::snapshot(), "TIMING build pass1: macro collection"
         );
 
         // ── Columnar fast-path ─────────────────────────────────────────────
@@ -121,7 +121,7 @@ impl SymbolTable {
             info!(
                 ms = t_fast.elapsed().as_millis(),
                 files = paths.len(),
-                "TIMING build total: SymbolTable::build (columnar fast-path, no merge)"
+                mem = %crate::mem::snapshot(), "TIMING build total: SymbolTable::build (columnar fast-path, no merge)"
             );
             return Ok((Self::default(), macro_table));
         }
@@ -136,7 +136,7 @@ impl SymbolTable {
         info!(
             ms = t_step.elapsed().as_millis(),
             rows = table.rows.len(),
-            "TIMING build pass2: parse + reduce"
+            mem = %crate::mem::snapshot(), "TIMING build pass2: parse + reduce"
         );
 
         // Post-pass — run post_pass for each enricher (aggregation, cross-row metrics).
@@ -146,7 +146,7 @@ impl SymbolTable {
         for enricher in &enrichers {
             enricher.post_pass(&mut table, None);
         }
-        info!(ms = t_step.elapsed().as_millis(), "TIMING build post_pass");
+        info!(ms = t_step.elapsed().as_millis(), mem = %crate::mem::snapshot(), "TIMING build post_pass");
 
         // Precompute per-row usages_count from the completed usages map.
         let t_step = std::time::Instant::now();
@@ -155,12 +155,12 @@ impl SymbolTable {
             ms = t_step.elapsed().as_millis(),
             rows = table.rows.len(),
             usages = table.usages.values().map(Vec::len).sum::<usize>(),
-            "TIMING build populate_usage_counts"
+            mem = %crate::mem::snapshot(), "TIMING build populate_usage_counts"
         );
 
         info!(
             ms = t_build.elapsed().as_millis(),
-            "TIMING build total: SymbolTable::build"
+            mem = %crate::mem::snapshot(), "TIMING build total: SymbolTable::build"
         );
         Ok((table, macro_table))
     }

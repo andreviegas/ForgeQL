@@ -280,9 +280,20 @@ impl Session {
     /// Called immediately after `install_columnar` (`PhaseFT5`) so that the
     /// legacy RAM is released once columnar is the default engine.
     pub fn drop_legacy_index(&mut self) {
+        // Timed because freeing is work, and on a large corpus it is enough of
+        // it to look like a hang: the macro table alone holds one heap
+        // allocation per macro definition — over six million of them on the
+        // Linux kernel — and returning them is a single-threaded walk that no
+        // other line accounts for.
+        let t_drop = std::time::Instant::now();
         if let Some(legacy) = self.backends.legacy_storage_mut() {
             legacy.drop_stored_index();
         }
+        info!(
+            ms = t_drop.elapsed().as_millis(),
+            mem = %crate::mem::snapshot(),
+            "TIMING drop_legacy_index: free the build-time table",
+        );
     }
 
     /// Incrementally re-index the given files after a mutation.
