@@ -227,7 +227,7 @@ impl StorageEngine for LegacyMemoryStorage {
         }
 
         let (mut results, remaining, capped_total) =
-            prefilter::find_symbols_prefilter(index, clauses, root, &configs);
+            prefilter::find_symbols_prefilter(index, clauses, root, &configs)?;
         prefilter::validate_order_by_field(&remaining, &results, &configs)?;
         let total = crate::filter::apply_clauses_counted(&mut results, &remaining);
         Ok(FindPage::of(results, capped_total.unwrap_or(total)))
@@ -246,6 +246,17 @@ impl StorageEngine for LegacyMemoryStorage {
         let configs = self.lang_registry.configs();
 
         let sites = crate::ast::query::find_usages(index, name);
+        // The row budget, mirroring the on-disk backend's usages check — one
+        // site becomes exactly one result row.
+        let max_rows = crate::storage::columnar::columnar_storage::find_max_rows();
+        if sites.len() > max_rows {
+            return Err(
+                crate::storage::columnar::columnar_storage::usages_budget_exceeded(
+                    sites.len(),
+                    max_rows,
+                ),
+            );
+        }
         let mut results: Vec<SymbolMatch> = sites
             .iter()
             .filter(|site| {

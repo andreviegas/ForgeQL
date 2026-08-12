@@ -263,3 +263,153 @@ fn row_id_budget_refuses_oversized_candidate_sets_and_zero_disables() {
     run(Some("0"));
     run(None);
 }
+
+/// Cap the dirty-union driver passes to its probe: above the committed
+/// fixture's row count (the driver guards that), below committed + the 512
+/// dirty rows the probe stages — so a refusal can only come from the check
+/// over the union.
+const DIRTY_UNION_CAP: &str = "400";
+
+#[test]
+#[ignore = "driver-invoked probe; behaviour depends on FORGEQL_FIND_MAX_ROWS"]
+fn dirty_union_budget_probe() {
+    let (tmp, mut storage) = single_segment_cpp_storage();
+
+    // 512 dirty rows in one staged segment — enough to cross the cap wherever
+    // the committed side lands below it.
+    let names: Vec<String> = (0..512).map(|i| format!("dirty_fn_{i}")).collect();
+    let mut builder = SegmentBuilder::new("test", &[0x44u8; 8]);
+    for (i, name) in names.iter().enumerate() {
+        let _ = builder.emit_row(SymbolRow {
+            name,
+            fql_kind: "function",
+            language: "rust",
+            line: u32::try_from(i + 1).unwrap_or(u32::MAX),
+            byte_start: 0,
+            byte_end: 10,
+            usages_count: 0,
+        });
+    }
+    let dirty_dir = tmp.path().join("staging").join("dirty_extra");
+    builder.flush(&dirty_dir).expect("dirty segment flush");
+    let reader = SegmentReader::open(&dirty_dir).expect("dirty SegmentReader::open");
+    storage
+        .dirty_mut()
+        .add_segment(Arc::new(reader), PathBuf::from("extra.rs"), String::new());
+
+    let clauses = Clauses::default();
+    let result = storage.find_symbols(&clauses, std::path::Path::new("."));
+
+    match std::env::var("FORGEQL_FIND_MAX_ROWS").as_deref() {
+        Ok(v) if v == DIRTY_UNION_CAP => {
+            let err = result.expect_err("the union must count against the row budget");
+            assert!(
+                err.to_string().contains("FORGEQL_FIND_MAX_ROWS"),
+                "error should name the knob: {err}"
+            );
+        }
+        Ok("0") | Err(_) => {
+            let rows = result.expect("scan must pass without an effective cap");
+            assert!(
+                rows.iter().any(|r| r.name == "dirty_fn_0"),
+                "dirty rows must be part of the answer"
+            );
+        }
+        Ok(other) => panic!("unexpected probe configuration: {other}"),
+    }
+}
+
+#[test]
+fn dirty_union_rows_count_against_the_row_budget() {
+    // Guard: the cap must sit between the committed half and the union, or
+    // the probe measures the wrong check.
+    let (_tmp, storage) = single_segment_cpp_storage();
+    let committed = storage
+        .find_symbols(&Clauses::default(), std::path::Path::new("."))
+        .expect("uncapped committed scan")
+        .len();
+    let cap: usize = DIRTY_UNION_CAP.parse().expect("cap parses");
+    assert!(
+        committed <= cap,
+        "fixture outgrew the probe's cap: {committed} > {cap}"
+    );
+    assert!(committed + 512 > cap, "dirty rows no longer cross the cap");
+
+    let exe = std::env::current_exe().expect("current_exe");
+    let run = |cap: Option<&str>| {
+        let mut cmd = std::process::Command::new(&exe);
+        let _ = cmd.args(["--exact", "dirty_union_budget_probe", "--ignored"]);
+        match cap {
+            Some(v) => {
+                let _ = cmd.env("FORGEQL_FIND_MAX_ROWS", v);
+            }
+            None => {
+                let _ = cmd.env_remove("FORGEQL_FIND_MAX_ROWS");
+            }
+        }
+        let out = cmd.output().expect("spawn probe");
+        assert!(
+            out.status.success(),
+            "probe with cap {cap:?} failed:\n{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    run(Some(DIRTY_UNION_CAP));
+    run(Some("0"));
+    run(None);
+}
+
+#[test]
+#[ignore = "driver-invoked probe; behaviour depends on FORGEQL_FIND_MAX_ROWS"]
+fn usages_budget_probe() {
+    let (_tmp, storage) = single_segment_cpp_storage();
+    let clauses = Clauses::default();
+    let result = storage.find_usages("int", &clauses, &fixtures_dir());
+
+    match std::env::var("FORGEQL_FIND_MAX_ROWS").as_deref() {
+        Ok("1") => {
+            let err = result.expect_err("a cap of 1 must refuse a multi-site read");
+            assert!(
+                err.to_string().contains("FORGEQL_FIND_MAX_ROWS"),
+                "error should name the knob: {err}"
+            );
+        }
+        Ok("0") | Err(_) => {
+            let (rows, _hint) = result.expect("usages must answer without an effective cap");
+            assert!(
+                rows.len() > 1,
+                "fixture should hold several sites for 'int'; got {}",
+                rows.len()
+            );
+        }
+        Ok(other) => panic!("unexpected probe configuration: {other}"),
+    }
+}
+
+#[test]
+fn usages_sites_count_against_the_row_budget() {
+    let exe = std::env::current_exe().expect("current_exe");
+    let run = |cap: Option<&str>| {
+        let mut cmd = std::process::Command::new(&exe);
+        let _ = cmd.args(["--exact", "usages_budget_probe", "--ignored"]);
+        match cap {
+            Some(v) => {
+                let _ = cmd.env("FORGEQL_FIND_MAX_ROWS", v);
+            }
+            None => {
+                let _ = cmd.env_remove("FORGEQL_FIND_MAX_ROWS");
+            }
+        }
+        let out = cmd.output().expect("spawn probe");
+        assert!(
+            out.status.success(),
+            "probe with cap {cap:?} failed:\n{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    run(Some("1"));
+    run(Some("0"));
+    run(None);
+}

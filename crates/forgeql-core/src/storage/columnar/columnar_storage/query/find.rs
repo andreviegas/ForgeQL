@@ -75,7 +75,7 @@ impl ColumnarStorage {
         //             counts, apply residual WHERE, collapse each segment's own
         //             duplicates before anything sheds on rank, enforce the row
         //             budget (FORGEQL_FIND_MAX_ROWS) — then union the dirty
-        //             overlay.
+        //             overlay, re-checking the same budget over the union.
         //   Stage 4 — deduplicate on (name, fql_kind, path, line). Stage 3 has
         //             already done this within each segment; what is left for
         //             here is a pair split across two segments built from one
@@ -112,6 +112,14 @@ impl ColumnarStorage {
         if !self.dirty.is_empty() {
             let mut dirty_results = self.dirty.materialize_all(clauses);
             self.stamp_usage_counts(&mut dirty_results);
+            // The budget in materialize_all ran before this union and cannot
+            // see the rows it adds: enforce it over the union too, or a
+            // session's uncommitted half is unbounded exactly where its
+            // committed half is not.
+            let max_rows = super::super::fast_paths::find_max_rows();
+            if results.len().saturating_add(dirty_results.len()) > max_rows {
+                return Err(super::super::fast_paths::row_budget_exceeded(max_rows));
+            }
             results.append(&mut dirty_results);
         }
         // Stage 4 — deduplicate on (name, fql_kind, path, line). This runs
@@ -281,7 +289,7 @@ impl ColumnarStorage {
         name: &str,
         clauses: &Clauses,
         root: &Path,
-    ) -> (Vec<SymbolMatch>, Option<String>) {
+    ) -> anyhow::Result<(Vec<SymbolMatch>, Option<String>)> {
         // BUG-006 U2: read the per-segment usage postings written at index
         // time (`usages_fst` / `usages_postings`, ENRICH_VER 23) instead of
         // the definitions name-FST, which only ever yielded definition rows.
@@ -324,6 +332,19 @@ impl ColumnarStorage {
         let mut sites: Vec<Site> = Vec::new();
         for token in &names {
             sites.extend(self.sites_of(token));
+        }
+
+        // The row budget, enforced on the sites while they are gathered — one
+        // site becomes exactly one result row. Checked between tiers, so the
+        // peak can overshoot by one tier's finds; never after a LIMIT, which
+        // selects whole files out of the computed answer and bounds nothing
+        // here.
+        let max_rows = super::super::fast_paths::find_max_rows();
+        if sites.len() > max_rows {
+            return Err(super::super::fast_paths::usages_budget_exceeded(
+                sites.len(),
+                max_rows,
+            ));
         }
 
         // Every tier above answers out of a posting, and a posting exists only
@@ -374,12 +395,21 @@ impl ColumnarStorage {
         };
         sites.extend(fresh);
 
+        // The same bound again, now that the file-reading tier has merged in
+        // everything the postings could not see.
+        if sites.len() > max_rows {
+            return Err(super::super::fast_paths::usages_budget_exceeded(
+                sites.len(),
+                max_rows,
+            ));
+        }
+
         let mut results: Vec<SymbolMatch> = sites
             .iter()
             .map(|(path, line, role)| occurrence_row(path, *line, role))
             .collect();
         apply_clauses(&mut results, clauses);
-        (results, hint)
+        Ok((results, hint))
     }
 
     /// Every stored usage token containing `needle`, plus `needle` itself.

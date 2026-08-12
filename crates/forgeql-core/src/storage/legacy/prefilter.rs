@@ -331,7 +331,7 @@ pub(super) fn find_symbols_prefilter(
     clauses: &Clauses,
     root: &Path,
     lang_configs: &[&LanguageConfig],
-) -> (Vec<SymbolMatch>, Clauses, Option<usize>) {
+) -> Result<(Vec<SymbolMatch>, Clauses, Option<usize>)> {
     use crate::ast::index::RowRef;
 
     // Extract a `fql_kind = value` predicate for the fql_kind_index shortcut (preferred).
@@ -490,6 +490,7 @@ pub(super) fn find_symbols_prefilter(
     let mut seen = HashSet::new();
     let mut results: Vec<SymbolMatch> = Vec::new();
     let mut matched = 0usize;
+    let max_rows = crate::storage::columnar::columnar_storage::find_max_rows();
     for def in filtered {
         let key = (def.name_id, def.path_id, def.node_kind_id, def.line);
         if !seen.insert(key) {
@@ -547,6 +548,18 @@ pub(super) fn find_symbols_prefilter(
                     crate::filter::order_cmp(a, b, clauses)
                 });
         }
+
+        // The row budget, mirroring the columnar scan's, which enforces it
+        // whether or not its trim is armed. Checked after the trim so an
+        // armed window that fits never trips it: the window is a few
+        // multiples of the LIMIT, so under any real budget a small page
+        // stays clear, and a LIMIT large enough that even its trimmed
+        // window outgrows the budget refuses exactly as the on-disk
+        // backend does — legacy `can_trim` has no k ceiling, so nothing
+        // else bounds that shape.
+        if results.len() > max_rows {
+            return Err(crate::storage::columnar::columnar_storage::row_budget_exceeded(max_rows));
+        }
     }
 
     // Only usages-based WHERE, GROUP/HAVING, ORDER, OFFSET, LIMIT remain.
@@ -573,7 +586,7 @@ pub(super) fn find_symbols_prefilter(
     // Where nothing was capped it is `None`, because the pipeline still has
     // filtering to do and its own count is the one that tells the truth.
     let capped_total = (matched > results.len()).then_some(matched);
-    (results, remaining, capped_total)
+    Ok((results, remaining, capped_total))
 }
 
 /// Validate that the ORDER BY field is either a known built-in field, a known

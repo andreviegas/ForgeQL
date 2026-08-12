@@ -28,6 +28,11 @@ use super::segment_reader::SegmentReader;
 
 mod commit;
 mod fast_paths;
+// The row budget is one bound with several enforcement sites — the legacy
+// backend and the dirty-union check reuse these rather than growing their own.
+pub(in crate::storage) use fast_paths::{
+    find_max_rows, row_budget_exceeded, usages_budget_exceeded,
+};
 mod query;
 
 // ─────────────────────────────────────────────────────────────────────────────

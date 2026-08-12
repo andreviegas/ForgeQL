@@ -62,7 +62,7 @@ const DEFAULT_FIND_MAX_ROWS: usize = FIND_ROW_BUDGET_BYTES / FIND_BYTES_PER_ROW;
 
 /// Row budget for [`ColumnarStorage::materialize_all`], read per query.
 /// `FORGEQL_FIND_MAX_ROWS` overrides the default; `0` disables the bound.
-fn find_max_rows() -> usize {
+pub(in crate::storage) fn find_max_rows() -> usize {
     match std::env::var("FORGEQL_FIND_MAX_ROWS")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
@@ -148,7 +148,7 @@ const fn topk_keep(k: usize) -> usize {
 /// them from. Those have their own, much larger bound in
 /// [`row_id_budget_exceeded`], because a candidate costs four bytes and a
 /// materialised row about four hundred times that.
-fn row_budget_exceeded(max_rows: usize) -> anyhow::Error {
+pub(in crate::storage) fn row_budget_exceeded(max_rows: usize) -> anyhow::Error {
     anyhow::anyhow!(
         "FIND materialised more than {max_rows} rows before \
          ORDER/GROUP/LIMIT — about {} GiB of result rows, which is \
@@ -172,6 +172,27 @@ fn row_budget_exceeded(max_rows: usize) -> anyhow::Error {
          short, so the same query is sometimes counted honestly and \
          sometimes not. FORGEQL_FIND_MAX_ROWS overrides the bound in \
          rows; 0 disables it.",
+        max_rows.saturating_mul(FIND_BYTES_PER_ROW) / (1024 * 1024 * 1024)
+    )
+}
+
+/// The same budget refusing a `FIND usages` whose site list outgrew it.
+///
+/// Sites, not rows, are what accumulate on that path — one `(path, line,
+/// role)` per occurrence, gathered from the postings and from reading the
+/// files — and every site becomes exactly one result row, so the row budget
+/// is the honest bound for them too. The bound is checked between matching
+/// tiers, so the peak can overshoot it by one tier's finds.
+pub(in crate::storage) fn usages_budget_exceeded(sites: usize, max_rows: usize) -> anyhow::Error {
+    anyhow::anyhow!(
+        "FIND usages holds {sites} occurrence sites, past the {max_rows}-row \
+         budget — about {} GiB of result rows. Narrow the reading: IN 'path/**' \
+         and EXCLUDE prune files before they are read, and a more specific name \
+         matches fewer sites. A LIMIT does not help here — it selects whole \
+         files out of a computed answer, never bounding what is searched. The \
+         bound is checked between matching tiers, so the peak can overshoot it \
+         by one tier's finds. FORGEQL_FIND_MAX_ROWS overrides it in rows; 0 \
+         disables it.",
         max_rows.saturating_mul(FIND_BYTES_PER_ROW) / (1024 * 1024 * 1024)
     )
 }

@@ -59,3 +59,8 @@ Short, durable facts discovered while working in this codebase.
   member so each entry of a data file (e.g. the `tests/golden/*.json` cases) is
   individually addressable; repeated keys stay distinct via parent_ordinal +
   content_hash in the ordinal key.
+- With columnar configured, `build_index` returns an EMPTY in-memory table by design (inline segment emit) — any path that falls back to the legacy table must rebuild it with `Session::build_fallback_index` (no inline ctx) or it serves zero rows as success
+- The row budget helpers live in `columnar_storage/fast_paths.rs` and are re-exported `pub(in crate::storage)` from `columnar_storage.rs` for the legacy backend and the dirty-union check — one bound, several enforcement sites
+- `OverlayBuilder::step1_open_segments` refuses a missing/unreadable segment (capped listing, provider dir named once); a COMMIT over a vanished base segment fails and retries cleanly after restore
+- `find_usages`' literal tier reads files via `root.join(path)` — tests must pass the storage's real worktree root, not "."
+- The test gate auto-fmts the worktree before checking: re-FIND handles after a gate run, write rustfmt-canonical WITH payloads

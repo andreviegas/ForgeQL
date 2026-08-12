@@ -299,6 +299,71 @@ fn a_having_page_is_chosen_from_every_matching_row() {
     );
 }
 
+/// Driver-invoked probe: the in-memory backend refuses a retention past the
+/// row budget, exactly as the on-disk backend does. An ORDER BY disarms its
+/// running trim, so every matching row is retained; a bare LIMIT keeps the
+/// trim armed, but the window is a few multiples of the LIMIT and counts
+/// against the same budget — legacy `can_trim` has no k ceiling, so nothing
+/// else bounds it. With the budget forced to 1 both shapes must refuse,
+/// naming the knob.
+#[test]
+#[ignore = "driver-invoked probe; behaviour depends on FORGEQL_FIND_MAX_ROWS"]
+fn legacy_row_budget_probe() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let ordered = common::try_fql(&mut e, &sid, "FIND symbols ORDER BY line ASC LIMIT 5");
+
+    match std::env::var("FORGEQL_FIND_MAX_ROWS").as_deref() {
+        Ok("1") => {
+            let err = ordered.expect_err("a cap of 1 must refuse an ORDER BY retention");
+            assert!(
+                err.to_string().contains("FORGEQL_FIND_MAX_ROWS"),
+                "error should name the knob: {err}"
+            );
+            // The armed trim's window counts against the same budget: with a
+            // cap of 1, even a bare LIMIT's retention outgrows it and must
+            // refuse — the same query the on-disk backend refuses too.
+            let bare = common::try_fql(&mut e, &sid, "FIND symbols LIMIT 5")
+                .expect_err("an armed window past the cap must refuse");
+            assert!(
+                bare.to_string().contains("FORGEQL_FIND_MAX_ROWS"),
+                "error should name the knob: {bare}"
+            );
+        }
+        Ok("0") | Err(_) => {
+            let r = ordered.expect("scan must pass without an effective cap");
+            assert_eq!(common::as_query(&r).results.len(), 5);
+        }
+        Ok(other) => panic!("unexpected probe configuration: {other}"),
+    }
+}
+
+#[test]
+fn legacy_scan_counts_against_the_row_budget() {
+    let exe = std::env::current_exe().expect("current_exe");
+    let run = |cap: Option<&str>| {
+        let mut cmd = std::process::Command::new(&exe);
+        let _ = cmd.args(["--exact", "legacy_row_budget_probe", "--ignored"]);
+        match cap {
+            Some(v) => {
+                let _ = cmd.env("FORGEQL_FIND_MAX_ROWS", v);
+            }
+            None => {
+                let _ = cmd.env_remove("FORGEQL_FIND_MAX_ROWS");
+            }
+        }
+        let out = cmd.output().expect("spawn probe");
+        assert!(
+            out.status.success(),
+            "probe with cap {cap:?} failed:\n{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    run(Some("1"));
+    run(Some("0"));
+    run(None);
+}
+
 #[test]
 fn number_is_magic_false() {
     let (mut e, sid, _d) = engine_enrichment_only();

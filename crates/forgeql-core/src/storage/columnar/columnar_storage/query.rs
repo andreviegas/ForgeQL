@@ -87,7 +87,7 @@ impl StorageEngine for ColumnarStorage {
         self.reject_unknown_where_fields(clauses)?;
         self.reject_unknown_order_by_field(clauses)?;
         self.reject_unknown_group_by_field(clauses)?;
-        Ok(self.find_usages_impl(name, clauses, root))
+        self.find_usages_impl(name, clauses, root)
     }
 
     fn indexed_files(&self) -> Option<Vec<crate::result::FileEntry>> {

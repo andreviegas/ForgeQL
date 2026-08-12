@@ -1043,13 +1043,17 @@ scan that used to complete can now be refused — a reachability change, not a
 restatement. The case to watch is a `GROUP BY` no fast path accepts: its answer
 is a handful of rows, but it materialises every matching row to get there.
 
-The row budget is enforced on the `FIND symbols` scan over the on-disk index and
-nowhere else. `FIND usages` builds its rows in one step on both backends, `FIND
-files` pushes one entry per file with no bound at all, the in-memory backend
-builds every matching row and — under a bare `LIMIT k` with no `OFFSET`,
-`GROUP BY` or `HAVING` — retains only a bounded window of them, but carries no
-budget refusal, and a session's uncommitted rows are unioned in after the check
-— a query answered by one of those can still exhaust host memory.
+The row budget is enforced wherever result rows accumulate without a bound of
+their own: the `FIND symbols` scan over the on-disk index, the union of a
+session's uncommitted rows into that scan's answer, the `FIND usages` site
+list on both backends (on the on-disk one it is checked between matching
+tiers, so the peak can overshoot the bound by one tier's finds), and the
+in-memory backend's scan, trimmed or not — an armed trim holds the retained
+window to a few multiples of the `LIMIT`, which keeps any small page well
+clear of the budget and refuses a `LIMIT` so large that even its trimmed
+window outgrows it. `FIND files` carries none: its answer is one small row
+per workspace file, so its size is the workspace's file count, never anything
+a query matches.
 
 ---
 
