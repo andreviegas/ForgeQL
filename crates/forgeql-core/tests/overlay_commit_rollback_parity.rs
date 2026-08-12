@@ -449,18 +449,19 @@ fn commit_promotes_segments_and_builds_new_overlay() {
     let new_oid = "aabbccddeeff001122334455667788990011223344556677aabbccddeeff0011";
     storage.commit_dirty(new_oid, &ctx).expect("commit_dirty");
 
-    // ── Assert 1: staging dir is empty ──
-    let staging_entries: Vec<_> = std::fs::read_dir(&staging_dir)
-        .expect("read staging dir")
-        .filter_map(std::result::Result::ok)
-        .collect();
+    // ── Assert 1: the staged segment is still readable in staging ──
+    //
+    // It used to be moved out. A commit no longer rebuilds the overlay, so the
+    // session goes on answering from its dirty overlay, and the delta file that
+    // restores that overlay after a restart resolves its segments against this
+    // directory. Emptying it would leave the reload with nothing to open and
+    // every committed file's rows would revert to their pre-edit versions on
+    // the next reconnect. Promotion links instead of moving, so the segment is
+    // reachable under both names and costs one inode.
     assert!(
-        staging_entries.is_empty(),
-        "staging dir must be empty after commit_dirty; contains: {:?}",
-        staging_entries
-            .iter()
-            .map(std::fs::DirEntry::path)
-            .collect::<Vec<_>>()
+        staging_dir.join(&staged_name).exists(),
+        "the staged segment must remain readable in staging after commit_dirty, \
+         because the delta file resolves against it"
     );
 
     // ── Assert 2: bare-repo segment store has the promoted segment ──
@@ -475,32 +476,37 @@ fn commit_promotes_segments_and_builds_new_overlay() {
         promoted_dir.display()
     );
 
-    // ── Assert 3: new overlay file exists ──
+    // ── Assert 3: no overlay is written for the commit ──
+    //
+    // The overlay is an index over the segments promoted above, and building
+    // it merges every name and row in the corpus whether or not they changed.
+    // Only the commit something later attaches to is ever read, so the build
+    // moves to whoever attaches; see `commit_dirty_inner`.
     let new_overlay_path = ctx.overlay_path_for(new_oid);
     assert!(
-        new_overlay_path.exists(),
-        "new overlay must exist at {}",
+        !new_overlay_path.exists(),
+        "a commit must not build an overlay; found one at {}",
         new_overlay_path.display()
     );
 
-    // ── Assert 4: new overlay has correct segment set ──
-    let new_overlay = Overlay::open(&new_overlay_path).expect("open new overlay");
-    let new_hexes: Vec<String> = new_overlay
-        .segments()
-        .iter()
-        .map(|m| m.hex_content_id.clone())
-        .collect();
-    assert!(
-        new_hexes.contains(&staged_hex),
-        "new overlay must include promoted staged_hex; got: {new_hexes:?}"
+    // ── Assert 4: the dirty overlay is kept, because it is now the answer ──
+    //
+    // A commit moves changes into git; it does not change which rows the
+    // session should return. Clearing the dirty overlay without building a
+    // new base would revert every committed file to its pre-edit rows, which
+    // Assert 5 below is what actually catches.
+    assert_eq!(
+        storage.dirty().added.len(),
+        1,
+        "the staged segment must still be serving after the commit"
     );
     assert!(
-        new_hexes.contains(&hex2),
-        "new overlay must include unchanged file2 hex; got: {new_hexes:?}"
-    );
-    assert!(
-        !new_hexes.contains(&hex1),
-        "new overlay must NOT include old file1 hex (shadowed); got: {new_hexes:?}"
+        storage
+            .dirty()
+            .removed_paths
+            .iter()
+            .any(|p| p.ends_with("file1.cpp")),
+        "file1's base segment must still be shadowed after the commit"
     );
 
     // ── Assert 5: live query on updated storage returns new symbols ──
@@ -682,8 +688,9 @@ fn a_commit_whose_base_segment_vanished_is_refused() {
         .commit_dirty(new_oid, &ctx)
         .expect("the same COMMIT must succeed once the segment is back");
     assert!(
-        new_overlay_path.exists(),
-        "the retried COMMIT must write the overlay it refused before"
+        !new_overlay_path.exists(),
+        "the retried COMMIT must succeed without building an overlay: {}",
+        new_overlay_path.display()
     );
 }
 
@@ -784,14 +791,52 @@ fn new_session_hits_promoted_overlay_cache() {
         .commit_dirty(new_oid, &ctx)
         .expect("commit_dirty session A");
 
-    // Assert: new overlay was written so Session B can open it (cache hit).
+    // The commit wrote no overlay — that is the point of deferring it.
     let new_overlay_path = ctx.overlay_path_for(new_oid);
     assert!(
-        new_overlay_path.exists(),
-        "new overlay must exist for session B to open"
+        !new_overlay_path.exists(),
+        "a commit must not build an overlay; found one at {}",
+        new_overlay_path.display()
     );
 
-    // Session B: open fresh storage using the promoted overlay.
+    // Session B is the takeover, and it is what pays for the index: it maps
+    // the committed tree to the segments already in the store — which is what
+    // a fresh `build_index` produces, since a segment is named by its content
+    // and every one of these is already written — and builds the overlay from
+    // that map, exactly as `warm_or_open` does when it finds none.
+    //
+    // This is the parity gate for deferring the build. Session A has been
+    // answering from a base overlay plus a dirty one; session B answers from
+    // an overlay built from scratch. The two have to agree, because the whole
+    // change rests on a commit not altering which rows a session returns —
+    // and disagreement here is silent everywhere else.
+    let unhex = |h: &str| -> Vec<u8> {
+        (0..h.len() / 2)
+            .map(|i| u8::from_str_radix(&h[i * 2..i * 2 + 2], 16).expect("hex"))
+            .collect()
+    };
+    let mut map_b: std::collections::HashMap<std::path::PathBuf, Vec<u8>> =
+        std::collections::HashMap::new();
+    let base_b = Overlay::open(&base_overlay_path).expect("session B: re-open base overlay");
+    for ds in &storage_a.dirty().added {
+        let _ = map_b.insert(
+            worktree.join(&ds.source_path),
+            unhex(&ds.reader.content_id_hex()),
+        );
+    }
+    for meta in base_b.segments() {
+        if storage_a.dirty().removed_paths.contains(&meta.source_path) {
+            continue;
+        }
+        let _ = map_b.insert(
+            worktree.join(&meta.source_path),
+            unhex(&meta.hex_content_id),
+        );
+    }
+    OverlayBuilder::new("test", segments_dir, worktree.clone(), map_b)
+        .build_and_persist(&new_overlay_path)
+        .expect("session B: build the overlay the commit deferred");
+
     let overlay_b =
         Overlay::open(&new_overlay_path).expect("session B: Overlay::open succeeded (cache hit)");
     let row_count_b = overlay_b.row_count();

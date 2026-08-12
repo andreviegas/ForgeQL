@@ -556,6 +556,63 @@ impl ColumnarStorage {
     // PhaseFT4: commit_dirty — promote staging segments + build new overlay
     // ─────────────────────────────────────────────────────────────────────
 
+    /// Refuse when the base overlay names a segment the store no longer holds.
+    ///
+    /// The rows of a committed file live in its segment; the overlay is an
+    /// index over them. So a segment reclaimed from under a live session — by
+    /// a `VACUUM`, or by a store rebuilt at a different version — means the
+    /// index that any later attach builds would come out self-consistent and
+    /// silently smaller, dropping that file from every answer on this commit.
+    ///
+    /// The build refuses on exactly this, and that refusal is the one that
+    /// protects the answer. This check exists because a deferred build happens
+    /// after the session that could act on the news has gone: it reports the
+    /// same fault at the commit, while the agent that made it is still here.
+    /// Nothing in a commit reads these segments, so this is a guard and not a
+    /// dependency — a stat each, no open, and no bytes read.
+    fn refuse_if_base_segments_vanished(&self, ctx: &ColumnarBuildContext) -> Result<()> {
+        const LISTED_CAP: usize = 10;
+        let missing: Vec<&Path> = self
+            .overlay()
+            .segments()
+            .iter()
+            .filter(|meta| {
+                // A path the session has shadowed is one whose replacement is
+                // staged here: its base segment is on its way out of the answer
+                // anyway, so its absence costs nothing.
+                !self.dirty.removed_paths.contains(&meta.source_path)
+                    && !ctx
+                        .segment_path_for(&meta.source_path, &meta.hex_content_id)
+                        .exists()
+            })
+            .map(|meta| meta.source_path.as_path())
+            .collect();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        let listed = missing
+            .iter()
+            .take(LISTED_CAP)
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let more = missing.len().saturating_sub(LISTED_CAP);
+        let tail = if more > 0 {
+            format!("; … and {more} more")
+        } else {
+            String::new()
+        };
+        anyhow::bail!(
+            "overlay build incomplete: {} of {} segments this commit's index is \
+             built from are missing from {} — {listed}{tail}. Committing would \
+             leave an index that silently drops those files from every answer \
+             on this commit; restore the segment files or re-index this source",
+            missing.len(),
+            self.overlay().segments().len(),
+            ctx.versioned_segments_root().display(),
+        );
+    }
+
     /// Called from `exec_commit` after the git commit succeeds.
     ///
     /// Promotes all staging segments to the bare-repo segment store, builds a
@@ -568,7 +625,7 @@ impl ColumnarStorage {
     /// cleanup fails.  `exec_commit` treats this as non-fatal: the session falls
     /// back to its stale overlay; the next `USE` will rebuild from legacy.
     pub(super) fn commit_dirty_inner(
-        &mut self,
+        &self,
         new_commit_oid: &str,
         ctx: &ColumnarBuildContext,
     ) -> Result<()> {
@@ -585,32 +642,55 @@ impl ColumnarStorage {
             promote_segment(&src, &dst)?;
         }
 
-        // 2. Build new overlay = merge(persistent, dirty).
-        //    All segments are re-opened fresh from the bare repo after promotion.
-        let new_overlay_path = ctx.overlay_path_for(new_commit_oid);
-        let builder =
-            OverlayBuilder::from_merge(self.overlay(), &self.dirty, ctx, &self.worktree_root);
-        builder.build_and_persist(&new_overlay_path)?;
+        // 2. Do NOT build an overlay for this commit. It is a cache over the
+        //    segments promoted above, and the segments are what make the
+        //    commit's rows durable — so leaving it unbuilt loses nothing but
+        //    the fast path, and building it costs a full merge of every name
+        //    and row in the corpus. Measured on the Linux kernel, committing
+        //    one edited comment rebuilt an index over 6,877,345 names and
+        //    29,864,281 rows, none of which changed: 296 seconds, of which
+        //    92% was the name index and the enrichment bitmaps. A worktree
+        //    that commits ten times paid that ten times and threw nine of the
+        //    results away, because only the last commit is ever attached to.
+        //
+        //    Whoever attaches to this commit builds it instead: `warm_or_open`
+        //    already builds an overlay it does not find, so a later `USE` of
+        //    this commit — the takeover, or the branch landing on main — pays
+        //    once for the state it actually reads.
+        //
+        // 3. The session keeps answering from its base overlay plus the dirty
+        //    one, which is what it was doing a moment ago and is still the
+        //    same set of rows: a commit moves changes into git, it does not
+        //    change which rows the session should return. So `dirty` is kept
+        //    rather than cleared, the staging segments it reads stay where
+        //    they are, and the delta file that restores it after a restart is
+        //    left on disk and rewritten to match.
+        //
+        //    The rows are correct either way; what grows is the work of
+        //    reading them, since dirty rows sit outside the base overlay's
+        //    name index and posting lists. That is the trade — a slower read
+        //    path for as long as the worktree lives, against not rebuilding
+        //    the corpus once per commit.
+        // 4. Check the base segments are still on disk, even though nothing
+        //    here reads them.
+        //
+        //    Deferring the build moves the moment a vanished base segment is
+        //    noticed from the commit to whoever builds the overlay next, and
+        //    that is the wrong end: by then the session that could still act
+        //    on it has handed over. The build's own refusal stays where it is
+        //    and is what actually protects the answer — this only brings the
+        //    news forward. It is a stat per segment and no open, which on a
+        //    corpus of 80,426 segments is a fraction of a second against the
+        //    296 the build used to cost.
+        self.refuse_if_base_segments_vanished(ctx)?;
 
-        // 3. Swap to the new overlay. Routed through the shared cache rather
-        //    than opening directly: this commit is the one every later session
-        //    will attach to, so an uncached decode here is the one most likely
-        //    to be paid for twice.
-        let opened = Self::shared_open(ctx, &new_overlay_path)
-            .with_context(|| format!("open new overlay at {}", new_overlay_path.display()))?;
-        // The substring dictionary was built from the overlay being replaced,
-        // and the committed tokens have just left `dirty` too — without this a
-        // partial substring query would silently under-report them.
-        self.substring_index = std::sync::OnceLock::new();
-        self.stats.rows = opened.overlay.row_count() as usize;
-        self.shared = opened;
-
-        // 4. Clear dirty state and staging directory.
-        self.dirty = DirtyOverlay::new();
-        clear_staging_dir(&self.staging_dir)?;
-
-        // 5. Remove the delta file — no pending changes after commit.
-        let _ = std::fs::remove_file(&self.delta_path);
+        self.save_delta()?;
+        info!(
+            commit = %new_commit_oid,
+            staged = self.dirty.added.len(),
+            shadowed = self.dirty.removed_paths.len(),
+            "commit: overlay deferred to the next attach on this commit"
+        );
 
         Ok(())
     }
@@ -633,6 +713,21 @@ fn promote_segment(src: &Path, dst: &Path) -> Result<()> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create segment parent dir {}", parent.display()))?;
     }
+    // Link rather than move, so the staging copy outlives the promotion.
+    //
+    // A commit no longer rebuilds the overlay, so the session goes on
+    // answering from its base overlay plus the dirty one — and the dirty
+    // one is restored after a restart by reading the delta file against
+    // the staging directory. Moving the file out of staging would leave
+    // that reload with nothing to open, and the rows of every committed
+    // file would silently revert to their pre-edit versions on the next
+    // reconnect. A hard link costs no space: both names address one inode.
+    if std::fs::hard_link(src, dst).is_ok() {
+        return Ok(());
+    }
+    if dst.exists() {
+        return Ok(()); // lost race — peer already promoted
+    }
     if std::fs::rename(src, dst).is_ok() {
         return Ok(());
     }
@@ -644,24 +739,4 @@ fn promote_segment(src: &Path, dst: &Path) -> Result<()> {
     std::fs::copy(src, dst)
         .with_context(|| format!("copy segment {} → {}", src.display(), dst.display()))
         .map(|_| ())
-}
-
-/// Delete all entries inside the staging directory without removing the
-/// directory itself (avoids a `create_dir_all` on the next `reindex_files`).
-fn clear_staging_dir(staging_dir: &Path) -> Result<()> {
-    if !staging_dir.exists() {
-        return Ok(());
-    }
-    for entry in std::fs::read_dir(staging_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            std::fs::remove_dir_all(&path)
-                .with_context(|| format!("remove staging subdir {}", path.display()))?;
-        } else {
-            std::fs::remove_file(&path)
-                .with_context(|| format!("remove staging file {}", path.display()))?;
-        }
-    }
-    Ok(())
 }
