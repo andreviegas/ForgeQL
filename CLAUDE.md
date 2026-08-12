@@ -16,6 +16,26 @@ public repository. They must stand on their own:
 - New code comments follow the same rule: state the invariant or the
   reason, never a ticket number.
 
+## Commit subjects are short — the detail goes below the fold
+
+- **Keep the subject line under 60 characters.** Terminals and editor
+  buffers truncate longer ones, and a subject that gets cut mid-word is
+  a subject nobody reads. `git log --oneline` is the format these are
+  actually read in.
+- **Say what changed, in the imperative, without qualifying it.**
+  `fix: one place decides whether shedding on rank is sound`, not
+  `fix: make sure that only a single place is responsible for deciding
+  whether it is sound to shed rows on rank`.
+- **The body is for what the subject changes about a reader's
+  decisions** — why the obvious fix was wrong, what a measurement
+  showed, which invariant now holds. Skip it when there is nothing of
+  that kind to say.
+- **Reproduction detail and released wording belong in the changelog
+  fragment, not the commit body.** The fragment is what ships to users;
+  the commit body is what the next contributor reads before touching
+  the same code. Writing the same paragraph in both means one of them
+  goes stale.
+
 ## Versioning — contributors never pick a number
 
 - **Do not touch `Cargo.toml`, `Cargo.lock`, or any version heading in
