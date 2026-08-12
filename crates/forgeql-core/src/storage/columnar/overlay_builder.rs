@@ -25,7 +25,7 @@ use fst::{MapBuilder, Streamer as _};
 use ignore::WalkBuilder;
 use rayon::prelude::*;
 use roaring::RoaringBitmap;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use super::bytes_to_hex;
 use super::overlay::{EnrichEntry, RowPtr, SegmentMeta};
@@ -69,16 +69,19 @@ impl OverlayBuilder {
 
     /// Build the overlay and write it atomically to `overlay_path`.
     ///
-    /// Segments that are missing or unreadable are silently skipped with a
-    /// warning; an overlay with zero segments is not written (returns `Ok`).
+    /// An empty segment map writes nothing and returns `Ok` — there is no
+    /// overlay to build. A non-empty map must open completely.
     ///
     /// # Errors
-    /// Returns `Err` if writing or renaming the overlay file fails fatally.
+    /// Returns `Err` when any segment the map names is missing or unreadable
+    /// — an overlay built from what remains would silently drop those files
+    /// from every answer on this commit — and if writing or renaming the
+    /// overlay file fails fatally.
     pub fn build_and_persist(&self, overlay_path: &Path) -> Result<()> {
         let t_total = std::time::Instant::now();
 
         // 1. Open segments (parallel mmap I/O).
-        let mut segs = self.step1_open_segments();
+        let mut segs = self.step1_open_segments()?;
 
         // 2. Sort by source_path for deterministic, path-ordered global row IDs.
         //    After this sort, all rows from "arch/" occupy a contiguous range,
@@ -231,40 +234,80 @@ impl OverlayBuilder {
 
     // ── Step 1 ───────────────────────────────────────────────────────────────
 
-    fn step1_open_segments(&self) -> Vec<(PathBuf, String, SegmentReader)> {
+    /// Open every segment the builder's map names, or refuse.
+    ///
+    /// A segment that is missing or unreadable is an error, never a skip: the
+    /// overlay built from what remains would be self-consistent and silently
+    /// smaller, and every session on that commit would then drop the file's
+    /// rows from every answer. The routes that reach this — a COMMIT merging
+    /// the base overlay with dirty segments, a rebuild from an inline segment
+    /// map — hold no other copy of the rows, so there is nothing to repair
+    /// from here; the refusal names the store directory and the first ten
+    /// affected files with their causes, and the caller (a COMMIT, an open)
+    /// fails with it.
+    fn step1_open_segments(&self) -> Result<Vec<(PathBuf, String, SegmentReader)>> {
         let t_step = std::time::Instant::now();
         let provider_ver_dir =
             self.segments_dir
                 .join(format!("{}-v{}", &self.provider_id, super::ENRICH_VER));
-        let segs: Vec<(PathBuf, String, SegmentReader)> = self
+        let opened: Vec<_> = self
             .segment_map
             .par_iter()
-            .filter_map(|(abs_path, content_id)| {
+            .map(|(abs_path, content_id)| {
                 let hex = bytes_to_hex(content_id);
                 let rel_path =
                     super::segment_source_rel(abs_path, &self.worktree_root).to_path_buf();
                 let seg_path = provider_ver_dir.join(super::segment_rel_path(&rel_path, &hex));
                 if !seg_path.exists() {
-                    return None;
+                    return Err((rel_path, "segment file does not exist".to_owned()));
                 }
                 match SegmentReader::open(&seg_path) {
-                    Ok(reader) => Some((rel_path, hex, reader)),
-                    Err(e) => {
-                        warn!(
-                            path = %seg_path.display(),
-                            "overlay: skipping unreadable segment: {e:#}",
-                        );
-                        None
-                    }
+                    Ok(reader) => Ok((rel_path, hex, reader)),
+                    Err(e) => Err((rel_path, format!("{e:#}"))),
                 }
             })
             .collect();
+
+        let total = opened.len();
+        let mut segs = Vec::with_capacity(total);
+        let mut unreadable: Vec<(PathBuf, String)> = Vec::new();
+        for entry in opened {
+            match entry {
+                Ok(seg) => segs.push(seg),
+                Err(gap) => unreadable.push(gap),
+            }
+        }
+        if !unreadable.is_empty() {
+            use std::fmt::Write as _;
+            unreadable.sort();
+            // A wholesale loss (the whole provider-version directory reclaimed)
+            // makes this O(all files) — cap the listing so the refusal stays a
+            // message rather than a file dump.
+            let cap = 10;
+            let mut listed = unreadable
+                .iter()
+                .take(cap)
+                .map(|(rel, cause)| format!("{} ({cause})", rel.display()))
+                .collect::<Vec<_>>()
+                .join("; ");
+            if unreadable.len() > cap {
+                let _ = write!(listed, "; … and {} more", unreadable.len() - cap);
+            }
+            anyhow::bail!(
+                "overlay build incomplete: {} of {total} segments under {} are missing or \
+                 unreadable — {listed}. Building without them would silently drop those files \
+                 from every answer on this commit; restore the segment files or re-index this \
+                 source",
+                unreadable.len(),
+                provider_ver_dir.display(),
+            );
+        }
         info!(
             ms = t_step.elapsed().as_millis(),
             n = segs.len(),
             "TIMING step1: open segments (parallel)",
         );
-        segs
+        Ok(segs)
     }
 
     // ── Step 2.5 ─────────────────────────────────────────────────────────────

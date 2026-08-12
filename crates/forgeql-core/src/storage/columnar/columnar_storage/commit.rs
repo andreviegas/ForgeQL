@@ -27,9 +27,8 @@ use super::ColumnarStorage;
 /// not by the fault. Shadow-writing from a merged symbol table can write a
 /// segment that is not there, so where one is available the rebuild is allowed
 /// to run and the index is usually repaired. It is only *usually*: the rebuild
-/// skips a segment whose magic bytes are intact even when opening it fails, a
-/// failed flush leaves the path in the map with nothing behind it, and the
-/// assembly step that ends every rebuild drops what it cannot read. So the
+/// skips a segment whose magic bytes are intact even when opening it fails, and
+/// a failed flush leaves the path in the map with nothing behind it. So the
 /// caller checks afterwards and raises this if the segment is still not there —
 /// a rebuild running is not the same as a rebuild working, and the difference
 /// between them would be an index one file smaller that never says so.
@@ -37,7 +36,10 @@ use super::ColumnarStorage;
 /// The other end is a rebuild that could only drop the segment — assembling
 /// from the segments already on disk, which is what runs whenever the caller
 /// carries an inline segment map — or no rebuild at all. Those refuse without
-/// running anything.
+/// running anything, and the assembly itself refuses too when a segment it
+/// names will not open, so a route that reaches it without passing here (a
+/// COMMIT merging the base overlay with dirty segments) fails with the same
+/// shape instead of writing a smaller overlay.
 ///
 /// A readable overlay is not deleted on the strength of a missing segment in
 /// either direction: removing one is destructive and cannot be undone, and the
@@ -174,9 +176,11 @@ impl ColumnarStorage {
         // The rebuild was allowed to run because it *might* write the missing
         // segment back. Check that it did. Every way it can fail to — a segment
         // whose magic bytes survive so shadow-write calls it already valid, a
-        // flush that failed, a source file that could not be read — ends the
-        // same way: the assembly step drops it and this open succeeds over an
-        // index one file smaller, saying nothing. Refuse instead.
+        // flush that failed, a source file that could not be read — now ends in
+        // the assembly refusing and the old overlay staying put, so the open
+        // above fails typed rather than succeeding over a smaller index. This
+        // check stays as the second, independent proof that the segment really
+        // came back: a rebuild running is not a rebuild working.
         if let Some(pending) = deferred_refusal
             && !shared
                 .overlay
@@ -409,10 +413,12 @@ impl ColumnarStorage {
         // A merged symbol table is available, so the rebuild below may write the
         // segment that is gone. It is handed back rather than dropped because
         // "may" is the most that can be said here: shadow-write skips a segment
-        // whose magic bytes are intact even when opening it fails, a flush that
-        // fails leaves the path in the map with nothing behind it, and the
-        // assembly step that follows drops what it cannot read. The caller
-        // checks afterwards that the segment is really there.
+        // whose magic bytes are intact even when opening it fails, and a flush
+        // that fails leaves the path in the map with nothing behind it. The
+        // assembly step that follows now refuses a segment it cannot open, and
+        // the caller still checks afterwards that the segment is really there —
+        // two independent reasons a rebuild that ran is not a rebuild that
+        // worked.
         debug!(%commit_sha, "columnar warm_or_open: segment missing, rebuilding to regenerate it");
         Ok(Some(incomplete))
     }

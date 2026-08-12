@@ -529,6 +529,164 @@ fn commit_promotes_segments_and_builds_new_overlay() {
     );
 }
 
+/// A COMMIT whose base overlay names a segment the store no longer holds must
+/// refuse rather than write a smaller overlay. The merge builder used to skip
+/// a missing segment file, so the new overlay came out self-consistent and
+/// silently smaller, and every later session on that commit dropped the
+/// file's rows from every answer. The dirty overlay carries only the edited
+/// files — there is nothing at commit time to rebuild the vanished segment
+/// from — so refusal is the only honest outcome, and it must name the file.
+/// Restoring the segment makes the same COMMIT succeed: nothing about the
+/// refusal is sticky.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn a_commit_whose_base_segment_vanished_is_refused() {
+    use forgeql_core::storage::columnar::overlay::Overlay;
+    use forgeql_core::storage::columnar::{ColumnarStorage, OverlayBuilder};
+    use forgeql_core::storage::{ColumnarBuildContext, StorageEngine};
+    use forgeql_lang_cpp::CppLanguage;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let worktree = tmp.path().join("worktree");
+    std::fs::create_dir_all(&worktree).expect("worktree dir");
+
+    let bare = tmp.path().join("bare");
+    let segments_dir = bare.join("segments");
+    let overlays_dir = bare.join("overlays");
+    std::fs::create_dir_all(&segments_dir).expect("segments dir");
+    std::fs::create_dir_all(&overlays_dir).expect("overlays dir");
+
+    let file1 = worktree.join("file1.cpp");
+    let file2 = worktree.join("file2.cpp");
+    std::fs::write(&file1, "void BaseFunc1() {}\n").expect("write file1");
+    std::fs::write(&file2, "void BaseFunc2() {}\n").expect("write file2");
+
+    let wt_seg_dir = tmp.path().join("segments");
+    std::fs::create_dir_all(wt_seg_dir.join("test")).expect("wt seg dir");
+
+    let table1 = index_at_path(&CppLanguage, &file1);
+    let table2 = index_at_path(&CppLanguage, &file2);
+    let cid1 = build_segment(&table1, &file1, &tmp.path().join("segments"));
+    let cid2 = build_segment(&table2, &file2, &tmp.path().join("segments"));
+
+    let hex1 = cid1.iter().fold(String::new(), |mut a, b| {
+        use std::fmt::Write as _;
+        let _ = write!(a, "{b:02x}");
+        a
+    });
+    let hex2 = cid2.iter().fold(String::new(), |mut a, b| {
+        use std::fmt::Write as _;
+        let _ = write!(a, "{b:02x}");
+        a
+    });
+
+    let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(file1.clone(), cid1);
+    let _ = segment_map.insert(file2, cid2);
+
+    let base_overlay_path = overlays_dir.join("test").join("base_commit.bin");
+    std::fs::create_dir_all(base_overlay_path.parent().unwrap()).expect("overlay parent");
+    OverlayBuilder::new("test", wt_seg_dir.clone(), worktree.clone(), segment_map)
+        .build_and_persist(&base_overlay_path)
+        .expect("base overlay");
+
+    let bare_hex1 = seg_path(&segments_dir, std::path::Path::new("file1.cpp"), &hex1);
+    let bare_hex2 = seg_path(&segments_dir, std::path::Path::new("file2.cpp"), &hex2);
+    std::fs::create_dir_all(bare_hex1.parent().unwrap()).expect("bare hex1 parent");
+    std::fs::create_dir_all(bare_hex2.parent().unwrap()).expect("bare hex2 parent");
+    let _ = std::fs::copy(
+        seg_path(&wt_seg_dir, std::path::Path::new("file1.cpp"), &hex1),
+        &bare_hex1,
+    )
+    .expect("copy hex1");
+    let _ = std::fs::copy(
+        seg_path(&wt_seg_dir, std::path::Path::new("file2.cpp"), &hex2),
+        &bare_hex2,
+    )
+    .expect("copy hex2");
+
+    let ctx = ColumnarBuildContext::new(
+        segments_dir.clone(),
+        overlays_dir,
+        "test",
+        Arc::new(|b: &[u8]| b.to_vec()),
+    );
+
+    let lang_reg = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]));
+    let overlay = Overlay::open(&base_overlay_path).expect("open base overlay");
+    let seg_root = segments_dir.join(vp());
+    let segments: Vec<Arc<SegmentReader>> = overlay
+        .segments()
+        .iter()
+        .map(|m| {
+            Arc::new(
+                SegmentReader::open(&seg_root.join(
+                    forgeql_core::storage::columnar::segment_rel_path(
+                        &m.source_path,
+                        &m.hex_content_id,
+                    ),
+                ))
+                .expect("open seg"),
+            )
+        })
+        .collect();
+    let mut storage = ColumnarStorage::new_unshared(worktree, segments, overlay, lang_reg);
+
+    // Stage a dirty edit to file1 — the COMMIT below has real work to do.
+    std::fs::write(&file1, "void UpdatedFunc1() {}\n").expect("update file1");
+    storage
+        .reindex_files(std::slice::from_ref(&file1))
+        .expect("reindex file1");
+    assert_eq!(storage.dirty().added.len(), 1, "must have 1 staged segment");
+
+    // The GC-reclaim fault: file2's committed segment vanishes from the bare
+    // store while the base overlay still names it.
+    std::fs::remove_file(&bare_hex2).expect("delete file2's segment");
+
+    let new_oid = "aabbccddeeff001122334455667788990011223344556677aabbccddeeff0011";
+    let err = storage
+        .commit_dirty(new_oid, &ctx)
+        .expect_err("a COMMIT over a vanished base segment must refuse");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("file2.cpp"),
+        "the refusal must name the vanished file: {msg}"
+    );
+    assert!(
+        msg.contains("overlay build incomplete"),
+        "the refusal must say what would be lost: {msg}"
+    );
+
+    // Nothing was clobbered: the base overlay still opens, and no overlay was
+    // written for the refused commit.
+    assert!(
+        Overlay::open(&base_overlay_path).is_ok(),
+        "the base overlay must survive a refused COMMIT"
+    );
+    let new_overlay_path = ctx.overlay_path_for(new_oid);
+    assert!(
+        !new_overlay_path.exists(),
+        "a refused COMMIT must not leave an overlay behind: {}",
+        new_overlay_path.display()
+    );
+
+    // Restore the segment: the same COMMIT succeeds.
+    let _ = std::fs::copy(
+        seg_path(&wt_seg_dir, std::path::Path::new("file2.cpp"), &hex2),
+        &bare_hex2,
+    )
+    .expect("restore file2's segment");
+    storage
+        .commit_dirty(new_oid, &ctx)
+        .expect("the same COMMIT must succeed once the segment is back");
+    assert!(
+        new_overlay_path.exists(),
+        "the retried COMMIT must write the overlay it refused before"
+    );
+}
+
 /// PhaseFT4 gate: a second session opened against the promoted overlay gets a
 /// cache hit (`Overlay::open` succeeds) and returns the committed symbols.
 #[test]
