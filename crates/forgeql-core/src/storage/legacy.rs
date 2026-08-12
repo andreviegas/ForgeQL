@@ -113,7 +113,23 @@ impl LegacyMemoryStorage {
             "LegacyMemoryStorage: index built"
         );
         self.table = Some(table);
-        self.macro_table = Some(macro_table);
+        // Keep the macro table only where something will read it again.
+        //
+        // By the time `build` returns, the table has already done its whole
+        // job: it fed macro expansion while each file was being indexed. The
+        // one later reader is `persist_to_cache`, and the caller runs that
+        // exactly when it passed no `seg_ctx` — the two conditions are the
+        // same condition. So on the columnar path this used to hold one heap
+        // allocation per macro definition, unread, until the session dropped
+        // its legacy index at the very end.
+        //
+        // That is not a small residue on a large corpus. On the Linux kernel
+        // it is 6,119,906 definitions and 6.5 GiB, held across the whole
+        // overlay build — five minutes of work that never looks at it, and
+        // five minutes during which every other phase's allocations sit on
+        // top of it. Incremental reindex does not need it either:
+        // `SymbolTable::reindex_files` takes no macro table and never has.
+        self.macro_table = seg_ctx.is_none().then_some(macro_table);
         Ok(())
     }
 }

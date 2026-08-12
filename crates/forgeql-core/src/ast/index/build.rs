@@ -98,6 +98,7 @@ impl SymbolTable {
         info!(
             ms = t_step.elapsed().as_millis(),
             macro_defs = macro_table.def_count(),
+            heap = %macro_table.heap_breakdown(),
             mem = %crate::mem::snapshot(), "TIMING build pass1: macro collection"
         );
 

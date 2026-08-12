@@ -29,6 +29,54 @@ pub struct MacroTable {
     invokers: HashMap<String, HashSet<PathBuf>>,
 }
 
+/// Where a [`MacroTable`]'s heap bytes sit, as counted by
+/// [`MacroTable::heap_breakdown`].
+///
+/// Every field is bytes. They are reported separately rather than summed
+/// because the decision they inform is which one to stop storing.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct MacroHeapBreakdown {
+    /// Fixed size of every [`MacroDef`] record, before its strings.
+    pub records: usize,
+    /// The `defs` map's keys — one copy of each distinct macro name.
+    pub def_keys: usize,
+    /// Each record's own `name`, a second copy of the same text.
+    pub names: usize,
+    /// Each record's expansion `body`.
+    pub bodies: usize,
+    /// Each record's defining file path, stored once per definition rather
+    /// than once per file.
+    pub paths: usize,
+    /// Parameter names of function-like macros.
+    pub params: usize,
+    /// Guard-branch text at the definition site.
+    pub guards: usize,
+    /// The `defs_by_file` index: a path per file and a third copy of each name.
+    pub by_file: usize,
+    /// The `invokers` index.
+    pub invokers: usize,
+}
+
+impl std::fmt::Display for MacroHeapBreakdown {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mib = |n: usize| n / (1024 * 1024);
+        write!(
+            f,
+            "records={}MiB def_keys={}MiB names={}MiB bodies={}MiB paths={}MiB \
+             params={}MiB guards={}MiB by_file={}MiB invokers={}MiB",
+            mib(self.records),
+            mib(self.def_keys),
+            mib(self.names),
+            mib(self.bodies),
+            mib(self.paths),
+            mib(self.params),
+            mib(self.guards),
+            mib(self.by_file),
+            mib(self.invokers),
+        )
+    }
+}
+
 impl MacroTable {
     /// Create a new, empty table.
     #[must_use]
@@ -97,6 +145,40 @@ impl MacroTable {
         for (name, files) in other.invokers {
             self.invokers.entry(name).or_default().extend(files);
         }
+    }
+
+    /// Roughly how many heap bytes this table holds, split by what holds them.
+    ///
+    /// Walks the whole table, so it is for a diagnostic log line at a phase
+    /// boundary and not for a hot path. The figures are the bytes of the
+    /// strings and paths themselves plus the fixed size of each record; they
+    /// ignore allocator rounding and hash-table slack, so the true footprint
+    /// is somewhat larger than the total. What they are good for is the
+    /// *ratio* — which field of a macro definition is worth attacking.
+    #[must_use]
+    pub fn heap_breakdown(&self) -> MacroHeapBreakdown {
+        let mut b = MacroHeapBreakdown::default();
+        for (key, defs) in &self.defs {
+            b.def_keys += key.len();
+            b.records += defs.len() * std::mem::size_of::<MacroDef>();
+            for d in defs {
+                b.names += d.name.len();
+                b.bodies += d.body.len();
+                b.paths += d.file.as_os_str().len();
+                b.params += d
+                    .params
+                    .as_ref()
+                    .map_or(0, |p| p.iter().map(String::len).sum::<usize>());
+                b.guards += d.guard_branch.as_ref().map_or(0, String::len);
+            }
+        }
+        for (path, names) in &self.defs_by_file {
+            b.by_file += path.as_os_str().len() + names.iter().map(String::len).sum::<usize>();
+        }
+        for (name, files) in &self.invokers {
+            b.invokers += name.len() + files.iter().map(|f| f.as_os_str().len()).sum::<usize>();
+        }
+        b
     }
 
     /// Consume the table and return all macro definitions as a flat vector.
