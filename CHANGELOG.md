@@ -6,6 +6,122 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.162.0] — 2026-08-12 — a cold index of the Linux kernel peaks at 19.6 GiB instead of 30.2
+
+### Fixed
+
+- A `USE` whose columnar index refuses to open now says so in its own response
+  message, instead of only in the server log. The message carries the
+  refusal's repair ("restore that file, or index this source from scratch"),
+  which previously never reached the agent that had to act on it; a `USE`
+  that resumes such a session repeats the note for as long as the session
+  serves from the fallback, and a later attach that opens the columnar index
+  cleanly drops it.
+- The in-memory fallback behind that message now actually holds the index.
+  With columnar configured, the index build emits segments inline and
+  deliberately returns an empty in-memory table — correct while the columnar
+  open succeeds, and exactly wrong on the one path that falls back to it: a
+  session whose columnar open failed answered every query with zero rows
+  while `USE` reported success. The fallback path now rebuilds the in-memory
+  index for real before serving.
+
+- Building an overlay now refuses when a segment it names is missing or
+  unreadable, instead of skipping it. The skip produced an overlay that was
+  self-consistent and silently smaller — every later session on that commit
+  dropped the file's rows from every answer, with nothing anywhere saying so.
+  The routes that reach this build hold no other copy of the rows (a COMMIT
+  merges the base overlay with the session's staged segments; a rebuild from
+  an inline segment map assembles what is already on disk), so the refusal
+  names each affected file and where its segment was expected. A COMMIT
+  refused this way is not sticky: restore the segment files, or re-index the
+  source, and the same COMMIT succeeds.
+
+
+### Performance
+
+- Indexing no longer holds the macro table through the whole overlay build. It
+  is collected in a first pass, feeds macro expansion while each file is
+  indexed, and after that has exactly one reader left — the writer of the
+  legacy on-disk cache, which the columnar path never calls. It was kept
+  anyway, so a build held one heap allocation per macro definition, unread,
+  until the session dropped its legacy index at the very end. It is now
+  released as soon as the pass that needs it has finished. Incremental reindex
+  is unaffected: it takes no macro table and never has.
+
+  Measured on the Linux kernel — 6,119,906 macro definitions, 80,510 files,
+  29,864,281 rows — the table is 6.5 GiB, and it was resident for the five
+  minutes of overlay assembly that never looks at it, with every other phase's
+  memory stacked on top.
+
+  Together with segments no longer building a lookup table that only queries
+  read, a cold index of that corpus peaks at **19.6 GiB where it used to peak
+  at 30.2 GiB**, a 35% reduction, and produces a byte-identical overlay.
+
+- Opening a segment no longer builds a lookup table nothing is going to read.
+  Each segment carried a reverse map from string to id, built eagerly when the
+  segment was opened, with an owned copy of every string in its pool as keys —
+  bytes the memory-mapped file already holds. Its only callers are query
+  prefilters, so an index build constructed one per segment and read none of
+  them. It is now built the first time a prefilter asks that segment a
+  question, and not before.
+
+  Measured on the Linux kernel, 80,426 segments: the phase that opens them all
+  for the overlay build went from 17.8 seconds to 1.4. The overlay it produces
+  is byte-identical to the one built before the change, which is the property
+  worth keeping if this is ever made eager again.
+
+  This does not reduce the memory that phase holds — its 7.5 GiB of growth was
+  unchanged by the removal, so the allocation belongs to something else opened
+  at the same time.
+
+
+### Changed
+
+- The 2 GiB row budget now covers every path that serves result rows except
+  `FIND files`, not only the `FIND symbols` scan over the on-disk index.
+  Newly bounded, each with the same refusal and the same
+  `FORGEQL_FIND_MAX_ROWS` override: the union of a session's uncommitted rows
+  into that scan's answer (previously appended after the check), the
+  `FIND usages` site list on both backends (on the on-disk one the check runs
+  between matching tiers, so the peak can overshoot the bound by one tier's
+  finds), and the in-memory backend's scan, trimmed or not — its running trim
+  holds the retained window to a few multiples of the `LIMIT`, which keeps
+  any small page clear of the budget, and a `LIMIT` so large that even its
+  trimmed window outgrows the budget now refuses exactly as the on-disk
+  backend refuses it. `FIND files` deliberately carries no budget: its answer
+  is one small row per workspace file, so its size is the workspace's file
+  count, never anything a query matches.
+
+
+### Added
+
+- Every indexing phase now logs how much memory it is holding, beside the time
+  it already logged. A build that ends at 29 GiB used to say only which phase
+  was slow, so attributing the peak to a phase meant guessing, and a report of
+  "the reindex needed 25 GB" could not be acted on without reproducing it under
+  a profiler. Each `TIMING` line now carries `anon`, `file` and `peak`.
+
+  The split matters more than the total. `anon` is heap and thread stacks —
+  memory the process owns, that nothing else can reclaim, and that an
+  out-of-memory kill is decided on. `file` is page cache behind the mapped
+  segments: shared between every session that mapped the same segment, dropped
+  by the kernel under pressure, and counted once per mapping rather than once
+  per page, so it overstates. `top`, `ps` and every process viewer report the
+  two added together, which is why a large reading there says nothing about
+  whether a build is in danger. Measured on the Linux kernel, an index peaking
+  at 29.2 GiB was 15.5 GiB of the first kind and 10.2 GiB of the second.
+
+  Two phases that had no line at all now have one, both single-threaded and
+  both landing after the overlay build reports its total — which made them read
+  as time nothing accounted for. Opening the overlay and its segments is timed
+  separately from building them, because a cold index opens every segment twice
+  and only the first open was visible; and freeing the build-time table is
+  timed, because returning one heap allocation per macro definition is
+  single-threaded work that looks like a hang on a corpus with six million of
+  them.
+
+
+
 ## [0.161.0] — 2026-08-12 — LIMIT bounds delivery, and `total` counts the answer
 
 ### Fixed
