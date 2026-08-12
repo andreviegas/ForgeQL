@@ -23,7 +23,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result, ensure};
 use bytemuck::cast_slice;
@@ -108,8 +108,26 @@ struct StringPool {
     dat_start: usize,
     dat_end: usize,
     string_count: u32,
-    /// Pre-built reverse map for O(1) kind-prefilter lookups.
-    reverse: HashMap<String, u32>,
+    /// Reverse map for O(1) prefilter lookups, built on first use.
+    ///
+    /// Its keys are an owned copy of every string in the pool — bytes the mmap
+    /// already holds, duplicated onto the heap. It used to be built eagerly at
+    /// open time, for every segment, whether or not anything would ask it a
+    /// question.
+    ///
+    /// **No indexing step reads it.** Every caller is a query prefilter, so an
+    /// index build used to pay to construct one of these per segment and then
+    /// read none of them. Measured on the Linux kernel — 80,426 segments —
+    /// building them cost 16.4 of the 17.8 seconds spent opening segments for
+    /// the overlay build, which now takes 1.4. The overlay comes out
+    /// byte-identical, which is the property to preserve if this is ever made
+    /// eager again for some other reason.
+    ///
+    /// It is not, however, where that phase's memory goes: dropping the eager
+    /// build left the phase's 7.5 GiB growth unchanged, so the allocation
+    /// belongs to something else opened alongside it — the deserialised
+    /// posting bitmaps are the open suspect, and are not yet measured.
+    reverse: OnceLock<HashMap<String, u32>>,
 }
 
 impl StringPool {
@@ -155,23 +173,35 @@ impl StringPool {
             );
         }
 
-        let mut pool = Self {
+        let pool = Self {
             mmap,
             off_start,
             off_end,
             dat_start,
             dat_end,
             string_count,
-            reverse: HashMap::new(),
+            reverse: OnceLock::new(),
         };
 
-        // Build reverse map in one pass so prefilter lookups are O(1).
-        for id in 0..string_count {
-            let s = pool.get(id).to_owned();
-            let _ = pool.reverse.insert(s, id);
-        }
-
         Ok(pool)
+    }
+
+    /// The id of `s` in this pool, or `None` when the pool does not hold it.
+    ///
+    /// Builds the reverse map on first call and reuses it after. Callers are
+    /// prefilters deciding whether a segment can match a value at all, so the
+    /// answer has to be exact in both directions: `None` means the string is
+    /// absent from this segment, which lets a caller skip the segment, and
+    /// inventing one would skip a segment that matches.
+    fn id_of(&self, s: &str) -> Option<u32> {
+        self.reverse
+            .get_or_init(|| {
+                (0..self.string_count)
+                    .map(|id| (self.get(id).to_owned(), id))
+                    .collect()
+            })
+            .get(s)
+            .copied()
     }
 
     /// Look up string ID `id`; returns `""` for absent / out-of-range IDs.
@@ -1161,7 +1191,7 @@ impl SegmentReader {
         for pred in &clauses.where_predicates {
             if pred.field == "fql_kind" && pred.op == CompareOp::Eq {
                 if let PredicateValue::String(ref kind_val) = pred.value {
-                    let bm = if let Some(&kind_id) = self.strings.reverse.get(kind_val.as_str()) {
+                    let bm = if let Some(kind_id) = self.strings.id_of(kind_val.as_str()) {
                         self.kind_postings
                             .get(&kind_id)
                             .cloned()
@@ -1199,7 +1229,7 @@ impl SegmentReader {
         let Some(by_value) = self.field_postings.get(field) else {
             return !self.has_extra_col(field);
         };
-        let Some(&value_id) = self.strings.reverse.get(value) else {
+        let Some(value_id) = self.strings.id_of(value) else {
             // The value is not even in this segment's string pool.
             return true;
         };
@@ -1230,7 +1260,7 @@ impl SegmentReader {
             let Some(field_map) = self.field_postings.get(&pred.field) else {
                 continue;
             };
-            let Some(&value_id) = self.strings.reverse.get(val.as_str()) else {
+            let Some(value_id) = self.strings.id_of(val.as_str()) else {
                 // Value not in this segment's pool → no rows can match.
                 return RoaringBitmap::new();
             };
