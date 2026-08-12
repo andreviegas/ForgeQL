@@ -6,8 +6,12 @@
   top-K trim across the whole scan — because the pipeline already sorts by
   `(name, line, path)` when no `ORDER BY` is given, so `LIMIT k` asks for the k
   smallest rows under that ordering rather than for whichever k the scan reached
-  first. Four cases in the golden suite that recorded the old behaviour as a
-  known defect are now enforced instead.
+  first — with one qualification the ordering never settled in the first place:
+  where more rows than the page holds compare *equal* on the ordering field and
+  on all of `name`, `line` and `path`, which two rows can be while differing in
+  `fql_kind`, the bounded partition is unstable and raising the limit may still
+  swap which of them is shown. Four cases in the golden suite that recorded the
+  old behaviour as a known defect are now enforced instead.
 
   Two consequences worth stating. The trim needs `k` no greater than 1000, no
   `OFFSET`, no `GROUP BY` and no `HAVING`; outside that gate an unscoped scan

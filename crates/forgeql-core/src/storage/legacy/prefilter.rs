@@ -471,16 +471,17 @@ pub(super) fn find_symbols_prefilter(
             .all(|p| eval_predicate(&RowRef { row, table: index }, p))
     });
 
-    // Materialize SymbolMatch only for survivors, dedup inline.
-    // When no ORDER BY / GROUP BY / usages-WHERE remains we can stop as soon
-    // as we hit the LIMIT — no point scanning the remaining millions of rows.
+    // Materialize SymbolMatch only for survivors, dedup inline. Every survivor
+    // is built and ranked: the LIMIT bounds the retained window, never the
+    // scan, so `trim_limit` says how many rows a page could hold and not how
+    // many rows are worth reading.
     let has_usages_pred = clauses.where_predicates.iter().any(is_usages_pred);
-    let can_early_exit = !has_usages_pred
+    let can_trim = !has_usages_pred
         && clauses.order_by.is_none()
         && clauses.group_by.is_none()
         && clauses.offset.is_none()
         && crate::filter::no_having_after_paging(clauses);
-    let early_limit = if can_early_exit {
+    let trim_limit = if can_trim {
         clauses.limit.unwrap_or(usize::MAX)
     } else {
         usize::MAX
@@ -498,7 +499,7 @@ pub(super) fn find_symbols_prefilter(
         // The LIMIT bounds delivery, not the search: every remaining row is
         // still tested, deduplicated, counted and — since the clause pipeline
         // sorts by `(name, line, path)` even with no ORDER BY — still built
-        // and ranked. Keeping the first `early_limit` rows instead and letting
+        // and ranked. Keeping the first `trim_limit` rows instead and letting
         // the sort choose from those would hand back the k smallest of a scan
         // prefix rather than of the answer, which is the defect the columnar
         // backend's segment fetch cap carried until it was retired.
@@ -532,7 +533,7 @@ pub(super) fn find_symbols_prefilter(
         // letting scan order decide the page. A row leaves only once enough
         // better ones are in hand, by the same comparator that sorts the
         // survivors below, so the page is the k smallest of everything that
-        // matched. `early_limit` is `usize::MAX` wherever an early exit is
+        // matched. `trim_limit` is `usize::MAX` wherever trimming is
         // unsound, and the saturating multiply leaves this inert there.
         //
         // Pinned by `a_small_limit_returns_the_head_of_the_larger_page` in
@@ -540,9 +541,9 @@ pub(super) fn find_symbols_prefilter(
         // asserts a small LIMIT returns the head of a larger one's page. The
         // golden suites cannot see this — they run on indexed sources, and
         // this backend answers a source with no `.forgeql.yaml`.
-        if results.len() > early_limit.saturating_mul(4) {
+        if results.len() > trim_limit.saturating_mul(4) {
             results =
-                crate::filter::collect_top_k(std::mem::take(&mut results), early_limit, |a, b| {
+                crate::filter::collect_top_k(std::mem::take(&mut results), trim_limit, |a, b| {
                     crate::filter::order_cmp(a, b, clauses)
                 });
         }

@@ -177,6 +177,14 @@ fn number_is_magic_true() {
 /// a scan prefix rather than of the answer — the same defect the columnar
 /// backend's segment fetch cap carried. Raising the limit therefore changed
 /// which rows a smaller one had already shown, which is what this checks.
+///
+/// The prefix property holds up to rows the ordering does not separate: the
+/// bounded partition is unstable, so where more rows than the page holds
+/// compare equal on `name`, `line` and `path`, which of them survives is not
+/// decided by the comparator. This fixture has no such tie across the
+/// boundary — if one is ever introduced, the assertion below is what will say
+/// so, and widening the ordering rather than loosening the assertion is the
+/// fix.
 #[test]
 fn a_small_limit_returns_the_head_of_the_larger_page() {
     let (mut e, sid, _d) = engine_enrichment_only();

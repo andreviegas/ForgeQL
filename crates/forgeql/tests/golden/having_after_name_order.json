@@ -27,7 +27,7 @@
   },
   {
    "name": "an_unordered_page_is_chosen_by_the_predicate_too",
-   "description": "The same page with no ORDER BY at all. Ordering by name is not the only early exit: with no ORDER BY and no GROUP BY the scan stops opening segments once it holds LIMIT + 1 rows, and HAVING is applied to those, so the shape failed the same way for a different reason. Rows come back in the default (name, line, path) order, so the same three qualify. A limit far above the answer truncated it here too -- seven rows came back as two.",
+   "description": "The same page with no ORDER BY at all. Ordering by name was not the only early exit: with no ORDER BY and no GROUP BY the scan used to stop opening segments once it held LIMIT + 1 rows, and HAVING was applied to those, so the shape failed the same way for a different reason. That cap is gone -- a HAVING now disarms the running trim as well, so every matching row is materialised and the predicate sees all of them. Rows come back in the default (name, line, path) order, so the same three qualify. A limit far above the answer truncated it here too -- seven rows came back as two.",
    "use": "forgeql-pub.frozen",
    "fql": "FIND symbols WHERE fql_kind = 'function' HAVING lines > 150 LIMIT 3",
    "assert": {

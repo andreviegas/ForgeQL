@@ -130,16 +130,15 @@ fn fetch_cap_limit_enrichment_only_no_false_zero() {
 /// exercises that end to end through the engine rather than against a storage
 /// struct directly.
 ///
-/// It does **not** cover the in-memory backend's own early exit, however much
-/// its shape suggests otherwise. Removing the `HAVING` condition from
-/// `find_symbols_prefilter::can_early_exit` alone leaves this test green, so
-/// whatever it reaches, it is not that line. The in-memory early exit is
-/// therefore fixed but unpinned: no golden case can reach it either, because
-/// every golden corpus carries a `.forgeql.yaml` and is served by the columnar
-/// backend, whose install drops the in-memory table. Pinning it needs a session
-/// built over a source with no `.forgeql.yaml`, and a fixture whose qualifying
-/// rows fall outside the first `LIMIT` rows in that backend's own scan order —
-/// which is not the alphabetical file order this fixture relies on.
+/// It does **not** cover the in-memory backend's own gate, however much its
+/// shape suggests otherwise. Removing the `HAVING` condition from
+/// `find_symbols_prefilter::can_trim` alone leaves this test green, so whatever
+/// it reaches, it is not that line. No golden case can reach that backend
+/// either, because every golden corpus carries a `.forgeql.yaml` and is served
+/// by the columnar backend, whose install drops the in-memory table. What does
+/// reach it is `a_small_limit_returns_the_head_of_the_larger_page` in
+/// `tests/enrichment_integration.rs`, which runs over a source with no
+/// `.forgeql.yaml` and asserts the page property directly.
 #[test]
 fn having_after_a_limit_still_selects_the_rows_that_qualify() {
     let (mut e, sid, _d) = engine_fetchcap_regression();

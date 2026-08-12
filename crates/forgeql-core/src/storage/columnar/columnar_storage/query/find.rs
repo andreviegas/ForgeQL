@@ -68,7 +68,9 @@ impl ColumnarStorage {
         //             bitmap, name FST, trigram / short-prefix LIKE index) into a
         //             candidate global row-ID bitmap.
         //   Stage 2 — partition by segment, then prune the survivors: IN/EXCLUDE
-        //             path globs, dirty-overlay shadows, and numeric zone maps.
+        //             path globs, dirty-overlay shadows, and numeric zone maps,
+        //             then bound the candidate set itself
+        //             (FORGEQL_FIND_MAX_ROW_IDS) before a row is built.
         //   Stage 3 — materialise the surviving rows per segment: stamp usage
         //             counts, apply residual WHERE, collapse each segment's own
         //             duplicates before anything sheds on rank, enforce the row

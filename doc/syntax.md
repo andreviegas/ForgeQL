@@ -997,7 +997,11 @@ scanned, but a running top-K trim holds the working set to a few thousand rows,
 so the answer is the true top k over the whole corpus. With no `ORDER BY` the
 ordering is the `(name, line, path)` tie-break the pipeline sorts by anyway, so
 a bare `LIMIT k` asks for the k smallest rows under it rather than for the first
-k the scan reaches. That path needs `k` no greater than 1000, no `OFFSET`, no
+k the scan reaches — except among rows that compare equal on the ordering field
+and on all of `name`, `line` and `path`, which two rows can be while differing
+in `fql_kind`: the bounded partition is unstable there, so which of them the
+page holds is not decided by the ordering and can change with `k`.
+That path needs `k` no greater than 1000, no `OFFSET`, no
 `GROUP BY` and no `HAVING`; outside that gate nothing is trimmed, every matching
 row is materialised, and the scan can be refused where the old fetch cap let it
 complete with a wrong answer. A `HAVING` is deliberately excluded — it runs after the
@@ -1042,9 +1046,10 @@ is a handful of rows, but it materialises every matching row to get there.
 The row budget is enforced on the `FIND symbols` scan over the on-disk index and
 nowhere else. `FIND usages` builds its rows in one step on both backends, `FIND
 files` pushes one entry per file with no bound at all, the in-memory backend
-materialises its whole result before any clause applies, and a session's
-uncommitted rows are unioned in after the check — a query answered by one of
-those can still exhaust host memory.
+builds every matching row and — under a bare `LIMIT k` with no `OFFSET`,
+`GROUP BY` or `HAVING` — retains only a bounded window of them, but carries no
+budget refusal, and a session's uncommitted rows are unioned in after the check
+— a query answered by one of those can still exhaust host memory.
 
 ---
 

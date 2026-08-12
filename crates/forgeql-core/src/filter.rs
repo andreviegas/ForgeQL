@@ -786,13 +786,14 @@ fn dot_brace_min_len(pattern: &str) -> Option<usize> {
 
 /// Whether no `HAVING` predicate remains to run after a page has been cut.
 ///
-/// Anything that stops reading at `limit + offset` rows — the name-index
-/// streams, the running top-K trim, and the legacy backend's early exit — is
+/// Anything that bounds a page before the whole answer is in hand — the
+/// name-index streams, which stop reading at `limit + offset` rows, and the
+/// two running top-K trims, which read everything but shed on rank — is
 /// correct only while nothing filters afterwards.
 /// `HAVING` runs in Stage 5, after all of them, so letting one fire alongside a
 /// `HAVING` turns the answer into "the first N by the ordering, minus those that
 /// fail" instead of "the first N by the ordering that pass". The qualifying rows
-/// further along are never fetched, nothing is truncated in the reply, and no
+/// further along are never delivered, nothing is truncated in the reply, and no
 /// error is raised.
 ///
 /// This checks `HAVING` and nothing else, and it is **not** the whole of "no
