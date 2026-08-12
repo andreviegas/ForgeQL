@@ -322,16 +322,12 @@ pub struct SymbolLocation {
 /// rows.len()` is the only thing that says "this is all of it", and a `total`
 /// silently clipped to the page size says that about every first page.
 ///
-/// `total` is the number of rows the clause pipeline was given, not an
-/// independent recount of the corpus, so it is exact only where nothing
-/// stopped reading before the pipeline ran. One shape in the columnar backend
-/// still stops, and there `total` is the size of the page rather than of the
-/// answer: `ORDER BY name` with a small `LIMIT`, which walks `limit + offset`
-/// keys of the name index — and only where no `IN`/`EXCLUDE` narrows it, the
-/// session holds no uncommitted edits, and its streamed page survives the
-/// duplicate collapse, since a stream whose page would be short hands the
-/// query back to the full scan and is counted honestly there. It is pinned as
-/// an `expect_fail` case in the golden suites, and says so where it stops.
+/// Every path reports it honestly, including the name-stream fast paths that
+/// read only `limit + offset` keys of the name index: they take their `total`
+/// from the deduplicated row counts stored per segment at overlay build time
+/// (or a kind bitmap's cardinality), and where those counts cannot speak for
+/// the answer — two segments built from one source path — the stream declines
+/// and the full scan, which collapses before it counts, answers instead.
 #[derive(Debug, Clone, Default)]
 pub struct FindPage {
     /// The rows this query answers with, after `OFFSET` and `LIMIT`.
@@ -429,13 +425,13 @@ pub trait StorageEngine: Send + Sync + 'static {
     /// Returns the page the clauses asked for and, beside it, how many rows
     /// matched before `OFFSET` and `LIMIT` cut that page. `LIMIT` bounds
     /// delivery, never the search, so an implementation must not answer a
-    /// smaller `total` because a smaller page was asked for — with one
-    /// exception in the columnar backend, the one place that stops reading and
-    /// can therefore only report what it read: `ORDER BY name` with a small
-    /// `LIMIT`, no `IN`/`EXCLUDE`, no uncommitted edits, and a page its
-    /// duplicate collapse does not shorten, which the name-index streams
-    /// answer by walking `limit + offset` keys and stopping. It is pinned as
-    /// an `expect_fail` case in the golden suites; it licenses no second.
+    /// smaller `total` because a smaller page was asked for. The name-index
+    /// streams honour this without reading past their page: their `total`
+    /// comes from the per-segment deduplicated row counts stored at overlay
+    /// build time (a kind-filtered stream reads its bitmap cardinality), and
+    /// where those stored counts cannot speak for the answer — two segments
+    /// built from one source path — the streams decline and the pipeline,
+    /// which collapses before it counts, answers instead.
     fn find_symbols(&self, clauses: &Clauses, root: &Path) -> Result<FindPage>;
 
     /// Execute a `FIND usages OF 'name'` query.

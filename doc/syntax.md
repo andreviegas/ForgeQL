@@ -1002,8 +1002,11 @@ the duplicate-collapse key, so two rows the answer tells apart never compare
 equal: the page is fully decided by the ordering, on every run and at every `k`.
 That path needs `k` no greater than 1000, no `OFFSET`, no
 `GROUP BY` and no `HAVING`; outside that gate nothing is trimmed, every matching
-row is materialised, and the scan can be refused where the old fetch cap let it
-complete with a wrong answer. A `HAVING` is deliberately excluded — it runs after the
+row is materialised — unless the ascending name stream claims the clause-free
+shape (no `WHERE`, no `IN`/`EXCLUDE`, no uncommitted edits, unique source paths,
+the asked-for rows within the result budget), which reads `limit + offset` keys
+of the name index instead — and the scan can be refused where the old fetch cap
+let it complete with a wrong answer. A `HAVING` is deliberately excluded — it runs after the
 page is cut, so a query carrying one is refused here rather than answered from a
 page chosen before the predicate ran. The same is true where two segments of the
 index were built from one source path: a segment collapsing its own duplicates
@@ -1026,10 +1029,15 @@ was the returned row count rather than the number that matched, because nothing
 counts what was never read. Four `expect_fail` cases in
 `crates/forgeql/tests/golden/clause_pipeline.json` pinned that, and they are now
 enforced. Both forms report the true size of the answer, the trim counting the
-rows it discards. One exception remains: `ORDER BY name` with a small `LIMIT`,
-no `IN`/`EXCLUDE` and no uncommitted edits streams `k` rows out of the name
-index and reports `k`. `FORGEQL_FIND_MAX_ROWS` overrides the bound in rows and
-`0` disables it.
+rows it discards. The name streams report it too: their `total` is the sum of
+the per-segment deduplicated row counts stored at overlay build time (a
+kind-filtered stream reads its bitmap cardinality), and on an index holding two
+segments built from one source path — where those stored counts would
+double-count — the streams decline and the full scan answers. A bare `LIMIT k`
+with no `ORDER BY` rides the same ascending stream, since the default ordering
+starts with `name`, so the shortest orientation query reads `k` keys of the
+name index rather than every row of the corpus. `FORGEQL_FIND_MAX_ROWS`
+overrides the bound in rows and `0` disables it.
 
 Separately, the candidate row IDs a scan holds before it builds anything have
 their own bound — about 537 million, the same 2 GiB against four bytes a row ID

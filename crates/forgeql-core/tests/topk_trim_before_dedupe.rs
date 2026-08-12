@@ -388,3 +388,50 @@ fn duplicate_paths_disarm_the_shedders_so_the_count_stays_honest() {
          holds rows"
     );
 }
+
+/// The name streams decline the duplicated-path shape before they stream.
+///
+/// Their `total` is summed from the per-segment deduplicated counts stored at
+/// overlay build time, and two segments built from one source path hold rows
+/// that are duplicates of each other, which those per-segment counts cannot
+/// see — the sum here would be double the answer. So the `ORDER BY name`
+/// shapes and the bare `LIMIT` shape both hand this workspace to the
+/// pipeline, whose collapse produces the count directly. Serving the stream
+/// anyway fails this test with a doubled total; reporting the streamed page
+/// as the total fails it with `total == LIMIT`.
+#[test]
+fn duplicate_paths_decline_the_name_streams_so_the_total_stays_honest() {
+    let (_tmp, storage) = storage_with_one_path_in_two_segments(DUPS, DISTINCT);
+
+    let by_name = Clauses {
+        order_by: Some(OrderBy {
+            field: "name".to_owned(),
+            direction: SortDirection::Asc,
+        }),
+        limit: Some(LIMIT),
+        ..Clauses::default()
+    };
+    let page = storage
+        .find_symbols(&by_name, Path::new("."))
+        .expect("find_symbols ORDER BY name");
+    assert_eq!(
+        page.total,
+        DISTINCT + 1,
+        "ORDER BY name on a duplicated path must answer with the collapsed \
+         answer's size — neither the doubled per-segment sum nor the page's"
+    );
+
+    let bare = Clauses {
+        limit: Some(LIMIT),
+        ..Clauses::default()
+    };
+    let bare_page = storage
+        .find_symbols(&bare, Path::new("."))
+        .expect("find_symbols bare LIMIT");
+    assert_eq!(
+        bare_page.total,
+        DISTINCT + 1,
+        "a bare LIMIT declines the same way on this shape"
+    );
+    assert_eq!(bare_page.rows.len(), LIMIT, "the page itself is still full");
+}

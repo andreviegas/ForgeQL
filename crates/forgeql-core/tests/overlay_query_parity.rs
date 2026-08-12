@@ -132,6 +132,154 @@ fn overlay_find_symbols_matches_legacy_merged() {
     }
 }
 
+/// The stored per-segment deduplicated counts sum to the pipeline's `total`,
+/// and the name-stream fast paths answer `total` with exactly that figure.
+///
+/// `Overlay::dedup_total()` — the `dedup_row_count` written per segment at
+/// overlay build time — is what the streams report without reading past their
+/// page, so it must equal the count the full scan arrives at through its
+/// collapse stages. If the two counting routes ever drift (a duplicate the
+/// build-time count sees but the pipeline collapse does not, or the reverse),
+/// this is the test that says so. Reporting the streamed page's size as the
+/// total instead fails the LIMIT arm below with `total == 2`.
+#[test]
+fn stored_dedup_counts_are_the_streams_total() {
+    use forgeql_core::storage::StorageEngine;
+
+    let (tmp, stored, storage) = storage_with_stored_dedup_total();
+
+    let whole = storage
+        .find_symbols(&Clauses::default(), tmp.path())
+        .expect("find_symbols");
+    assert_eq!(
+        whole.total, stored,
+        "the pipeline's collapsed total must equal the stored per-segment counts"
+    );
+    assert_eq!(
+        whole.rows.len(),
+        stored,
+        "no LIMIT and no predicate: the page is the whole answer"
+    );
+
+    let bare = Clauses {
+        limit: Some(2),
+        ..Clauses::default()
+    };
+    let page = storage.find_symbols(&bare, tmp.path()).expect("bare LIMIT");
+    assert_eq!(
+        page.rows.len(),
+        2,
+        "the page holds what the LIMIT asked for"
+    );
+    assert_eq!(
+        page.total, stored,
+        "a bare LIMIT streams two rows and still reports the whole answer's size"
+    );
+    let key = |r: &forgeql_core::result::SymbolMatch| {
+        (r.name.clone(), r.fql_kind.clone(), r.path.clone(), r.line)
+    };
+    assert_eq!(
+        page.rows.iter().map(key).collect::<Vec<_>>(),
+        whole.rows.iter().take(2).map(key).collect::<Vec<_>>(),
+        "the streamed page is the head of the pipeline's answer"
+    );
+}
+
+/// The kind-filtered stream arm reports its whole answer's size the same way,
+/// from its canonical bitmap's cardinality rather than the streamed page.
+#[test]
+fn kind_filtered_stream_total_is_the_kinds_whole_answer() {
+    use forgeql_core::ir::{CompareOp, OrderBy, Predicate, PredicateValue, SortDirection};
+    use forgeql_core::storage::StorageEngine;
+
+    let (tmp, _stored, storage) = storage_with_stored_dedup_total();
+
+    let kind_pred = Predicate {
+        field: "fql_kind".to_owned(),
+        op: CompareOp::Eq,
+        value: PredicateValue::String("function".to_owned()),
+    };
+    let kind_stream = Clauses {
+        where_predicates: vec![kind_pred.clone()],
+        order_by: Some(OrderBy {
+            field: "name".to_owned(),
+            direction: SortDirection::Asc,
+        }),
+        limit: Some(2),
+        ..Clauses::default()
+    };
+    let kind_page = storage
+        .find_symbols(&kind_stream, tmp.path())
+        .expect("kind stream");
+    let kind_whole = storage
+        .find_symbols(
+            &Clauses {
+                where_predicates: vec![kind_pred],
+                ..Clauses::default()
+            },
+            tmp.path(),
+        )
+        .expect("kind pipeline");
+    assert_eq!(
+        kind_page.total, kind_whole.total,
+        "the kind-filtered stream's total is its whole answer's size, not its page's"
+    );
+    assert_eq!(kind_page.rows.len(), 2);
+}
+
+/// Build the two-fixture overlay, open it as a `ColumnarStorage`, and hand
+/// back `Overlay::dedup_total()` — the stored per-segment deduplicated counts
+/// the name streams answer `total` from — beside it.
+fn storage_with_stored_dedup_total() -> (
+    TempDir,
+    usize,
+    forgeql_core::storage::columnar::ColumnarStorage,
+) {
+    use forgeql_core::storage::columnar::ColumnarStorage;
+    use forgeql_core::storage::columnar::overlay::Overlay;
+
+    let table_cpp = index_fixture(&CppLanguage, "canonical.cpp");
+    let table_rust = index_fixture(&RustLanguage, "canonical.rs");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let segments_dir = tmp.path().join("segments");
+    let overlays_dir = tmp.path().join("overlays");
+
+    let cpp_path = fixture_path("canonical.cpp");
+    let rs_path = fixture_path("canonical.rs");
+    let cpp_cid = build_segment(&table_cpp, &cpp_path, &segments_dir);
+    let rs_cid = build_segment(&table_rust, &rs_path, &segments_dir);
+
+    let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(cpp_path, cpp_cid);
+    let _ = segment_map.insert(rs_path, rs_cid);
+
+    let overlay_path = overlays_dir.join("test").join("dedup_totals.bin");
+    OverlayBuilder::new("test", segments_dir.clone(), fixtures_dir(), segment_map)
+        .build_and_persist(&overlay_path)
+        .expect("overlay build");
+
+    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+    let stored = overlay.dedup_total();
+    let segs: Vec<Arc<SegmentReader>> = overlay
+        .segments()
+        .iter()
+        .map(|m| {
+            Arc::new(
+                SegmentReader::open(&seg_path(&segments_dir, &m.source_path, &m.hex_content_id))
+                    .expect("open"),
+            )
+        })
+        .collect();
+    let storage = ColumnarStorage::new_unshared(
+        fixtures_dir(),
+        segs,
+        overlay,
+        Arc::new(LanguageRegistry::new(vec![])),
+    );
+    (tmp, stored, storage)
+}
+
 /// Verify that `WHERE fql_kind = 'function'` on the overlay returns only
 /// rows with that kind — same count as legacy.
 #[test]

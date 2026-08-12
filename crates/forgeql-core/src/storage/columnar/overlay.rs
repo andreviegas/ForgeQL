@@ -283,6 +283,21 @@ impl Overlay {
         self.has_duplicate_paths
     }
 
+    /// The number of distinct `(name, fql_kind, path, line)` rows this overlay
+    /// serves, summed from the per-segment deduplicated counts written at
+    /// build time.
+    ///
+    /// Honest as a query's `total` only while every segment has its own source
+    /// path — two segments built from one path can hold the same key, and this
+    /// sum counts it twice. Callers gate on [`Self::has_duplicate_paths`].
+    #[must_use]
+    pub fn dedup_total(&self) -> usize {
+        self.segments
+            .iter()
+            .map(|m| m.dedup_row_count as usize)
+            .sum()
+    }
+
     /// Ordered list of segments in this overlay.
     #[must_use]
     pub fn segments(&self) -> &[SegmentMeta] {

@@ -1653,10 +1653,9 @@ pub(super) fn split_qualified_name(name: &str) -> (&str, Option<&str>) {
 ///
 /// HAVING is excluded because it runs in Stage 5, after the stream has already
 /// stopped at `limit + offset` rows.  The Stage 4 dedupe runs after the stream
-/// too and is NOT excluded, so this path can still return fewer than LIMIT rows
-/// where enough of the streamed rows agree on `(name, fql_kind, path, line)` —
-/// an open defect it shares with the running top-K trim, reproduced by
-/// `crates/forgeql-core/tests/topk_trim_before_dedupe.rs`.
+/// too and is NOT excluded: the caller collapses the streamed page, and a page
+/// that stopped at `need` and then collapsed short is declined whole — handed
+/// back to the pipeline rather than served missing rows the stream never read.
 pub(super) fn order_by_name_fast_path(clauses: &Clauses) -> bool {
     matches!(
         &clauses.order_by,
@@ -1674,6 +1673,28 @@ pub(super) fn order_by_name_desc_fast_path(clauses: &Clauses) -> bool {
         &clauses.order_by,
         Some(OrderBy { field, direction: SortDirection::Desc }) if field == "name"
     ) && clauses.limit.is_some()
+        && clauses.group_by.is_none()
+        && clauses.where_predicates.is_empty()
+        && clauses.in_glob.is_none()
+        && clauses.exclude_globs.is_empty()
+        && crate::filter::no_having_after_paging(clauses)
+}
+
+/// Return `true` when a bare `LIMIT N` — no ORDER BY written at all — may be
+/// served by the ascending name stream.
+///
+/// With no ORDER BY the pipeline still sorts by the `(name, line, path,
+/// fql_kind)` tie-break before it cuts the page, and that ordering starts
+/// with `name` ascending — the order the name FST streams in. The stream
+/// completes each name group before it checks its budget and the caller sorts
+/// the streamed superset with the same comparator, so the page it cuts is the
+/// pipeline's page. The clause conditions mirror
+/// [`order_by_name_fast_path`]; the caller additionally requires unique
+/// source paths, which is what makes the stored per-segment deduplicated
+/// counts sum to this query's honest `total`.
+pub(super) const fn bare_limit_name_fast_path(clauses: &Clauses) -> bool {
+    clauses.order_by.is_none()
+        && clauses.limit.is_some()
         && clauses.group_by.is_none()
         && clauses.where_predicates.is_empty()
         && clauses.in_glob.is_none()

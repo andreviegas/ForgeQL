@@ -11,9 +11,10 @@ use crate::ir::{Clauses, CompareOp, GroupBy, PredicateValue};
 use crate::result::SymbolMatch;
 use crate::storage::FindPage;
 use crate::storage::columnar::columnar_storage::fast_paths::{
-    glob_to_path_prefix, group_by_file_fast_path_eligible, group_by_kind_fast_path_eligible,
-    has_any_indexed_predicate, order_by_name_desc_fast_path, order_by_name_fast_path,
-    order_by_name_kind_desc_fast_path, order_by_name_kind_fast_path, passes_resolve_glob,
+    bare_limit_name_fast_path, find_max_rows, glob_to_path_prefix,
+    group_by_file_fast_path_eligible, group_by_kind_fast_path_eligible, has_any_indexed_predicate,
+    order_by_name_desc_fast_path, order_by_name_fast_path, order_by_name_kind_desc_fast_path,
+    order_by_name_kind_fast_path, passes_resolve_glob,
 };
 use crate::storage::columnar::columnar_storage::{ColumnarStorage, SubstringIndex};
 use crate::storage::columnar::segment_builder::ZONEMAP_NUMERIC_FIELDS;
@@ -82,9 +83,11 @@ impl ColumnarStorage {
         //             source path, and the dirty overlay.
         //   Stage 5 — apply residual WHERE, ORDER BY, LIMIT, OFFSET, and count
         //             the answer before the last two cut a page out of it.
-        // GROUP BY and ORDER BY name fast-paths short-circuit the pipeline. The
-        // count-based GROUP BY paths are only valid when source paths are unique;
-        // duplicates overcount, so fall through to the deduplicating pipeline.
+        // GROUP BY and name-stream fast-paths (ORDER BY name, and a bare LIMIT
+        // whose default ordering starts with name) short-circuit the pipeline.
+        // Every count-serving fast path is only valid when source paths are
+        // unique; duplicates overcount, so fall through to the deduplicating
+        // pipeline.
         crate::filter::reject_refused_fields::<SymbolMatch>("FIND symbols", clauses)?;
         crate::filter::reject_depth("FIND symbols", clauses)?;
         self.reject_unknown_where_fields(clauses)?;
@@ -765,13 +768,17 @@ impl ColumnarStorage {
 }
 
 impl ColumnarStorage {
-    /// The four `ORDER BY name [DESC] [WHERE fql_kind=...] LIMIT N` fast-paths.
+    /// The name-stream fast-paths: `ORDER BY name [DESC] [WHERE fql_kind=...]
+    /// LIMIT N`, and a bare `LIMIT N` with no ORDER BY at all, whose default
+    /// ordering starts with `name` ascending — the order the stream serves.
     ///
     /// Each streams the first `limit + offset` rows directly from the name FST
     /// in lexicographic order, materialising only those rows. All are gated on
-    /// an empty dirty overlay because dirty rows are not path-sorted and could
-    /// carry names that precede committed rows already streamed. Returns `None`
-    /// when no name-ordered fast-path applies, so the caller runs the pipeline.
+    /// an empty dirty overlay, because dirty rows are not path-sorted and could
+    /// carry names that precede committed rows already streamed, and on unique
+    /// source paths, because the honest `total` below sums stored per-segment
+    /// counts that a duplicated path would double-count. Returns `None` when no
+    /// name-ordered fast-path applies, so the caller runs the pipeline.
     ///
     /// **A page these return is whole or they decline it.** Duplicates are
     /// collapsed after the stream, so a window holding two rows that are one
@@ -782,35 +789,66 @@ impl ColumnarStorage {
     /// fewer than `need` ran out of index rather than stopping, and its answer
     /// is whole however many of its rows collapsed.
     ///
-    /// **The page is right and the `total` beside it is not.** A stream stops
-    /// at `limit + offset` rows by construction, so the count handed back is
-    /// the size of the page and never the number of rows that matched —
-    /// `FIND symbols ORDER BY name ASC LIMIT 5` answers `total: 5` on an index
-    /// of any size. It is now the only place in the backend that does, the
-    /// segment fetch cap that used to share the defect having been retired in
-    /// favour of the running trim; this one survives because counting the
-    /// matches here means walking the whole FST. Pinned as an `expect_fail`
-    /// case in `crates/forgeql/tests/golden/total_counts_the_answer.json`.
+    /// **The `total` beside the page is the answer's size, not the page's.**
+    /// The stream reads `need` rows and stops, but the index already knows how
+    /// many rows match: each segment's deduplicated row count is written at
+    /// overlay build time, and the merged kind postings hold only canonical
+    /// rows — so the whole-corpus total is the sum of the stored counts, and a
+    /// kind-filtered total is its bitmap's cardinality, neither of which walks
+    /// the FST. These paths were the last place a query's `total` was the size
+    /// of its page; the golden case that pinned that as an expected failure is
+    /// now enforced.
     fn try_order_by_name_fast_paths(&self, clauses: &Clauses) -> Option<FindPage> {
         if !self.dirty.is_empty() {
             return None;
         }
-        let need = fast_path_need(clauses);
-        let mut results = if order_by_name_fast_path(clauses) {
-            self.overlay().stream_names_asc(need, self.segments())
-        } else if order_by_name_desc_fast_path(clauses) {
-            self.overlay().stream_names_desc(need, self.segments())
-        } else if let Some(kind) = order_by_name_kind_fast_path(clauses) {
-            let kind_bm = self.overlay().prefilter_kind(kind)?;
-            self.overlay()
-                .stream_names_asc_kind_filtered(need, &kind_bm, self.segments())
-        } else if let Some(kind) = order_by_name_kind_desc_fast_path(clauses) {
-            let kind_bm = self.overlay().prefilter_kind(kind)?;
-            self.overlay()
-                .stream_names_desc_kind_filtered(need, &kind_bm, self.segments())
-        } else {
+        // Two segments built from one source path can hold the same
+        // (name, fql_kind, path, line) row, and the stored per-segment
+        // deduplicated counts would count it twice. The honest total is not
+        // derivable here, so every stream arm declines and the pipeline —
+        // which collapses before it counts — answers instead. Same gate as
+        // the count-based GROUP BY fast paths, for the same reason.
+        if self.overlay().has_duplicate_paths() {
             return None;
-        };
+        }
+        let need = fast_path_need(clauses);
+        // A stream materialises `need` rows bounded by nothing but the LIMIT
+        // the caller wrote, so an oversized ask must not ride past the row
+        // budget the pipeline enforces: decline, and let the scan either
+        // complete under the budget or be refused by the error that names it.
+        if need > find_max_rows() {
+            return None;
+        }
+        let (mut results, matched) =
+            if bare_limit_name_fast_path(clauses) || order_by_name_fast_path(clauses) {
+                (
+                    self.overlay().stream_names_asc(need, self.segments()),
+                    self.overlay().dedup_total(),
+                )
+            } else if order_by_name_desc_fast_path(clauses) {
+                (
+                    self.overlay().stream_names_desc(need, self.segments()),
+                    self.overlay().dedup_total(),
+                )
+            } else if let Some(kind) = order_by_name_kind_fast_path(clauses) {
+                let kind_bm = self.overlay().prefilter_kind(kind)?;
+                let matched = usize::try_from(kind_bm.len()).unwrap_or(usize::MAX);
+                (
+                    self.overlay()
+                        .stream_names_asc_kind_filtered(need, &kind_bm, self.segments()),
+                    matched,
+                )
+            } else if let Some(kind) = order_by_name_kind_desc_fast_path(clauses) {
+                let kind_bm = self.overlay().prefilter_kind(kind)?;
+                let matched = usize::try_from(kind_bm.len()).unwrap_or(usize::MAX);
+                (
+                    self.overlay()
+                        .stream_names_desc_kind_filtered(need, &kind_bm, self.segments()),
+                    matched,
+                )
+            } else {
+                return None;
+            };
         // Collapse before deciding whether the page is whole. A stream stops
         // after `need` rows, so if collapsing those leaves fewer, the rows the
         // page is now short of are still unread — and this path cannot ask for
@@ -823,10 +861,11 @@ impl ColumnarStorage {
         if results.len() < streamed && streamed >= need {
             return None;
         }
-        // A count of the streamed rows, not of the matching ones — see the
-        // note above this function.
-        let total = apply_clauses_counted(&mut results, clauses);
-        Some(FindPage::of(results, total))
+        // The page is cut from the streamed superset; the total is the stored
+        // deduplicated count of everything that matched, which the stream
+        // never had to read — see the note above this function.
+        crate::filter::apply_clauses(&mut results, clauses);
+        Some(FindPage::of(results, matched))
     }
 
     /// Build the initial `segment index -> local row bitmap` candidate map.

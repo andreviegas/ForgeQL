@@ -1,6 +1,6 @@
 {
  "suite": "total_counts_the_answer",
- "description": "`total` is how many rows matched, not how many the page holds. LIMIT bounds delivery; it is the only thing an agent has to tell a first page from a whole answer, and a total clipped to the page size says: this is all of it, about every first page. These cases pin the count against a ground truth taken at a limit high enough that nothing pages at all. Two mechanisms had to change for that and each has its own case: the clause pipeline now reports its size before OFFSET and LIMIT cut it, and the running top-K trim counts the rows it discards on rank. The fourth case is the one place neither reaches -- the name-index streams, which the row-ID pipeline does not serve. The segment fetch cap that used to be the other such place is gone: a bare LIMIT is now trimmed by the same running top-K as an ordered one, because the pipeline sorts by (name, line, path, fql_kind) even with no ORDER BY, and the four cases in clause_pipeline.json that pinned the cap are enforced rather than expected to fail. Both mechanisms were checked by mutation rather than assumed: with the trim's count disabled the same query reads '1 of 2 shown' through the built binary on the sibling workspace and '1 of 8 shown' with it on, against an unlimited answer of 8. What no case here can see is whether the collapse that now runs before the trim is reached at all, because it is defined not to move answers; that was measured separately with a panic in place -- one ordinary query collapsed 8 of 108 row ids inside a single segment, before any of them was built -- and it is pinned by the unit tests in fast_paths/tests.rs, which do go red.",
+ "description": "`total` is how many rows matched, not how many the page holds. LIMIT bounds delivery; it is the only thing an agent has to tell a first page from a whole answer, and a total clipped to the page size says: this is all of it, about every first page. These cases pin the count against a ground truth taken at a limit high enough that nothing pages at all. Two mechanisms had to change for that and each has its own case: the clause pipeline now reports its size before OFFSET and LIMIT cut it, and the running top-K trim counts the rows it discards on rank. The name-index streams are the third mechanism: they answer from the per-segment deduplicated row counts stored at overlay build time, and their cases ask a five-row page to carry the size of the whole corpus. The segment fetch cap that used to be the other such place is gone: a bare LIMIT is now trimmed by the same running top-K as an ordered one, because the pipeline sorts by (name, line, path, fql_kind) even with no ORDER BY, and the four cases in clause_pipeline.json that pinned the cap are enforced rather than expected to fail. Both mechanisms were checked by mutation rather than assumed: with the trim's count disabled the same query reads '1 of 2 shown' through the built binary on the sibling workspace and '1 of 8 shown' with it on, against an unlimited answer of 8. What no case here can see is whether the collapse that now runs before the trim is reached at all, because it is defined not to move answers; that was measured separately with a panic in place -- one ordinary query collapsed 8 of 108 row ids inside a single segment, before any of them was built -- and it is pinned by the unit tests in fast_paths/tests.rs, which do go red.",
  "cases": [
   {
    "name": "the_answer_this_suite_measures_against",
@@ -33,12 +33,30 @@
    }
   },
   {
-   "name": "a_name_ordered_stream_reports_its_own_page_as_the_total",
-   "description": "The one path where the count is still the page. `ORDER BY name [DESC]`, with at most an `fql_kind` equality beside it, is answered by streaming the name FST in order and stopping after LIMIT + OFFSET rows. Nothing counts what the stream did not walk, and counting it means walking the whole FST -- which is the walk the stream exists to avoid. So this query answers `total: 5` on a corpus of 59636 rows, and would answer 5 on one of any size. It is the last surviving member of the family: an early exit that assumes LIMIT bounds the answer. The segment fetch cap was the other, and retiring it left this one alone.",
+   "name": "a_name_ordered_stream_counts_the_answer_it_streams_from",
+   "description": "The streams answer the count without the walk. `ORDER BY name [DESC]`, with at most an `fql_kind` equality beside it, streams the name FST in order and stops after LIMIT + OFFSET rows -- but every segment's deduplicated row count was stored when the overlay was built, and a kind-filtered stream's bitmap knows its own cardinality, so the total beside the streamed page is the corpus's answer, not the page. This shape used to be the last surviving member of the family this suite exists to kill -- an early exit that assumes LIMIT bounds the answer, reporting total: 5 on this corpus of 59636 rows -- and was pinned here as an expected failure until the stored counts closed it. Where those counts cannot speak for the answer, two segments built from one source path, the streams decline and the pipeline answers; the unit suites pin that decline.",
    "use": "forgeql-pub.frozen",
-   "enforcement": "expect_fail",
-   "expect_fail_reason": "the name-ordered fast paths (columnar_storage/query/find.rs try_order_by_name_fast_paths) stream LIMIT + OFFSET rows out of the name FST and stop, so the count they hand back is the size of the page they streamed and never the number of rows that matched",
    "fql": "FIND symbols ORDER BY name ASC LIMIT 5",
+   "assert": {
+    "row_count": 5,
+    "total": 59636
+   }
+  },
+  {
+   "name": "a_bare_limit_answers_from_the_stream_with_the_same_total",
+   "description": "The shortest query an agent can type, served by the same ascending stream: with no ORDER BY written the pipeline's default ordering starts with name, so the page is the ORDER BY name page and the total is the same stored corpus count. Before the stream claimed this shape it materialised every row in the corpus to deliver five of them.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols LIMIT 5",
+   "assert": {
+    "row_count": 5,
+    "total": 59636
+   }
+  },
+  {
+   "name": "the_pipeline_counts_the_same_corpus",
+   "description": "Ground truth for the two stream cases above, through a route no stream serves: a WHERE clause declines the name streams, and line >= 1 matches every row -- lines are 1-based -- so this is the full scan's collapsed count of the same corpus. If the stored per-segment counts and the pipeline's collapse ever disagree, the three cases split here.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE line >= 1 LIMIT 5",
    "assert": {
     "row_count": 5,
     "total": 59636

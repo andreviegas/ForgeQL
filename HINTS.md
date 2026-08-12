@@ -64,3 +64,13 @@ Short, durable facts discovered while working in this codebase.
 - `OverlayBuilder::step1_open_segments` refuses a missing/unreadable segment (capped listing, provider dir named once); a COMMIT over a vanished base segment fails and retries cleanly after restore
 - `find_usages`' literal tier reads files via `root.join(path)` — tests must pass the storage's real worktree root, not "."
 - The test gate auto-fmts the worktree before checking: re-FIND handles after a gate run, write rustfmt-canonical WITH payloads
+- `SegmentMeta.dedup_row_count` (overlay/format.rs, FQOV v5) stores each segment's
+  exact distinct `(name_id, fql_kind_id, line)` count at overlay build;
+  `Overlay::dedup_total()` sums it, and the merged kind postings are canonical-only,
+  so `prefilter_kind(K).len()` is the deduped per-kind count — honest stream totals
+  come from storage, never an FST walk.
+- The name streams (`try_order_by_name_fast_paths`, query/find.rs) serve
+  `ORDER BY name [DESC] [WHERE fql_kind =] LIMIT` and the bare `LIMIT`; they decline
+  on a non-empty dirty overlay, duplicated source paths, and `need > find_max_rows()`.
+- `order_cmp` tie-break is `(name, line, path, fql_kind)` — total on distinct rows;
+  the legacy dedupe key is the matching `(name_id, path_id, fql_kind_id, line)`.

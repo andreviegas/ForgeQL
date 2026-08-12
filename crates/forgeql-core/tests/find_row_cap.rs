@@ -24,7 +24,7 @@ use std::sync::Arc;
 use forgeql_core::ast::enrich::default_enrichers;
 use forgeql_core::ast::index::{IndexContext, SymbolTable, index_file};
 use forgeql_core::ast::lang::{LanguageRegistry, LanguageSupport};
-use forgeql_core::ir::Clauses;
+use forgeql_core::ir::{Clauses, OrderBy, SortDirection};
 use forgeql_core::storage::StorageEngine;
 use forgeql_core::storage::columnar::overlay::Overlay;
 use forgeql_core::storage::columnar::{
@@ -180,6 +180,71 @@ fn row_budget_refuses_oversized_scans_and_zero_disables() {
     let run = |cap: Option<&str>| {
         let mut cmd = std::process::Command::new(&exe);
         let _ = cmd.args(["--exact", "row_budget_probe", "--ignored"]);
+        match cap {
+            Some(v) => {
+                let _ = cmd.env("FORGEQL_FIND_MAX_ROWS", v);
+            }
+            None => {
+                let _ = cmd.env_remove("FORGEQL_FIND_MAX_ROWS");
+            }
+        }
+        let out = cmd.output().expect("spawn probe");
+        assert!(
+            out.status.success(),
+            "probe with cap {cap:?} failed:\n{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    run(Some("1"));
+    run(Some("0"));
+    run(None);
+}
+
+/// Probe run inside the child process for the name-stream ask: the stream
+/// materialises `limit + offset` rows bounded by nothing but the LIMIT the
+/// caller wrote, so an ask past the row budget must decline to the pipeline,
+/// which refuses with the error that names the knob. Removing the stream's
+/// budget decline serves the page from the stream and turns the refusal
+/// asserted here into an answer.
+#[test]
+#[ignore = "driver-invoked probe; behaviour depends on FORGEQL_FIND_MAX_ROWS"]
+fn name_stream_budget_probe() {
+    let (_tmp, storage) = single_segment_cpp_storage();
+    let clauses = Clauses {
+        order_by: Some(OrderBy {
+            field: "name".to_owned(),
+            direction: SortDirection::Asc,
+        }),
+        limit: Some(5),
+        ..Clauses::default()
+    };
+    let result = storage.find_symbols(&clauses, std::path::Path::new("."));
+
+    match std::env::var("FORGEQL_FIND_MAX_ROWS").as_deref() {
+        Ok("1") => {
+            let err = result.expect_err("a cap of 1 must refuse a five-row stream ask");
+            assert!(
+                err.to_string().contains("FORGEQL_FIND_MAX_ROWS"),
+                "error should name the knob: {err}"
+            );
+        }
+        Ok("0") | Err(_) => {
+            let page = result.expect("stream must serve without an effective cap");
+            assert!(page.len() > 1, "fixture should stream multiple rows");
+        }
+        Ok(other) => panic!("unexpected probe configuration: {other}"),
+    }
+}
+
+/// Run the stream probe per knob state: `1` declines the stream and the
+/// pipeline refuses naming the knob; `0` and unset leave the stream serving.
+#[test]
+fn a_name_stream_ask_counts_against_the_row_budget() {
+    let exe = std::env::current_exe().expect("current_exe");
+    let run = |cap: Option<&str>| {
+        let mut cmd = std::process::Command::new(&exe);
+        let _ = cmd.args(["--exact", "name_stream_budget_probe", "--ignored"]);
         match cap {
             Some(v) => {
                 let _ = cmd.env("FORGEQL_FIND_MAX_ROWS", v);
