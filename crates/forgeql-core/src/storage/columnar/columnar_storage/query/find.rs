@@ -754,8 +754,9 @@ impl ColumnarStorage {
     /// at `limit + offset` rows by construction, so the count handed back is
     /// the size of the page and never the number of rows that matched —
     /// `FIND symbols ORDER BY name ASC LIMIT 5` answers `total: 5` on an index
-    /// of any size. That is the same defect the segment fetch cap carries, in
-    /// the one place the row-ID pipeline does not reach, because counting the
+    /// of any size. It is now the only place in the backend that does, the
+    /// segment fetch cap that used to share the defect having been retired in
+    /// favour of the running trim; this one survives because counting the
     /// matches here means walking the whole FST. Pinned as an `expect_fail`
     /// case in `crates/forgeql/tests/golden/total_counts_the_answer.json`.
     fn try_order_by_name_fast_paths(&self, clauses: &Clauses) -> Option<FindPage> {

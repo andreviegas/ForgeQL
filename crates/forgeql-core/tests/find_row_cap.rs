@@ -1,7 +1,11 @@
-//! `FORGEQL_FIND_MAX_ROWS` — the hard row budget for FIND materialisation.
+//! `FORGEQL_FIND_MAX_ROWS` and `FORGEQL_FIND_MAX_ROW_IDS` — the two hard
+//! budgets a `FIND` is held to: the rows it materialises, and the candidate row
+//! IDs it holds to materialise them from. They are separate numbers because
+//! they are separate costs — about 1,600 bytes against four — and a query can
+//! be inside one and past the other.
 //!
-//! The budget is read from the process environment, and the workspace denies
-//! `unsafe` (so no `std::env::set_var`).  The driver test therefore re-invokes
+//! Both are read from the process environment, and the workspace denies
+//! `unsafe` (so no `std::env::set_var`).  Each driver test therefore re-invokes
 //! this very test binary as a child process with the variable set; the
 //! `#[ignore]`d probe test runs inside the child and asserts the behaviour
 //! that matches the inherited environment.
@@ -182,6 +186,69 @@ fn row_budget_refuses_oversized_scans_and_zero_disables() {
             }
             None => {
                 let _ = cmd.env_remove("FORGEQL_FIND_MAX_ROWS");
+            }
+        }
+        let out = cmd.output().expect("spawn probe");
+        assert!(
+            out.status.success(),
+            "probe with cap {cap:?} failed:\n{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    run(Some("1"));
+    run(Some("0"));
+    run(None);
+}
+
+/// Probe run inside the child process for the row-ID budget: asserts the
+/// behaviour matching the `FORGEQL_FIND_MAX_ROW_IDS` value inherited from the
+/// driver's `Command::env`.
+#[test]
+#[ignore = "driver-invoked probe; behaviour depends on FORGEQL_FIND_MAX_ROW_IDS"]
+fn row_id_budget_probe() {
+    let (_tmp, storage) = single_segment_cpp_storage();
+    let clauses = Clauses::default();
+    let result = storage.find_symbols(&clauses, std::path::Path::new("."));
+
+    match std::env::var("FORGEQL_FIND_MAX_ROW_IDS").as_deref() {
+        Ok("1") => {
+            let err = result.expect_err("a row-ID cap of 1 must refuse a whole-index scan");
+            assert!(
+                err.to_string().contains("FORGEQL_FIND_MAX_ROW_IDS"),
+                "error should name the knob: {err}"
+            );
+            assert!(
+                !err.to_string().contains("FORGEQL_FIND_MAX_ROWS "),
+                "the row-ID refusal must not be the row refusal: {err}"
+            );
+        }
+        Ok("0") | Err(_) => {
+            let rows = result.expect("scan must pass without an effective cap");
+            assert!(rows.len() > 1, "fixture should materialise multiple rows");
+        }
+        Ok(other) => panic!("unexpected probe configuration: {other}"),
+    }
+}
+
+/// The candidate row IDs a scan holds are bounded separately from the rows it
+/// builds from them, because they cost four bytes against about 1,600. The two
+/// knobs are independent: this drives the row-ID one while the row one stays at
+/// its ample default, so a refusal here can only have come from the row-ID
+/// bound.
+#[test]
+fn row_id_budget_refuses_oversized_candidate_sets_and_zero_disables() {
+    let exe = std::env::current_exe().expect("current_exe");
+    let run = |cap: Option<&str>| {
+        let mut cmd = std::process::Command::new(&exe);
+        let _ = cmd.args(["--exact", "row_id_budget_probe", "--ignored"]);
+        let _ = cmd.env_remove("FORGEQL_FIND_MAX_ROWS");
+        match cap {
+            Some(v) => {
+                let _ = cmd.env("FORGEQL_FIND_MAX_ROW_IDS", v);
+            }
+            None => {
+                let _ = cmd.env_remove("FORGEQL_FIND_MAX_ROW_IDS");
             }
         }
         let out = cmd.output().expect("spawn probe");

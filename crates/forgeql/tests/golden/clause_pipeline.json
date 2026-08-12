@@ -1,6 +1,6 @@
 {
  "suite": "clause_pipeline",
- "description": "Clause-pipeline semantics on the frozen Zephyr corpus: how WHERE, IN, GROUP BY, HAVING, ORDER BY, OFFSET and LIMIT compose, and what SHOW LINES does with a range and a text filter. These are DSL mechanics rather than enrichment values, so each case stacks the clauses it is about instead of testing one at a time.",
+ "description": "Clause-pipeline semantics on the frozen Zephyr corpus: how WHERE, IN, GROUP BY, HAVING, ORDER BY, OFFSET and LIMIT compose, and what SHOW LINES does with a range and a text filter. These are DSL mechanics rather than enrichment values, so each case stacks the clauses it is about instead of testing one at a time. Four of them -- limit_does_not_falsify_the_total, limit_returns_a_prefix_of_the_unlimited_answer, offset_below_the_limit_still_fills_the_page and offset_beyond_the_limit_still_returns_a_full_page -- were known failures under the segment fetch cap and are enforced now that it is retired. Measured, with the edit that produced the numbers: put a scan-truncating early exit back at the top of the materialisation loop (break once results.len() >= limit + 1 with no ORDER BY or GROUP BY) and five cases fail -- those four, with total 4 against an answer of 1848, pages of 3 and 0 rows where 5 are asked for, and a different set of three rows entirely; plus having_after_name_order::an_unordered_page_is_chosen_by_the_predicate_too, which comes back empty. Nothing else in the suite notices, which is what makes those five the pins.",
  "cases": [
   {
    "name": "where_clauses_stack_and_and_is_a_synonym",
@@ -214,10 +214,8 @@
   },
   {
    "name": "limit_does_not_falsify_the_total",
-   "description": "LIMIT bounds delivery, never the search. `total` is the count of everything that matched, so an agent can tell a full answer from a first page. Under the fetch cap `total` collapses to the page size, which reads as 'this is all of it'.",
+   "description": "LIMIT bounds delivery, never the search. `total` is the count of everything that matched, so an agent can tell a full answer from a first page. Under the fetch cap this replaced, `total` collapsed to the page size, which reads as: this is all of it.",
    "use": "zephyr-andre.frozen",
-   "enforcement": "expect_fail",
-   "expect_fail_reason": "the segment fetch cap (fast_paths.rs fetch_cap_for) stops opening segments at limit+1 whenever there is no ORDER BY/GROUP BY, so LIMIT changes the answer rather than the page: it truncates the reported total, skips past the fetched rows for OFFSET, and varies which rows are fetched at all",
    "fql": "FIND symbols WHERE fql_kind = 'if' WHERE line >= 100 WHERE line <= 105 LIMIT 3",
    "assert": {
     "row_count": 3,
@@ -226,10 +224,8 @@
   },
   {
    "name": "offset_beyond_the_limit_still_returns_a_full_page",
-   "description": "Paging past the first page. 1848 rows match, so OFFSET 100 LIMIT 5 is an ordinary page in the middle and must hold 5 rows. Deliberately without ORDER BY: ORDER BY disables the fetch cap, which is why every pre-existing OFFSET case in this suite misses the defect.",
+   "description": "Paging past the first page. 1848 rows match, so OFFSET 100 LIMIT 5 is an ordinary page in the middle and must hold 5 rows. Deliberately without ORDER BY: an ORDER BY sends the query down a different route, which is why every pre-existing OFFSET case in this suite missed the defect.",
    "use": "zephyr-andre.frozen",
-   "enforcement": "expect_fail",
-   "expect_fail_reason": "the segment fetch cap (fast_paths.rs fetch_cap_for) stops opening segments at limit+1 whenever there is no ORDER BY/GROUP BY, so LIMIT changes the answer rather than the page: it truncates the reported total, skips past the fetched rows for OFFSET, and varies which rows are fetched at all",
    "fql": "FIND symbols WHERE fql_kind = 'if' WHERE line >= 100 WHERE line <= 105 LIMIT 5 OFFSET 100",
    "assert": {
     "row_count": 5
@@ -237,10 +233,8 @@
   },
   {
    "name": "offset_below_the_limit_still_fills_the_page",
-   "description": "The same defect one step smaller: the cap fetches limit+1 rows, so an OFFSET inside that window short-changes the page instead of emptying it. OFFSET 3 LIMIT 5 must still return 5 rows, not 3.",
+   "description": "The same defect one step smaller: the cap fetched limit+1 rows, so an OFFSET inside that window short-changed the page instead of emptying it. OFFSET 3 LIMIT 5 must return 5 rows, not 3.",
    "use": "zephyr-andre.frozen",
-   "enforcement": "expect_fail",
-   "expect_fail_reason": "the segment fetch cap (fast_paths.rs fetch_cap_for) stops opening segments at limit+1 whenever there is no ORDER BY/GROUP BY, so LIMIT changes the answer rather than the page: it truncates the reported total, skips past the fetched rows for OFFSET, and varies which rows are fetched at all",
    "fql": "FIND symbols WHERE fql_kind = 'if' WHERE line >= 100 WHERE line <= 105 LIMIT 5 OFFSET 3",
    "assert": {
     "row_count": 5
@@ -248,10 +242,8 @@
   },
   {
    "name": "limit_returns_a_prefix_of_the_unlimited_answer",
-   "description": "A small LIMIT must return the FIRST rows of the answer, not a different sample of it. These three are the leading rows of the same query run unbounded (total 1848). Under the cap a small LIMIT opens fewer segments and returns rows that vanish when the LIMIT is raised, so sampling then widening loses what it already showed.",
+   "description": "A small LIMIT must return the FIRST rows of the answer, not a different sample of it. These three are the leading rows of the same query run unbounded (total 1848). Under the cap a small LIMIT opened fewer segments and returned rows that vanished when the LIMIT was raised, so sampling then widening lost what it had already shown.",
    "use": "zephyr-andre.frozen",
-   "enforcement": "expect_fail",
-   "expect_fail_reason": "the segment fetch cap (fast_paths.rs fetch_cap_for) stops opening segments at limit+1 whenever there is no ORDER BY/GROUP BY, so LIMIT changes the answer rather than the page: it truncates the reported total, skips past the fetched rows for OFFSET, and varies which rows are fetched at all",
    "fql": "FIND symbols WHERE fql_kind = 'if' WHERE line >= 100 WHERE line <= 105 LIMIT 3",
    "assert": {
     "row_count": 3,

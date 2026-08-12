@@ -991,43 +991,55 @@ being materialised when it trips, since the bound is tested once per segment
 rather than once per row. Past that the query is **refused, never truncated**: a
 partial answer that does not announce itself is the silent false negative the
 completeness guarantee exists to prevent, so the error names the remedy instead
-— narrow the scan with `IN 'path/**'` or a more selective `WHERE`. An
-`ORDER BY <field> LIMIT k` also completes: every segment is still scanned, but a
-running top-K trim holds the working set to a few thousand rows, so the answer is
-the true top K over the whole corpus. That path needs `k` no greater than 1000,
-no `OFFSET`, no `GROUP BY` and no `HAVING`; outside that gate nothing is trimmed
-and the query is refused as before. A `HAVING` is deliberately excluded — it runs
-after the page is cut, so a query carrying one is refused here rather than
-answered from a page chosen before the predicate ran.
+— narrow the scan with `IN 'path/**'` or a more selective `WHERE`.
+`LIMIT k` also completes, with or without an `ORDER BY`: every segment is still
+scanned, but a running top-K trim holds the working set to a few thousand rows,
+so the answer is the true top k over the whole corpus. With no `ORDER BY` the
+ordering is the `(name, line, path)` tie-break the pipeline sorts by anyway, so
+a bare `LIMIT k` asks for the k smallest rows under it rather than for the first
+k the scan reaches. That path needs `k` no greater than 1000, no `OFFSET`, no
+`GROUP BY` and no `HAVING`; outside that gate nothing is trimmed, every matching
+row is materialised, and the scan can be refused where the old fetch cap let it
+complete with a wrong answer. A `HAVING` is deliberately excluded — it runs after the
+page is cut, so a query carrying one is refused here rather than answered from a
+page chosen before the predicate ran. The same is true where two segments of the
+index were built from one source path: a segment collapsing its own duplicates
+is then not the whole collapse, nothing is trimmed, and the scan is refused.
 
-One caveat, and it is now confined to the two places that still stop reading
-early: duplicate rows are collapsed *after* the name-index streams and after the
-segment fetch cap, so where enough rows agreeing on `name`, `fql_kind`, path and
-line sit inside the window one of those read, the page can come back shorter
-than `k`. That reaches `ORDER BY name` through the streams and an unordered
-`LIMIT` through the fetch cap. The running top-K trim no longer carries it —
-both it and the bounded choice a segment makes over its own row IDs collapse
-duplicates before they shed anything, which
+One caveat, and it is now confined to the one place that still stops reading
+early: duplicate rows are collapsed *after* the name-index streams, so where
+enough rows agreeing on `name`, `fql_kind`, path and line sit inside the window
+a stream read, its page could come back shorter than `k`. A stream now declines
+such a page and hands the query to the full scan, so the shape survives only as
+the reason that hand-back exists. Neither trim carries it — the running one and
+the bounded choice a segment makes over its own row IDs both collapse duplicates
+before they shed anything, which
 `crates/forgeql-core/tests/topk_trim_before_dedupe.rs` now enforces rather than
 reproduces.
 
-A bare `LIMIT` is **not** a substitute: with no `ORDER BY` it bounds the scan by
-truncating it, so an `OFFSET` pages past rows that were never fetched — a known
-defect, pinned by four `expect_fail` cases in
-`crates/forgeql/tests/golden/clause_pipeline.json`. Its `total` is the returned
-row count rather than the number of rows that matched, for the same reason:
-nothing counts what was never read. The ordered form does not share that — an
-`ORDER BY … LIMIT k` reports the true size of the answer, the trim counting the
-rows it discards — and the one other exception is `ORDER BY name` with a small
-`LIMIT`, which streams `k` rows out of the name index and reports `k`.
-`FORGEQL_FIND_MAX_ROWS` overrides the bound in rows and `0` disables it.
+A bare `LIMIT` is no longer a lesser form. It used to bound the scan by
+truncating it — an `OFFSET` paged past rows that were never fetched, and `total`
+was the returned row count rather than the number that matched, because nothing
+counts what was never read. Four `expect_fail` cases in
+`crates/forgeql/tests/golden/clause_pipeline.json` pinned that, and they are now
+enforced. Both forms report the true size of the answer, the trim counting the
+rows it discards. One exception remains: `ORDER BY name` with a small `LIMIT`,
+no `IN`/`EXCLUDE` and no uncommitted edits streams `k` rows out of the name
+index and reports `k`. `FORGEQL_FIND_MAX_ROWS` overrides the bound in rows and
+`0` disables it.
 
-That bound is roughly 3.7x lower than the five million rows it replaced, so a
+Separately, the candidate row IDs a scan holds before it builds anything have
+their own bound — about 537 million, the same 2 GiB against four bytes a row ID
+rather than 1,600 a row. `FORGEQL_FIND_MAX_ROW_IDS` overrides it and `0`
+disables it. A `LIMIT` does not shrink that set: it bounds what is delivered and
+built, never what is searched.
+
+The row budget is roughly 3.7x lower than the five million rows it replaced, so a
 scan that used to complete can now be refused — a reachability change, not a
 restatement. The case to watch is a `GROUP BY` no fast path accepts: its answer
 is a handful of rows, but it materialises every matching row to get there.
 
-The bound is enforced on the `FIND symbols` scan over the on-disk index and
+The row budget is enforced on the `FIND symbols` scan over the on-disk index and
 nowhere else. `FIND usages` builds its rows in one step on both backends, `FIND
 files` pushes one entry per file with no bound at all, the in-memory backend
 materialises its whole result before any clause applies, and a session's

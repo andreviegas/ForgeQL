@@ -155,9 +155,64 @@ fn number_is_magic_true() {
     );
     let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected magic numbers");
-    // 42, 0xFF, 0b1010, etc. are all magic
+
+    // 42, 0xFF, 0b1010, etc. are all magic. `42` has to be asked for by name
+    // rather than looked for in a page: a page is the k smallest rows under
+    // the ordering the pipeline sorts by, not the first k the scan reached, so
+    // whether a given value falls inside one is a fact about sort order.
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE is_magic = 'true' WHERE name = '42'",
+    );
+    let qr = common::as_query(&r);
     let ns: Vec<&str> = names(&qr.results);
     assert!(ns.contains(&"42"), "expected '42' as magic number: {ns:?}");
+}
+
+/// A page is a prefix of the answer, on this backend as on the other.
+///
+/// The in-memory backend used to build only the first `LIMIT` rows its scan
+/// reached and then sort those, so a small `LIMIT` returned the k smallest of
+/// a scan prefix rather than of the answer — the same defect the columnar
+/// backend's segment fetch cap carried. Raising the limit therefore changed
+/// which rows a smaller one had already shown, which is what this checks.
+#[test]
+fn a_small_limit_returns_the_head_of_the_larger_page() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let wide = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE is_magic = 'true' LIMIT 100",
+    );
+    let wide = common::as_query(&wide);
+    let wide_names: Vec<String> = names(&wide.results)
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    assert!(
+        wide_names.len() > 3,
+        "fixture must hold more magic numbers than the narrow page asks for"
+    );
+
+    let narrow = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE is_magic = 'true' LIMIT 3",
+    );
+    let narrow = common::as_query(&narrow);
+    let narrow_names: Vec<&str> = names(&narrow.results);
+
+    assert_eq!(narrow_names.len(), 3, "short page: {narrow_names:?}");
+    assert_eq!(
+        narrow_names,
+        wide_names[..3]
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        "LIMIT 3 must return the first three rows of the LIMIT 100 answer, \
+         not three rows the scan happened to reach first"
+    );
 }
 
 #[test]

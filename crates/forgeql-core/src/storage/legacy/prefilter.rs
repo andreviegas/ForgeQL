@@ -496,12 +496,12 @@ pub(super) fn find_symbols_prefilter(
         }
         matched += 1;
         // The LIMIT bounds delivery, not the search: every remaining row is
-        // still tested, deduplicated and counted, it is just no longer built.
-        // Stopping the scan here instead is what made `total` the size of the
-        // page rather than the number of rows that matched.
-        if matched > early_limit {
-            continue;
-        }
+        // still tested, deduplicated, counted and — since the clause pipeline
+        // sorts by `(name, line, path)` even with no ORDER BY — still built
+        // and ranked. Keeping the first `early_limit` rows instead and letting
+        // the sort choose from those would hand back the k smallest of a scan
+        // prefix rather than of the answer, which is the defect the columnar
+        // backend's segment fetch cap carried until it was retired.
         // usages_count is precomputed at index-build time; no HashMap lookup needed.
         let usages = def.usages_count as usize;
         let fql = index.fql_kind_of(def);
@@ -527,6 +527,25 @@ pub(super) fn find_symbols_prefilter(
             node_id: None,
             rev: None,
         });
+
+        // Running top-K: hold the retained set to a bounded window without
+        // letting scan order decide the page. A row leaves only once enough
+        // better ones are in hand, by the same comparator that sorts the
+        // survivors below, so the page is the k smallest of everything that
+        // matched. `early_limit` is `usize::MAX` wherever an early exit is
+        // unsound, and the saturating multiply leaves this inert there.
+        //
+        // Pinned by `a_small_limit_returns_the_head_of_the_larger_page` in
+        // `tests/enrichment_integration.rs`, which runs on this backend: it
+        // asserts a small LIMIT returns the head of a larger one's page. The
+        // golden suites cannot see this — they run on indexed sources, and
+        // this backend answers a source with no `.forgeql.yaml`.
+        if results.len() > early_limit.saturating_mul(4) {
+            results =
+                crate::filter::collect_top_k(std::mem::take(&mut results), early_limit, |a, b| {
+                    crate::filter::order_cmp(a, b, clauses)
+                });
+        }
     }
 
     // Only usages-based WHERE, GROUP/HAVING, ORDER, OFFSET, LIMIT remain.
