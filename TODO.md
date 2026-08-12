@@ -156,7 +156,7 @@ See `data/future-plans/overlay-path-acceleration-plan.md` for the full plan.
   when true replace steps 6–8 with `collect_top_k`; otherwise fall through unchanged
   (`filter.rs`)
 - [ ] Unit tests covering: (a) numeric ASC/DESC top-K matches full-sort; (b) string ORDER BY
-  top-K matches full-sort; (c) ties broken by `(name, line, path)` produce the same
+  top-K matches full-sort; (c) ties broken by `(name, line, path, fql_kind)` produce the same
   ordering in both paths; (d) `OFFSET > 0` is not redirected to top-K path;
   (e) `GROUP BY` queries are not redirected (`filter.rs`)
 - [x] In `columnar_storage::materialize_all`, when `order_by.is_some()`, `limit.is_some_and(|k| k <= TOPK_THRESHOLD)`,

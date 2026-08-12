@@ -492,14 +492,18 @@ pub(super) fn find_symbols_prefilter(
     let mut matched = 0usize;
     let max_rows = crate::storage::columnar::columnar_storage::find_max_rows();
     for def in filtered {
-        let key = (def.name_id, def.path_id, def.node_kind_id, def.line);
+        // Keyed on fql_kind, not node_kind: this is the same duplicate row
+        // identity the columnar Stage 4 collapse uses, and it is what makes
+        // the (name, line, path, fql_kind) tie-break total on the rows this
+        // backend retains — two rows this key tells apart never compare equal.
+        let key = (def.name_id, def.path_id, def.fql_kind_id, def.line);
         if !seen.insert(key) {
             continue;
         }
         matched += 1;
         // The LIMIT bounds delivery, not the search: every remaining row is
         // still tested, deduplicated, counted and — since the clause pipeline
-        // sorts by `(name, line, path)` even with no ORDER BY — still built
+        // sorts by `(name, line, path, fql_kind)` even with no ORDER BY — still built
         // and ranked. Keeping the first `trim_limit` rows instead and letting
         // the sort choose from those would hand back the k smallest of a scan
         // prefix rather than of the answer, which is the defect the columnar

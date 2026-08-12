@@ -703,14 +703,16 @@ fn duplicates_collapse_before_the_bounded_choice_sheds_anything() {
     );
 }
 
-/// A segment that cannot key its own rows from its columns builds all of them.
+/// A segment that shadows a tie-break-and-key field builds all of its rows.
 ///
-/// The two admission tests are not the same test and this is the case that
-/// separates them. Ranking needs the view and the built row only to AGREE, so
-/// a field neither holds is fine; a key needs the view to be RIGHT, because a
-/// field the view withholds while the built row carries it files two different
-/// rows under one key and drops one of them. Here the segment ranks perfectly
-/// and still must not collapse anything.
+/// The two admission tests are distinct — ranking needs the view and the built
+/// row only to AGREE, so a field neither holds is fine; a key needs the view
+/// to be RIGHT, because a field the view withholds while the built row carries
+/// it files two different rows under one key and drops one of them. A shadowed
+/// `fql_kind` fails both at once now that it is a published tie-breaker: the
+/// view would rank by the shadow where the built row sorts by its own field,
+/// and the collapse would key on it — so ranking and collapsing both decline,
+/// and every row is built first.
 #[test]
 fn a_segment_that_cannot_key_its_own_rows_stays_off_the_view_path() {
     let (_tmp, seg) = shadowed_kind_segment();
@@ -718,9 +720,9 @@ fn a_segment_that_cannot_key_its_own_rows_stays_off_the_view_path() {
     let rows: RoaringBitmap = (0..seg.row_count).collect();
 
     assert!(
-        segment_ranks_from_columns(&seg, "line"),
-        "the comparator reads the ORDER BY field and name, line and path, and \
-         this segment shadows none of them"
+        !segment_ranks_from_columns(&seg, "line"),
+        "fql_kind is a published tie-breaker, so a segment that shadows it \
+         cannot rank its own rows the way the built rows will sort"
     );
     assert!(
         !seg.answers_field("fql_kind", true),

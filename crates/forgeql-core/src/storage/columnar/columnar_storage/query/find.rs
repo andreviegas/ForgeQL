@@ -1126,9 +1126,10 @@ fn in_scope(path: &Path, clauses: &Clauses) -> bool {
 
 /// Deduplicate symbol results on `(name, fql_kind, path, line)`.
 ///
-/// Mirrors the legacy backend, which deduplicates on
-/// `(name_id, path_id, node_kind_id, line)`. The columnar result does not store
-/// raw `node_kind`, so `fql_kind` is the closest available approximation.
+/// The legacy backend deduplicates on the same identity —
+/// `(name_id, path_id, fql_kind_id, line)` — so the two backends agree on what
+/// a duplicate is, and the `(name, line, path, fql_kind)` tie-break is total
+/// on the rows either backend retains.
 ///
 /// The key is hashed rather than cloned. An owned-key set copied `name`,
 /// `fql_kind` and a whole `PathBuf` alongside `line` for every candidate row,

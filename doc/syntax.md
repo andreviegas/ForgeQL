@@ -995,12 +995,11 @@ completeness guarantee exists to prevent, so the error names the remedy instead
 `LIMIT k` also completes, with or without an `ORDER BY`: every segment is still
 scanned, but a running top-K trim holds the working set to a few thousand rows,
 so the answer is the true top k over the whole corpus. With no `ORDER BY` the
-ordering is the `(name, line, path)` tie-break the pipeline sorts by anyway, so
-a bare `LIMIT k` asks for the k smallest rows under it rather than for the first
-k the scan reaches — except among rows that compare equal on the ordering field
-and on all of `name`, `line` and `path`, which two rows can be while differing
-in `fql_kind`: the bounded partition is unstable there, so which of them the
-page holds is not decided by the ordering and can change with `k`.
+ordering is the `(name, line, path, fql_kind)` tie-break the pipeline sorts by
+anyway, so a bare `LIMIT k` asks for the k smallest rows under it rather than
+for the first k the scan reaches. That tie-break ends in `fql_kind`, completing
+the duplicate-collapse key, so two rows the answer tells apart never compare
+equal: the page is fully decided by the ordering, on every run and at every `k`.
 That path needs `k` no greater than 1000, no `OFFSET`, no
 `GROUP BY` and no `HAVING`; outside that gate nothing is trimmed, every matching
 row is materialised, and the scan can be refused where the old fetch cap let it

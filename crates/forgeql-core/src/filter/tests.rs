@@ -173,7 +173,7 @@ fn apply_clauses_filter_by_kind_eq() {
         ..Default::default()
     };
     apply_clauses(&mut items, &clauses);
-    // Results are now deterministically ordered by (name, line, path)
+    // Results are now deterministically ordered by (name, line, path, fql_kind)
     // even when no explicit ORDER BY is given — see apply_clauses.
     assert_eq!(items.len(), 2);
     assert_eq!(items[0].name, "baz");
@@ -1214,11 +1214,12 @@ fn apply_clauses_order_by_tiebreaker_is_name() {
 /// field of the row must compare equal.
 #[test]
 fn order_cmp_consults_only_the_published_tie_breakers() {
-    // make_symbol derives the path from the name, so these two agree on all of
-    // name, line and path — the whole of ORDER_TIE_BREAKERS.
+    // make_symbol derives the path from the name and both get the same
+    // fql_kind, so these two agree on all of name, line, path and fql_kind —
+    // the whole of ORDER_TIE_BREAKERS.
     let mut a = make_symbol("same", "function", 1);
     a.line = Some(7);
-    let mut b = make_symbol("same", "struct", 999);
+    let mut b = make_symbol("same", "function", 999);
     b.line = Some(7);
 
     // Every remaining field of the row, given a different value on b.
@@ -1251,6 +1252,34 @@ fn order_cmp_consults_only_the_published_tie_breakers() {
         std::cmp::Ordering::Equal,
         "with no ORDER BY the comparator is the tie-breakers alone, so a field \
          outside the published list must not order these rows"
+    );
+}
+
+/// `fql_kind` is the final tie-breaker, so two rows that agree on name, line
+/// and path but not on it are ordered, not tied.
+///
+/// This is what makes the ordering total on distinct rows: the four
+/// tie-breakers are the duplicate-collapse key `(name, fql_kind, path, line)`,
+/// so rows that still compare equal here are rows the collapse merges into
+/// one, and an unstable sort or partition never chooses which of two answer
+/// rows a page holds. Reverting the comparator to `(name, line, path)` fails
+/// this test and nothing else in this file.
+#[test]
+fn fql_kind_breaks_the_final_tie() {
+    let mut a = make_symbol("same", "enum", 1);
+    a.line = Some(7);
+    let mut b = make_symbol("same", "struct", 1);
+    b.line = Some(7);
+
+    assert_eq!(
+        order_cmp(&a, &b, &Clauses::default()),
+        std::cmp::Ordering::Less,
+        "rows tied on name, line and path must be ordered by fql_kind"
+    );
+    assert_eq!(
+        order_cmp(&b, &a, &Clauses::default()),
+        std::cmp::Ordering::Greater,
+        "the fql_kind tie-break must order the pair the same way from both sides"
     );
 }
 

@@ -689,10 +689,14 @@ pub(crate) const TOPK_THRESHOLD: usize = 1_000;
 /// tie-breaker cannot leave such a caller ordering by fewer fields than the
 /// rows are finally sorted by; `order_cmp_consults_only_the_listed_fields`
 /// fails if the two drift apart.
-pub(crate) const ORDER_TIE_BREAKERS: &[&str] = &["name", "line", "path"];
+pub(crate) const ORDER_TIE_BREAKERS: &[&str] = &["name", "line", "path", "fql_kind"];
 
 /// Compare two [`ClauseTarget`] items according to the ORDER BY clause in
-/// `clauses`, including the deterministic `(name, line, path)` tie-breakers.
+/// `clauses`, including the deterministic `(name, line, path, fql_kind)`
+/// tie-breakers. Those four fields are the Stage 4 duplicate-collapse key, so
+/// two rows the collapse tells apart never compare [`Ordering::Equal`]: the
+/// ordering is total on distinct rows, and an unstable sort or partition has
+/// no choice left to make between rows an answer can distinguish.
 ///
 /// This is the single source-of-truth comparator shared by:
 /// - the full sort in `apply_clauses` (step 6), and
@@ -724,8 +728,9 @@ pub(crate) fn order_cmp<T: ClauseTarget>(a: &T, b: &T, clauses: &Clauses) -> Ord
             return primary;
         }
     }
-    // Tie-breakers: name → line → path.  Guarantees a deterministic ordering
-    // before LIMIT truncation so both storage backends return the same rows.
+    // Tie-breakers: name → line → path → fql_kind.  Deterministic before LIMIT
+    // truncation so both storage backends return the same rows, and total on
+    // distinct rows: the four fields are the duplicate-collapse key.
     let na = a.field_str("name").unwrap_or("");
     let nb = b.field_str("name").unwrap_or("");
     match na.cmp(nb) {
@@ -740,7 +745,13 @@ pub(crate) fn order_cmp<T: ClauseTarget>(a: &T, b: &T, clauses: &Clauses) -> Ord
     }
     let pa = a.field_str("path").unwrap_or("");
     let pb = b.field_str("path").unwrap_or("");
-    pa.cmp(pb)
+    match pa.cmp(pb) {
+        Ordering::Equal => {}
+        other => return other,
+    }
+    let ka = a.field_str("fql_kind").unwrap_or("");
+    let kb = b.field_str("fql_kind").unwrap_or("");
+    ka.cmp(kb)
 }
 
 /// Return the top-`k` items from `items` ranked by `cmp`, without fully
@@ -846,7 +857,7 @@ pub fn apply_clauses_counted<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Cl
 /// no explicit `ORDER BY`.
 ///
 /// `SHOW outline` relies on this: its pre-order DFS sequence is the meaningful
-/// default order, and the usual `(name, line, path)` tie-break sort would
+/// default order, and the usual `(name, line, path, fql_kind)` tie-break sort would
 /// flatten the structural tree into an alphabetical list.
 pub fn apply_clauses_keep_order<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Clauses) {
     let _ = apply_clauses_inner(results, clauses, false);
@@ -896,7 +907,7 @@ pub(crate) enum Withheld {
 /// selects whole files — every site of a selected file is returned.
 ///
 /// Groups keep the order in which their first row appears, which under the
-/// default `(name, line, path)` ordering is lowest line first, and `OFFSET`
+/// default `(name, line, path, fql_kind)` ordering is lowest line first, and `OFFSET`
 /// skips whole groups so paging never splits one file across two pages.
 ///
 /// `ceiling` then bounds the total sites rendered, still dropping only whole
@@ -1073,7 +1084,7 @@ fn apply_group_by<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Clauses) {
 /// Apply the final ordering pipeline: ORDER BY (with a bounded top-K fast path),
 /// then OFFSET and LIMIT.  A deterministic order is established before
 /// truncation so backends (legacy ↔ columnar) pick identical rows; even without
-/// an explicit ORDER BY a stable `(name, line, path)` sort is applied.
+/// an explicit ORDER BY a stable `(name, line, path, fql_kind)` sort is applied.
 fn apply_ordering<T: ClauseTarget>(
     results: &mut Vec<T>,
     clauses: &Clauses,
@@ -1099,8 +1110,8 @@ fn apply_ordering<T: ClauseTarget>(
         return matched; // OFFSET == 0 and LIMIT already applied by collect_top_k.
     }
 
-    // Default tie-break sort (name, line, path) runs unless the caller asked to
-    // preserve insertion order and supplied no explicit ORDER BY.
+    // Default tie-break sort (name, line, path, fql_kind) runs unless the caller
+    // asked to preserve insertion order and supplied no explicit ORDER BY.
     if default_sort || clauses.order_by.is_some() {
         results.sort_by(|a, b| order_cmp(a, b, clauses));
     }

@@ -1144,15 +1144,13 @@ impl ColumnarStorage {
     /// before it — and the true top `k` is inside both, so the page does not
     /// move.
     ///
-    /// One qualification, and it is about what the ordering never specified.
-    /// [`collect_top_k`] partitions with `select_nth_unstable_by`, so where
-    /// more rows than it retains compare *equal* — equal on the ORDER BY field
-    /// and on all of `name`, `line` and `path`, which two rows can be while
-    /// differing in `fql_kind` and therefore in their handle — which of them
-    /// survives is not decided by the comparator, and the two routes can keep
-    /// different ones. That was already true of the trim between one run of a
-    /// query and a differently-scoped one; it is stated here because "the page
-    /// does not move" is otherwise read as more than it means.
+    /// The ordering leaves the partition no choice worth naming. Two rows
+    /// compare *equal* here only when they agree on the ORDER BY field and on
+    /// all of `name`, `line`, `path` and `fql_kind` — and those four fields
+    /// are the Stage 4 duplicate-collapse key, so such rows are one row of
+    /// the answer, merged before any page is cut. `select_nth_unstable_by`
+    /// still partitions unstably, but every choice it makes is between rows
+    /// no answer tells apart.
     ///
     /// Returns `None` — the segment contributes everything it matched —
     /// whenever the choice could differ from the trim's:
@@ -1294,7 +1292,7 @@ impl ColumnarStorage {
     ///
     /// **An explicit ORDER BY is not required, because there is always an
     /// ordering.** With no ORDER BY clause `apply_ordering` still sorts by the
-    /// `(name, line, path)` tie-breakers before it cuts the page — the same
+    /// `(name, line, path, fql_kind)` tie-breakers before it cuts the page — the same
     /// `order_cmp` this trim ranks with — so a bare `LIMIT k` asks for the k
     /// smallest rows under that ordering, not for the first k the scan
     /// happens to reach. This is what retired the segment fetch cap: that cap
