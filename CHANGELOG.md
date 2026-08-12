@@ -6,6 +6,46 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.164.0] — 2026-08-12 — a bare LIMIT rides the name index, and every stream counts the whole answer
+
+### Performance
+
+- A bare `FIND symbols LIMIT k` — no WHERE, no ORDER BY — is now served by the
+  ascending name stream instead of materialising every row in the corpus. Its
+  default ordering starts with `name`, so the streamed page is exactly the
+  page the full scan sorted its way to. Measured on a 3.05 M-symbol corpus,
+  twenty runs per shape with the session attach subtracted: the bare form
+  took about 7.4 s per query where the explicit `ORDER BY name ASC LIMIT k`
+  form took near zero. The bare form now takes the same path and its cost is
+  no longer distinguishable from that of the explicit one, or from the
+  run-to-run variance of doing nothing.
+- The name-stream fast paths now report an honest `total`. They used to
+  report the size of the page they streamed — `total: 5` on a corpus of any
+  size — which was pinned as an expected failure in the golden suite and is
+  now enforced: the whole-corpus total is the sum of the per-segment
+  deduplicated row counts stored when the overlay is built, and a
+  kind-filtered stream's total is its bitmap's cardinality, so neither walks
+  the index it avoided reading. On the one index shape where those stored
+  counts cannot speak for the answer — two segments built from one source
+  path — every stream form, the bare one included, declines and the full
+  scan answers: slower there, never a wrong count.
+- The ordering that decides every `FIND symbols` page now ends its tie-break in
+  `fql_kind`, making it `(name, line, path, fql_kind)` — the same four fields
+  as the duplicate-collapse row identity, so two rows an answer tells apart
+  never compare equal. Until now, rows equal on the ordering field and on
+  name, line and path while differing in `fql_kind` were ordered arbitrarily:
+  which of them a `LIMIT k` page held could change between runs or with `k`.
+  That caveat is gone from the guarantee rather than restated. Two visible
+  consequences: a page containing one of two such previously-tied rows may now
+  deterministically hold the other one, and the in-memory backend collapses
+  duplicate rows on the same identity the columnar backend uses (`fql_kind`
+  rather than the language-level node kind), so the two backends agree on what
+  a duplicate is. A segment that stores an enrichment column named `fql_kind`,
+  shadowing the built-in field, now builds its rows before ranking them
+  instead of ranking from its columns — slower for that segment, never a
+  different page.
+
+
 ## [0.163.0] — 2026-08-12 — a commit no longer rebuilds the index for the commit it just made
 
 ### Performance
