@@ -223,6 +223,82 @@ fn a_small_limit_returns_the_head_of_the_larger_page() {
     );
 }
 
+/// Pins the legacy backend's honest `total` under HAVING. The clause pipeline
+/// applies HAVING *before* paging, so `find_symbols_prefilter` must both keep
+/// its running trim disarmed while a HAVING is pending (the `can_trim`
+/// condition in `legacy/prefilter.rs` — already pinned by
+/// `having_after_a_limit_still_selects_the_rows_that_qualify` in
+/// `enrichment_fetch_cap.rs`) and report a capped total only when it actually
+/// capped. This test is the only one that sees the second half: replacing
+/// `capped_total` with an unconditional `Some(matched)` fails the `total`
+/// assertion below (176 for an answer of 4) and nothing else in the tree.
+#[test]
+fn a_having_page_is_chosen_from_every_matching_row() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+
+    // Ground truth: HAVING with a limit far above the answer, so every
+    // qualifying row is in hand.
+    let wide = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' HAVING num_format = 'hex' LIMIT 1000",
+    );
+    let wide = common::as_query(&wide);
+    let wide_names: Vec<String> = names(&wide.results)
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+
+    // Two fixture properties this pin rests on. First: more than eight rows
+    // match the WHERE alone, so a trim wrongly armed at LIMIT 2 actually
+    // fires (it trims once the retained set exceeds four times the limit).
+    // Second: the head of the pre-HAVING order differs from the head of the
+    // HAVING answer — otherwise an armed trim would shed only rows HAVING
+    // discards anyway and no assertion here could see it.
+    let all = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' LIMIT 1000",
+    );
+    let all = common::as_query(&all);
+    let all_names: Vec<String> = names(&all.results).into_iter().map(str::to_owned).collect();
+    assert!(
+        all_names.len() > 8,
+        "fixture too small for a wrongly-armed trim to fire: {}",
+        all_names.len()
+    );
+    assert_ne!(
+        all_names[..2],
+        wide_names[..2],
+        "the pre-HAVING head must contain a row HAVING rejects"
+    );
+
+    // The pin: HAVING decides which rows the page holds, so the narrow page
+    // is the head of the HAVING answer and `total` counts every qualifying
+    // row, not every row the WHERE matched.
+    let narrow = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' HAVING num_format = 'hex' LIMIT 2",
+    );
+    let narrow = common::as_query(&narrow);
+    let narrow_names: Vec<String> = names(&narrow.results)
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(narrow_names.len(), 2, "short page: {narrow_names:?}");
+    assert_eq!(
+        narrow_names[..],
+        wide_names[..2],
+        "the HAVING page must be the head of the HAVING answer"
+    );
+    assert_eq!(
+        narrow.total,
+        wide.results.len(),
+        "total must count the HAVING survivors, not every row the WHERE matched"
+    );
+}
+
 #[test]
 fn number_is_magic_false() {
     let (mut e, sid, _d) = engine_enrichment_only();
