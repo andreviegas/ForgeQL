@@ -234,11 +234,26 @@ impl ForgeQLEngine {
         // Write the initial timestamp so background pruners see this worktree as active.
         session.touch();
         let map_key = session_token.clone();
+        // Read before the insert moves the session: the fallback note rides on
+        // the USE response, not only in the server log.
+        let index_fallback = session.index_fallback.clone();
         drop(self.sessions.insert(map_key.clone(), session));
 
         // If this session was previously registered as pending (from
         // restore_sessions_from_disk), remove it now that it is fully active.
         drop(self.pending_sessions.remove(&map_key));
+
+        let mut message = if wt_existed {
+            format!(
+                "resumed existing worktree for {} — uncommitted changes preserved",
+                coords.git_branch()
+            )
+        } else {
+            format!("created new worktree for {}", coords.git_branch())
+        };
+        if let Some(note) = index_fallback {
+            message = format!("{message}. {note}");
+        }
 
         ForgeQLResult::SourceOp(SourceOpResult {
             op: "use_source".to_string(),
@@ -248,14 +263,7 @@ impl ForgeQLEngine {
             symbols_indexed: Some(symbols_indexed),
             resumed: wt_existed,
             base_commit,
-            message: if wt_existed {
-                Some(format!(
-                    "resumed existing worktree for {} — uncommitted changes preserved",
-                    coords.git_branch()
-                ))
-            } else {
-                Some(format!("created new worktree for {}", coords.git_branch()))
-            },
+            message: Some(message),
         })
     }
 
@@ -276,9 +284,14 @@ impl ForgeQLEngine {
     ) -> Result<Option<ForgeQLResult>> {
         // Decide before mutating self.sessions to avoid holding a shared borrow
         // across a mutable one. The alias is the session key, so this is O(1).
-        // (session_id, Some((symbols_indexed, actual_base_commit))) to resume,
+        // (session_id, Some(ResumedInfo)) to resume,
         // (session_id, None) to evict the stale entry and rebuild.
-        type ResumeOutcome = Option<(String, Option<(usize, Option<String>)>)>;
+        struct ResumedInfo {
+            symbols_indexed: usize,
+            base_commit: Option<String>,
+            index_fallback: Option<String>,
+        }
+        type ResumeOutcome = Option<(String, Option<ResumedInfo>)>;
         let resume_outcome: ResumeOutcome = {
             if let Some((existing_id, existing_session)) =
                 self.sessions.get_key_value(&coords.map_key())
@@ -338,26 +351,34 @@ impl ForgeQLEngine {
                     // (A fresh resolution told an agent "base = new head"
                     // while the resumed session was still serving old files.)
                     let actual_base = existing_session.cached_commit().map(str::to_string);
-                    Some((existing_id.clone(), Some((symbols_indexed, actual_base))))
+                    Some((
+                        existing_id.clone(),
+                        Some(ResumedInfo {
+                            symbols_indexed,
+                            base_commit: actual_base,
+                            index_fallback: existing_session.index_fallback.clone(),
+                        }),
+                    ))
                 }
             } else {
                 None
             }
         };
         match resume_outcome {
-            Some((id, Some((symbols_indexed, actual_base)))) => {
+            Some((id, Some(info))) => {
+                let mut message = format!("resumed in-memory session for {}", coords.git_branch());
+                if let Some(note) = info.index_fallback {
+                    message = format!("{message}. {note}");
+                }
                 Ok(Some(ForgeQLResult::SourceOp(SourceOpResult {
                     op: "use_source".to_string(),
                     source_name: Some(source_name.to_string()),
                     session_id: Some(id),
                     branches: Vec::new(),
-                    symbols_indexed: Some(symbols_indexed),
+                    symbols_indexed: Some(info.symbols_indexed),
                     resumed: true,
-                    base_commit: actual_base,
-                    message: Some(format!(
-                        "resumed in-memory session for {}",
-                        coords.git_branch()
-                    )),
+                    base_commit: info.base_commit,
+                    message: Some(message),
                 })))
             }
             Some((stale_id, None)) => {
@@ -373,6 +394,9 @@ impl ForgeQLEngine {
     /// the multi-GB legacy table. Cold path: load the legacy table so the
     /// shadow-writer can build the overlay, then install columnar and drop legacy.
     fn load_session_index(&self, session: &mut Session) -> Result<()> {
+        // Every attach recomputes the fallback note below; a stale one from an
+        // earlier failed attach must not outlive the open that healed it.
+        session.index_fallback = None;
         // Ask the shared cache, and KEEP what it hands back. Binding the entry
         // is the whole point: it must outlive the `warm_or_open` below, which
         // is what turns this probe's decode into that session's decode rather
@@ -431,10 +455,41 @@ impl ForgeQLEngine {
             }
             Err(e) => {
                 tracing::warn!(%commit, "columnar warm_or_open failed (non-fatal): {e}");
-                // Fall back to legacy if the warm path skipped resume_index.
-                if columnar_warm && let Err(re) = session.resume_index() {
-                    tracing::warn!("columnar fallback resume_index failed: {re}");
-                }
+                // The in-memory index is the fallback, and what the cold path
+                // built is not it: with columnar configured, `build_index`
+                // hands `SymbolTable::build` the inline segment context, and
+                // that path returns an EMPTY table by design — the columnar
+                // engine never reads it after build. On this path the table is
+                // the whole answer surface, so an absent or empty one is
+                // rebuilt for real, without the inline context, before this
+                // session serves zero rows as a success.
+                let fallback_failed = if session.index().is_none_or(|t| t.rows.is_empty()) {
+                    let failed = session.build_fallback_index().err();
+                    if let Some(re) = &failed {
+                        tracing::warn!("columnar fallback index build failed: {re}");
+                    }
+                    failed
+                } else {
+                    None
+                };
+                // The refusal names its own repair, and the warn above reaches
+                // only the server log — record it on the session so every USE
+                // response for this session carries it to the agent.
+                session.index_fallback = Some(fallback_failed.map_or_else(
+                    || {
+                        format!(
+                            "columnar index unavailable — serving from the \
+                             complete in-memory index (slower): {e:#}"
+                        )
+                    },
+                    |re| {
+                        format!(
+                            "columnar index unavailable ({e:#}) and the in-memory \
+                             fallback failed too ({re:#}) — this session may hold \
+                             no index; re-run USE or re-create the source"
+                        )
+                    },
+                ));
             }
         }
         Ok(())

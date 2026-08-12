@@ -103,6 +103,11 @@ Sessions persist across server restarts. To reconnect or hand off to another age
 the same `USE` command — the worktree and uncommitted changes are preserved.
 Idle worktrees are cleaned up automatically: one carrying no work (no commits over its base and no uncommitted changes) after about 2 hours, one with work after 48 hours (override the short TTL with `FORGEQL_SHORT_SESSION_TTL_SECS`).
 
+A `USE` message saying `columnar index unavailable` means the session still
+answers completely, from the in-memory index, slower — the message names the
+repair, and it repeats on every `USE` until an attach opens the columnar index
+cleanly.
+
 When connected to `forgeql-server` over HTTP, the `USE` response returns a
 server-issued `session_id` token scoped to the authenticated user — store it
 and pass it verbatim in every subsequent call; do not reconstruct it from the

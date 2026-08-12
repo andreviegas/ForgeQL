@@ -274,3 +274,113 @@ fn reconnect_after_begin_does_not_double_index() {
 
     drop((wt_path, data_dir));
 }
+
+/// A columnar open that refuses must say so in the USE response, not only in
+/// the server log. The session still answers — the in-memory index is the
+/// complete fallback — but the refusal names its own repair, and an agent that
+/// never sees it cannot act on it. Delete the committed overlay and make its
+/// directory unwritable so the rebuild cannot persist one: the columnar open
+/// fails while the segment store — and with it the in-memory build — stays
+/// intact. The reconnect must succeed, answer a real query, and carry the
+/// refusal in its message; a USE that resumes the same in-memory session must
+/// carry it too; and once the store is writable again, the next fresh attach
+/// heals and the note is gone.
+///
+/// The sabotage deliberately avoids the segment store: `build_index` emits
+/// inline segments there, so a read-only segment store empties the in-memory
+/// fallback itself — a coupling this test must stay clear of to measure the
+/// note alone.
+#[test]
+#[cfg(unix)]
+fn a_failed_columnar_open_reports_its_fallback_in_the_use_response() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (engine, sess, branch, _wt_path, data_dir, _src_dir) = engine_with_source_session();
+
+    // The committed overlay store for this source.
+    let overlays_root = data_dir
+        .path()
+        .join("mysrc.git")
+        .join("forgeql")
+        .join("overlays");
+
+    // Delete the overlay and lock every directory that could hold a rebuilt
+    // one — the open must then refuse rather than heal.
+    let mut overlay_dirs: Vec<PathBuf> = vec![overlays_root.clone()];
+    let mut victim: Option<PathBuf> = None;
+    let mut dirs = vec![overlays_root];
+    while let Some(d) = dirs.pop() {
+        for entry in fs::read_dir(&d).expect("read overlays dir") {
+            let p = entry.expect("dir entry").path();
+            if p.is_dir() {
+                overlay_dirs.push(p.clone());
+                dirs.push(p);
+            } else if victim.is_none() {
+                victim = Some(p);
+            }
+        }
+    }
+    let victim = victim.expect("a committed overlay file to delete");
+    fs::remove_file(&victim).expect("delete the overlay");
+
+    let chmod = |p: &Path, mode: u32| {
+        let mut perm = fs::metadata(p).expect("stat").permissions();
+        perm.set_mode(mode);
+        fs::set_permissions(p, perm).expect("chmod");
+    };
+    for d in &overlay_dirs {
+        chmod(d, 0o555);
+    }
+
+    // Restart and reconnect.
+    drop(engine);
+    let mut engine =
+        ForgeQLEngine::new(data_dir.path().to_path_buf(), common::make_registry()).expect("engine");
+    let use_fql = format!("USE mysrc.{branch} AS 'sess'");
+    let result = exec(&mut engine, None, &use_fql);
+    let ForgeQLResult::SourceOp(op) = &result else {
+        panic!("expected SourceOp, got {result:?}");
+    };
+    let message = op.message.as_deref().unwrap_or_default();
+    assert!(
+        message.contains("columnar index unavailable"),
+        "the USE response must carry the fallback note: {message}"
+    );
+    // The fallback must actually answer — the note promises a complete
+    // in-memory index behind it. That was not always so: with columnar
+    // configured, `build_index` returns an empty in-memory table by design
+    // (segments are emitted inline instead), so a session on this path once
+    // served zero rows while USE reported success. The fallback rebuild in
+    // `load_session_index` is what this assertion pins.
+    assert_symbol_found(&mut engine, &sess, "encenderMotor");
+
+    // Resuming the same in-memory session must carry the note too — the
+    // degradation lasts as long as the session serves from the fallback.
+    let resumed = exec(&mut engine, None, &use_fql);
+    let ForgeQLResult::SourceOp(op) = &resumed else {
+        panic!("expected SourceOp, got {resumed:?}");
+    };
+    let message = op.message.as_deref().unwrap_or_default();
+    assert!(
+        message.contains("columnar index unavailable"),
+        "a resumed USE must carry the fallback note: {message}"
+    );
+
+    // Writable again: the next fresh attach rebuilds the overlay and the note
+    // must be gone — a healed session must not keep warning.
+    for d in &overlay_dirs {
+        chmod(d, 0o755);
+    }
+    drop(engine);
+    let mut engine =
+        ForgeQLEngine::new(data_dir.path().to_path_buf(), common::make_registry()).expect("engine");
+    let healed = exec(&mut engine, None, &use_fql);
+    let ForgeQLResult::SourceOp(op) = &healed else {
+        panic!("expected SourceOp, got {healed:?}");
+    };
+    let message = op.message.as_deref().unwrap_or_default();
+    assert!(
+        !message.contains("columnar index unavailable"),
+        "a healed attach must not keep the stale note: {message}"
+    );
+}

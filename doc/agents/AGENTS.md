@@ -35,6 +35,11 @@ server-issued `session_id` token scoped to the authenticated user — store it
 and pass it verbatim in every subsequent call; do not reconstruct it from the
 alias.
 
+A `USE` message saying `columnar index unavailable` means the session still
+answers completely, from the in-memory index, slower — the message names the
+repair, and it repeats on every `USE` until an attach opens the columnar index
+cleanly.
+
 ## Query Workflow
 
 **The right way to find and read code:**

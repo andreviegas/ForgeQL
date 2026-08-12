@@ -352,6 +352,14 @@ pub struct Session {
     /// node's handle. Transient: `reindex_files` takes it, so it is
     /// empty for every non-removal mutation and never persisted.
     pub(crate) pending_tombstones: OrdinalTombstones,
+    /// Set when the columnar index refused to open and this session fell back
+    /// to the complete in-memory index. Carried into every `USE` response for
+    /// this session — the refusal names its own repair ("restore that file, or
+    /// index this source from scratch"), and a note only in the server log
+    /// never reaches the agent that needs to act on it. `None` when the
+    /// columnar index opened, when columnar is not configured, or once a later
+    /// attach succeeds. Never persisted: every attach recomputes it.
+    pub(crate) index_fallback: Option<String>,
 }
 
 impl Session {
@@ -404,6 +412,7 @@ impl Session {
             parse_cache: Mutex::new(ParseCache::with_capacity(32)),
             prebuilt_segment_map: None,
             pending_tombstones: OrdinalTombstones::new(),
+            index_fallback: None,
         }
     }
 

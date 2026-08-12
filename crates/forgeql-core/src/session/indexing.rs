@@ -166,6 +166,32 @@ impl Session {
         Ok(())
     }
 
+    /// Build the in-memory index for a session whose columnar open failed.
+    ///
+    /// [`Self::build_index`] hands `SymbolTable::build` the inline segment
+    /// context whenever columnar is configured, and that path returns an
+    /// EMPTY table by design — the columnar engine never reads it after
+    /// build. On the fallback path that table is the whole answer surface,
+    /// so it has to be built again without the inline context, whatever the
+    /// cost: a session that answers slowly is a fallback, a session that
+    /// answers zero rows with a success status is a defect.
+    ///
+    /// # Errors
+    /// Returns `Err` when the worktree cannot be walked, when the session has
+    /// no legacy backend, or when parsing fails hard enough that no table can
+    /// be built.
+    pub fn build_fallback_index(&mut self) -> Result<()> {
+        let workspace = Workspace::new(&self.worktree_path)?;
+        let legacy = self
+            .backends
+            .legacy_storage_mut()
+            .ok_or_else(|| anyhow::anyhow!("no legacy backend"))?;
+        legacy.build_with_seg_ctx(&workspace, None)?;
+        self.cached_commit = Some(Self::get_head_oid(&self.worktree_path).unwrap_or_default());
+        self.index_dirty = false;
+        Ok(())
+    }
+
     /// Return a reference to the legacy `SymbolTable`, if the engine holds one.
     /// Provided for SHOW / exec paths that still work directly with the table.
     /// Returns `None` for non-legacy backends, or before the index is built.

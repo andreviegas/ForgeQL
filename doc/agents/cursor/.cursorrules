@@ -5,7 +5,7 @@ The local workspace may be empty — never fall back to local filesystem tools (
 
 ## Critical Rules
 
-1. Always start with `USE source.branch AS 'alias'` before any query.
+1. Always start with `USE source.branch AS 'alias'` before any query. A `USE` message saying `columnar index unavailable` means the session still answers completely, from the in-memory index, slower — the message names the repair, and it repeats on every `USE` until an attach opens the columnar index cleanly.
 2. Never use local filesystem tools for code reading. ForgeQL manages all code access.
 3. Never brute-force read code. Use FIND to locate symbols, then SHOW NODE to read them by stable handle.
 4. SHOW body and SHOW context without LIMIT are capped at 40 lines. If capped, use FIND to get the symbol's node_id, then `SHOW NODE '<id>'` — it returns the node's full span. Page buffered output with `SHOW MORE`.
