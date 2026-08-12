@@ -65,40 +65,94 @@ fn seg_path(base: &Path, source_path: &Path, hex: &str) -> PathBuf {
         ))
 }
 
+/// Where the collapsing group sits in the sort order.
+///
+/// The two positions test different machinery, and a fixture that only builds
+/// one of them cannot tell them apart. With the duplicates at the **head**, a
+/// page cut from the front is mostly one row wearing several hats, so a
+/// bounded chooser that sheds before collapsing loses distinct rows it should
+/// have kept — and a name stream that pages the head hands back short. With
+/// them in the **tail**, a page from the front is already whole and already
+/// distinct: nothing collapses, nothing is short, and the only thing left that
+/// can be wrong is the count.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DupPosition {
+    /// Duplicates sort first, ahead of every distinct row.
+    Head,
+    /// Duplicates sort last, behind every distinct row — and each segment's
+    /// distinct rows are its own, so only the tail key is shared between them.
+    ///
+    /// That combination is what leaves a head-cut page whole: were both
+    /// segments to hold the same distinct rows, the page would collapse across
+    /// them and hand back short whatever the count said.
+    Tail,
+}
+
 /// Emit the fixture's rows: `dups` rows agreeing on every field of FIND's
-/// dedupe key, so Stage 4 collapses them to one, followed by `distinct` rows
-/// agreeing with nothing. The duplicates sort ahead of the distinct rows on
-/// both `name` and `line`, so an ascending order on either puts the group that
-/// collapses at the front of a trim's retained window.
-fn emit_fixture_rows(builder: &mut SegmentBuilder, dups: usize, distinct: usize) {
-    for i in 0..dups {
-        let _ = builder.emit_row(SymbolRow {
-            name: "aaa_duplicate",
-            fql_kind: "function",
-            language: "cpp",
-            line: 1,
-            byte_start: u32::try_from(i).unwrap(),
-            byte_end: u32::try_from(i + 1).unwrap(),
-            usages_count: 0,
-        });
-    }
-    for i in 0..distinct {
-        let name = format!("zzz_distinct_{i:03}");
-        let _ = builder.emit_row(SymbolRow {
-            name: &name,
-            fql_kind: "function",
-            language: "cpp",
-            line: u32::try_from(100 + i).unwrap(),
-            byte_start: u32::try_from(1000 + i).unwrap(),
-            byte_end: u32::try_from(1001 + i).unwrap(),
-            usages_count: 0,
-        });
+/// dedupe key, so Stage 4 collapses them to one, and `distinct` rows agreeing
+/// with nothing. `pos` decides which group sorts first on both `name` and
+/// `line`.
+fn emit_fixture_rows(
+    builder: &mut SegmentBuilder,
+    dups: usize,
+    distinct: usize,
+    pos: DupPosition,
+    seg_tag: &str,
+) {
+    let tail_prefix = format!("aaa_{seg_tag}");
+    let (dup_name, dup_line, distinct_prefix, distinct_line) = match pos {
+        DupPosition::Head => ("aaa_duplicate", 1u32, "zzz_distinct", 100u32),
+        DupPosition::Tail => ("zzz_duplicate", 900u32, tail_prefix.as_str(), 100u32),
+    };
+    let emit_dups = |builder: &mut SegmentBuilder| {
+        for i in 0..dups {
+            let _ = builder.emit_row(SymbolRow {
+                name: dup_name,
+                fql_kind: "function",
+                language: "cpp",
+                line: dup_line,
+                byte_start: u32::try_from(i).unwrap(),
+                byte_end: u32::try_from(i + 1).unwrap(),
+                usages_count: 0,
+            });
+        }
+    };
+    let emit_distinct = |builder: &mut SegmentBuilder| {
+        for i in 0..distinct {
+            let name = format!("{distinct_prefix}_{i:03}");
+            let _ = builder.emit_row(SymbolRow {
+                name: &name,
+                fql_kind: "function",
+                language: "cpp",
+                line: distinct_line + u32::try_from(i).unwrap(),
+                byte_start: u32::try_from(1000 + i).unwrap(),
+                byte_end: u32::try_from(1001 + i).unwrap(),
+                usages_count: 0,
+            });
+        }
+    };
+    match pos {
+        DupPosition::Head => {
+            emit_dups(builder);
+            emit_distinct(builder);
+        }
+        DupPosition::Tail => {
+            emit_distinct(builder);
+            emit_dups(builder);
+        }
     }
 }
 
 /// Flush one segment holding the fixture's rows, under a content ID made of
 /// `fill` bytes, and hand that ID back.
-fn flush_segment(segments_dir: &Path, fill: u8, dups: usize, distinct: usize) -> Vec<u8> {
+fn flush_segment(
+    segments_dir: &Path,
+    fill: u8,
+    dups: usize,
+    distinct: usize,
+    pos: DupPosition,
+    seg_tag: &str,
+) -> Vec<u8> {
     let content_id: Vec<u8> = vec![fill; 8];
     let hex = content_id.iter().fold(String::new(), |mut acc, b| {
         use std::fmt::Write as _;
@@ -107,7 +161,7 @@ fn flush_segment(segments_dir: &Path, fill: u8, dups: usize, distinct: usize) ->
     });
 
     let mut builder = SegmentBuilder::new("test", &content_id);
-    emit_fixture_rows(&mut builder, dups, distinct);
+    emit_fixture_rows(&mut builder, dups, distinct, pos, seg_tag);
     builder
         .flush(&seg_path(segments_dir, Path::new("canonical.cpp"), &hex))
         .expect("segment flush");
@@ -156,7 +210,14 @@ fn open_storage(
 fn storage_with_duplicate_heavy_head(dups: usize, distinct: usize) -> (TempDir, ColumnarStorage) {
     let tmp = TempDir::new().expect("tempdir");
     let segments_dir = tmp.path().join("segments");
-    let content_id = flush_segment(&segments_dir, 0x7A, dups, distinct);
+    let content_id = flush_segment(
+        &segments_dir,
+        0x7A,
+        dups,
+        distinct,
+        DupPosition::Head,
+        "one",
+    );
 
     let mut segment_map: HashMap<PathBuf, Vec<u8>> = HashMap::new();
     let _ = segment_map.insert(fixtures_dir().join("canonical.cpp"), content_id);
@@ -178,11 +239,12 @@ fn storage_with_duplicate_heavy_head(dups: usize, distinct: usize) -> (TempDir, 
 fn storage_with_one_path_in_two_segments(
     dups: usize,
     distinct: usize,
+    pos: DupPosition,
 ) -> (TempDir, ColumnarStorage) {
     let tmp = TempDir::new().expect("tempdir");
     let segments_dir = tmp.path().join("segments");
-    let first = flush_segment(&segments_dir, 0x7A, dups, distinct);
-    let second = flush_segment(&segments_dir, 0x7B, dups, distinct);
+    let first = flush_segment(&segments_dir, 0x7A, dups, distinct, pos, "one");
+    let second = flush_segment(&segments_dir, 0x7B, dups, distinct, pos, "two");
 
     let mut segment_map: HashMap<PathBuf, Vec<u8>> = HashMap::new();
     let _ = segment_map.insert(fixtures_dir().join("canonical.cpp"), first);
@@ -306,7 +368,7 @@ fn ordering_on_a_field_no_stream_serves_still_returns_a_full_page() {
 /// the first.
 #[test]
 fn two_segments_can_report_one_source_path() {
-    let (tmp, storage) = storage_with_one_path_in_two_segments(DUPS, DISTINCT);
+    let (tmp, storage) = storage_with_one_path_in_two_segments(DUPS, DISTINCT, DupPosition::Head);
 
     let overlay = Overlay::open(&overlay_path(&tmp)).expect("Overlay::open");
     assert_eq!(
@@ -354,7 +416,7 @@ fn two_segments_can_report_one_source_path() {
 /// peak memory on a large scan, which no assertion on a page can see.
 #[test]
 fn duplicate_paths_disarm_the_shedders_so_the_count_stays_honest() {
-    let (_tmp, storage) = storage_with_one_path_in_two_segments(DUPS, DISTINCT);
+    let (_tmp, storage) = storage_with_one_path_in_two_segments(DUPS, DISTINCT, DupPosition::Head);
 
     let clauses = Clauses {
         order_by: Some(OrderBy {
@@ -399,9 +461,20 @@ fn duplicate_paths_disarm_the_shedders_so_the_count_stays_honest() {
 /// pipeline, whose collapse produces the count directly. Serving the stream
 /// anyway fails this test with a doubled total; reporting the streamed page
 /// as the total fails it with `total == LIMIT`.
+///
+/// **The duplicates sort in the tail here, and that is what makes this about
+/// the gate.** With them at the head a page cut from the front is mostly one
+/// row repeated, so it collapses short and the stream hands back under the
+/// whole-or-declined rule — a different mechanism, which catches the shape
+/// before the duplicate-path gate is consulted at all. Measured: with a
+/// head-position fixture, deleting the `has_duplicate_paths` check from
+/// `try_order_by_name_fast_paths` left this test and the whole tree green. In
+/// the tail position the page comes back whole and distinct, nothing collapses
+/// it, and the gate is the only thing standing between the caller and a total
+/// of `2 * (DISTINCT + 1)`.
 #[test]
 fn duplicate_paths_decline_the_name_streams_so_the_total_stays_honest() {
-    let (_tmp, storage) = storage_with_one_path_in_two_segments(DUPS, DISTINCT);
+    let (_tmp, storage) = storage_with_one_path_in_two_segments(DUPS, DISTINCT, DupPosition::Tail);
 
     let by_name = Clauses {
         order_by: Some(OrderBy {
@@ -414,9 +487,13 @@ fn duplicate_paths_decline_the_name_streams_so_the_total_stays_honest() {
     let page = storage
         .find_symbols(&by_name, Path::new("."))
         .expect("find_symbols ORDER BY name");
+    // Each segment holds its own DISTINCT rows plus the one shared tail key,
+    // so the collapsed answer is 2 * DISTINCT + 1 while the stored per-segment
+    // counts sum to 2 * (DISTINCT + 1) — one more, because each segment counts
+    // the shared key it cannot see the other holding.
     assert_eq!(
         page.total,
-        DISTINCT + 1,
+        2 * DISTINCT + 1,
         "ORDER BY name on a duplicated path must answer with the collapsed \
          answer's size — neither the doubled per-segment sum nor the page's"
     );
@@ -430,7 +507,7 @@ fn duplicate_paths_decline_the_name_streams_so_the_total_stays_honest() {
         .expect("find_symbols bare LIMIT");
     assert_eq!(
         bare_page.total,
-        DISTINCT + 1,
+        2 * DISTINCT + 1,
         "a bare LIMIT declines the same way on this shape"
     );
     assert_eq!(bare_page.rows.len(), LIMIT, "the page itself is still full");
