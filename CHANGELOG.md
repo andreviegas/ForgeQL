@@ -6,6 +6,66 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.161.0] — 2026-08-12 — LIMIT bounds delivery, and `total` counts the answer
+
+### Fixed
+
+- The `total` a `FIND symbols` response carries is now the number of rows that
+  matched, not the number the page holds. It used to be taken after `OFFSET`
+  and `LIMIT` had already cut the page, so under any explicit `LIMIT` the two
+  were equal and every first page read as a whole answer:
+  `ORDER BY lines DESC LIMIT 2` over seven matching rows answered `total: 2`
+  and now answers `total: 7`. The running top-K trim, which discards rows on
+  rank while the segments are still being read, now reports how many it dropped
+  so those rows are counted too.
+- An `ORDER BY … LIMIT k` page can no longer come back holding fewer than `k`
+  rows because duplicates collapsed after the page was chosen. Rows agreeing on
+  name, kind, path and line are now collapsed per segment before anything sheds
+  on rank — both in the running trim and in the bounded choice a segment makes
+  over its own row IDs before building any of them — so a group of duplicates
+  sorting to the front of the window no longer costs the distinct rows that
+  belonged in the answer. Where two segments were built from the same source
+  path a duplicate pair can span both, which a per-segment collapse cannot see;
+  there the trim is not armed at all rather than shed on an incomplete one.
+- A `LIMIT` with no `ORDER BY` no longer changes the answer. It used to stop the
+  scan after `LIMIT + 1` rows, so `total` came back as the size of the page
+  rather than the number of rows that matched, an `OFFSET` paged past rows that
+  were never fetched, and raising the limit could surface rows a smaller one had
+  not shown. Such a query is now bounded the way an ordered one is — a running
+  top-K trim across the whole scan — because the pipeline already sorts by
+  `(name, line, path)` when no `ORDER BY` is given, so `LIMIT k` asks for the k
+  smallest rows under that ordering rather than for whichever k the scan reached
+  first — with one qualification the ordering never settled in the first place:
+  where more rows than the page holds compare *equal* on the ordering field and
+  on all of `name`, `line` and `path`, which two rows can be while differing in
+  `fql_kind`, the bounded partition is unstable and raising the limit may still
+  swap which of them is shown. Four cases in the golden suite that recorded the
+  old behaviour as a known defect are now enforced instead.
+- The in-memory backend carried the same defect at its own early exit and is
+  fixed the same way: it too builds and ranks every matching row, holding the
+  retained set to a bounded window instead of keeping whichever rows the scan
+  reached first.
+
+### Changed
+
+- The trim that bounds a page needs `k` no greater than 1000, no `OFFSET`, no
+  `GROUP BY` and no `HAVING`; outside that gate an unscoped scan materialises
+  every matching row and can now be refused by the row budget where the old cap
+  let it complete with a wrong answer.
+- The candidate row IDs a scan holds before it builds anything now have a bound
+  of their own, about 537 million — the same 2 GiB of memory measured against
+  four bytes a row ID instead of 1,600 a built row.
+  `FORGEQL_FIND_MAX_ROW_IDS` overrides it and `0` disables it, matching
+  `FORGEQL_FIND_MAX_ROWS`.
+
+### Known defects
+
+- One place still answers with the size of the page rather than of the answer:
+  `ORDER BY name` with a small `LIMIT`, no `IN`/`EXCLUDE` and no uncommitted
+  edits streams `limit + offset` rows out of the name index and stops, so it
+  cannot count what it did not read. It is pinned as a failing case in the
+  golden suite rather than left to be discovered.
+
 ## [0.160.0] — 2026-08-11 — an ordered page is chosen from the columns, and only its winners are built
 
 ### Performance
