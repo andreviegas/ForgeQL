@@ -337,6 +337,28 @@ impl ColumnarStorage {
                 manifest.master_commit
             );
         }
+        // Past the threshold, seeding stops paying: every attach re-links
+        // and re-opens the whole change set, and the merged-stream total
+        // walks it again per query. Compact once into a full overlay and let
+        // every later attach take the fast path.
+        let effective_paths = manifest
+            .entries
+            .iter()
+            .map(|e| e.source_path.as_path())
+            .chain(manifest.removed_paths.iter().map(PathBuf::as_path))
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        if effective_paths >= Self::chain_compact_threshold() {
+            return Self::compact_chain(
+                ctx,
+                &manifest,
+                manifest_path,
+                &master_path,
+                worktree_path,
+                commit_sha,
+                lang_registry,
+            );
+        }
         let shared = Self::shared_open(ctx, &master_path)
             .with_context(|| format!("open master overlay for chained {commit_sha}"))?;
         let mut storage = Self::finish_open(worktree_path, shared, lang_registry, commit_sha);
@@ -415,6 +437,59 @@ impl ColumnarStorage {
             .extend(manifest.added_paths.iter().cloned());
         self.save_delta()?;
         Ok(())
+    }
+
+    /// Compacts a chained commit into a full overlay: the master's
+    /// unshadowed segments plus the manifest entries, assembled once and
+    /// written where every later attach finds it. Runs under the overlay
+    /// lock with the same peer re-check as the build path; the superseded
+    /// manifest is removed afterwards, and any failure propagates so the
+    /// caller falls back to the full build — never to a smaller index.
+    fn compact_chain(
+        ctx: &ColumnarBuildContext,
+        manifest: &super::super::chain_manifest::ChainManifest,
+        manifest_path: &Path,
+        master_path: &Path,
+        worktree_path: PathBuf,
+        commit_sha: &str,
+        lang_registry: Arc<LanguageRegistry>,
+    ) -> Result<Self> {
+        let overlay_path = ctx.overlay_path_for(commit_sha);
+        let _lock = OverlayLock::acquire(&overlay_path)
+            .map_err(|e| anyhow!("overlay lock acquire failed for {commit_sha}: {e}"))?;
+        if !overlay_path.exists() {
+            let master = Self::shared_open(ctx, master_path)?;
+            OverlayBuilder::from_chain(&master.overlay, manifest, ctx, &worktree_path)
+                .build_and_persist(&overlay_path)?;
+        }
+        let shared = Self::shared_open(ctx, &overlay_path)?;
+        // The manifest is superseded by construction — this commit now has a
+        // full overlay, which every attach prefers. Best-effort removal; a
+        // survivor is unreachable garbage, never load-bearing.
+        let _ = std::fs::remove_file(manifest_path);
+        info!(
+            %commit_sha,
+            "columnar warm_or_open: chain compacted into a full overlay"
+        );
+        Ok(Self::finish_open(
+            worktree_path,
+            shared,
+            lang_registry,
+            commit_sha,
+        ))
+    }
+
+    /// How many distinct changed-or-removed chain paths an attach
+    /// serves through seeding before it compacts the chain into a full
+    /// overlay instead. The write cost of a chained commit grows with its
+    /// cumulative churn while a compaction is a full corpus merge, so the
+    /// right value differs per machine; the environment variable overrides
+    /// the default.
+    fn chain_compact_threshold() -> usize {
+        std::env::var("FORGEQL_CHAIN_COMPACT_PATHS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(512)
     }
 
     /// Whether rebuilding from `input` would regenerate a segment that is

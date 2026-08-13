@@ -238,6 +238,47 @@ impl OverlayBuilder {
             segment_map,
         }
     }
+
+    /// Builder for compacting a chained commit into a full overlay: the
+    /// master overlay's unshadowed segments plus the chain manifest's
+    /// entries, all addressed by content ID in the shared store. The same
+    /// merge `from_merge` builds from a live session, derived from the
+    /// persisted artefacts instead.
+    #[must_use]
+    pub fn from_chain(
+        base_overlay: &super::overlay::Overlay,
+        manifest: &super::chain_manifest::ChainManifest,
+        ctx: &super::build_context::ColumnarBuildContext,
+        worktree_root: &std::path::Path,
+    ) -> Self {
+        let removed: std::collections::HashSet<&std::path::Path> = manifest
+            .removed_paths
+            .iter()
+            .map(std::path::PathBuf::as_path)
+            .collect();
+        let mut segment_map = std::collections::HashMap::new();
+        for meta in base_overlay.segments() {
+            if removed.contains(meta.source_path.as_path()) {
+                continue;
+            }
+            let _ = segment_map.insert(
+                worktree_root.join(&meta.source_path),
+                hex_to_bytes(&meta.hex_content_id),
+            );
+        }
+        for entry in &manifest.entries {
+            let _ = segment_map.insert(
+                worktree_root.join(&entry.source_path),
+                hex_to_bytes(&entry.hex_content_id),
+            );
+        }
+        Self {
+            provider_id: ctx.provider_id.clone(),
+            segments_dir: ctx.segments_dir.clone(),
+            worktree_root: worktree_root.to_path_buf(),
+            segment_map,
+        }
+    }
     // ─────────────────────────────────────────────────────────────────────────
     // Private step implementations extracted from `build_and_persist`.
     // ─────────────────────────────────────────────────────────────────────────

@@ -500,3 +500,54 @@ fn the_merged_stream_matches_the_seeded_pipeline() {
         "merged stream total differs from the seeded pipeline"
     );
 }
+
+/// Compaction probe — run by `a_chain_past_the_threshold_compacts_into_a_full_overlay`
+/// in a child process with `FORGEQL_CHAIN_COMPACT_PATHS=1`, so the threshold
+/// trips on the fixture chain without touching this process's environment.
+#[test]
+#[ignore = "driven by a_chain_past_the_threshold_compacts_into_a_full_overlay with a scoped env var"]
+fn chain_compaction_probe() {
+    let fx = chain_fixture();
+    let manifest_path = fx.ctx.chain_manifest_path_for(CHILD_COMMIT);
+    fx.manifest.save(&manifest_path).expect("manifest save");
+    let storage = ColumnarStorage::warm_or_open(
+        &fx.ctx,
+        empty_input(),
+        fx.worktree.clone(),
+        CHILD_COMMIT,
+        registry(),
+    )
+    .expect("compacted attach");
+    // The chain compacted: a full overlay exists and the manifest is gone.
+    assert!(
+        fx.ctx.overlay_path_for(CHILD_COMMIT).exists(),
+        "no overlay written at the compaction threshold"
+    );
+    assert!(!manifest_path.exists(), "superseded manifest survived");
+    // And the compacted overlay serves the effective state, rows and total.
+    let (flat, _flat_tmp) = flat_storage_of_effective_state(&fx);
+    let clauses = Clauses::default();
+    let compacted = storage.find_symbols(&clauses, &fx.worktree).expect("find");
+    let flat_page = flat.find_symbols(&clauses, &fx.worktree).expect("flat");
+    assert_eq!(
+        columnar_key_tuples(&compacted),
+        columnar_key_tuples(&flat_page),
+        "compacted overlay differs from a flat rebuild of the same state"
+    );
+    assert_eq!(compacted.total, flat_page.total, "compacted total differs");
+}
+
+#[test]
+fn a_chain_past_the_threshold_compacts_into_a_full_overlay() {
+    let exe = std::env::current_exe().expect("current_exe");
+    let mut cmd = std::process::Command::new(&exe);
+    let _ = cmd.args(["--exact", "chain_compaction_probe", "--ignored"]);
+    let _ = cmd.env("FORGEQL_CHAIN_COMPACT_PATHS", "1");
+    let out = cmd.output().expect("spawn probe");
+    assert!(
+        out.status.success(),
+        "compaction probe failed:\n{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
