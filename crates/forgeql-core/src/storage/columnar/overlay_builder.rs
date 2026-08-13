@@ -113,13 +113,23 @@ impl OverlayBuilder {
         // 5. Merged kind postings.
         let kind_postings = Self::step5_build_kind_postings(&segs, &row_offsets, &seg_dedup)?;
 
-        // 5.5. Enrichment attribute bitmaps.
-        let enrich_bitmaps_bytes =
-            Self::step55_build_enrich_bitmaps(&segs, &row_offsets, &seg_dedup)?;
-
-        // 6. Merged name FST, postings, and trigrams.
-        let (name_fst_bytes, name_postings_bytes, name_trigram_postings) =
-            Self::step6_build_name_fst(&segs, &row_offsets)?;
+        // 5.5 ∥ 6 ∥ 6a. Enrichment bitmaps, the name merge, and the trigram
+        //    pass read the same immutable inputs and write disjoint outputs,
+        //    so they run in parallel. The name merge still accumulates its
+        //    intermediate map, so the joined peak is the overlap of the
+        //    concurrent steps rather than the largest single one.
+        let (enrich_res, (name_res, trigram_res)) = rayon::join(
+            || Self::step55_build_enrich_bitmaps(&segs, &row_offsets, &seg_dedup),
+            || {
+                rayon::join(
+                    || Self::step6_build_name_fst(&segs, &row_offsets),
+                    || Self::step6a_build_trigrams(&segs, &row_offsets),
+                )
+            },
+        );
+        let enrich_bitmaps_bytes = enrich_res?;
+        let (name_fst_bytes, name_postings_bytes) = name_res?;
+        let name_trigram_postings = trigram_res?;
 
         // 7. Segment metadata list (source segments only — file-only entries
         //    go into the separate `file_entries` blob, not segment_metas).
@@ -611,14 +621,10 @@ impl OverlayBuilder {
 
     // ── Step 6 ───────────────────────────────────────────────────────────────
 
-    #[expect(
-        clippy::type_complexity,
-        reason = "triple return (fst_bytes, postings_bytes, trigram_map) is self-documenting at the call site"
-    )]
     fn step6_build_name_fst(
         segs: &[(PathBuf, String, SegmentReader)],
         row_offsets: &[u32],
-    ) -> Result<(Vec<u8>, Vec<u8>, HashMap<[u8; 3], Vec<u8>>)> {
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
         let t_step = std::time::Instant::now();
         let mut merged_names: BTreeMap<Vec<u8>, Vec<u32>> = BTreeMap::new();
         for (seg_idx, (_, _, reader)) in segs.iter().enumerate() {
@@ -638,29 +644,9 @@ impl OverlayBuilder {
         let merged_names_len = merged_names.len();
         let mut name_postings_bytes: Vec<u8> = Vec::new();
         let mut fst_builder = MapBuilder::memory();
-        // Build the trigram index as we walk the merged name list.
-        // Mirrors `ast::trigram::TrigramIndex` semantics: ASCII lower-case,
-        // dedup trigrams per name, ascending row IDs.
-        let mut trigram_merged: HashMap<[u8; 3], RoaringBitmap> = HashMap::new();
         for (name_bytes, mut rows) in merged_names {
             rows.sort_unstable();
             rows.dedup();
-            if name_bytes.len() >= 3 {
-                let mut seen: HashSet<[u8; 3]> = HashSet::new();
-                for w in name_bytes.windows(3) {
-                    let t = [
-                        w[0].to_ascii_lowercase(),
-                        w[1].to_ascii_lowercase(),
-                        w[2].to_ascii_lowercase(),
-                    ];
-                    if seen.insert(t) {
-                        let bm = trigram_merged.entry(t).or_default();
-                        for r in &rows {
-                            let _ = bm.insert(*r);
-                        }
-                    }
-                }
-            }
             let byte_offset = name_postings_bytes.len();
             let count = rows.len();
             for r in &rows {
@@ -672,6 +658,71 @@ impl OverlayBuilder {
                 .context("inserting name into overlay FST")?;
         }
         let name_fst_bytes = fst_builder.into_inner().context("finalising overlay FST")?;
+        info!(
+            ms = t_step.elapsed().as_millis(),
+            unique_names = merged_names_len,
+            fst_bytes = name_fst_bytes.len(),
+            mem = %crate::mem::snapshot(), "TIMING step6: name FST + postings",
+        );
+        Ok((name_fst_bytes, name_postings_bytes))
+    }
+
+    /// Step 6a: the trigram bitmaps, computed per segment in parallel.
+    ///
+    /// Mirrors `ast::trigram::TrigramIndex` semantics: ASCII lower-case,
+    /// trigrams deduplicated per name, ascending global row IDs. Every
+    /// segment walks its own (already sorted) name FST once and offsets its
+    /// local rows into the global ID space; bitmap union is associative and
+    /// commutative, so the per-segment maps fold in parallel and the merged
+    /// content is identical to computing it from the merged name list.
+    fn step6a_build_trigrams(
+        segs: &[(PathBuf, String, SegmentReader)],
+        row_offsets: &[u32],
+    ) -> Result<HashMap<[u8; 3], Vec<u8>>> {
+        let t_step = std::time::Instant::now();
+        let trigram_merged: HashMap<[u8; 3], RoaringBitmap> = segs
+            .par_iter()
+            .enumerate()
+            .map(|(seg_idx, (_, _, reader))| {
+                let row_offset = row_offsets[seg_idx];
+                let name_postings_raw = reader.name_postings_bytes();
+                let mut local: HashMap<[u8; 3], RoaringBitmap> = HashMap::new();
+                let mut stream = reader.name_fst.stream();
+                while let Some((name_bytes, encoded)) = stream.next() {
+                    if name_bytes.len() < 3 {
+                        continue;
+                    }
+                    let rows = decode_name_postings_raw(encoded, name_postings_raw);
+                    let mut seen: HashSet<[u8; 3]> = HashSet::new();
+                    for w in name_bytes.windows(3) {
+                        let t = [
+                            w[0].to_ascii_lowercase(),
+                            w[1].to_ascii_lowercase(),
+                            w[2].to_ascii_lowercase(),
+                        ];
+                        if seen.insert(t) {
+                            let bm = local.entry(t).or_default();
+                            for r in &rows {
+                                let _ = bm.insert(r + row_offset);
+                            }
+                        }
+                    }
+                }
+                local
+            })
+            .reduce(HashMap::new, |mut merged, local| {
+                for (t, bm) in local {
+                    match merged.entry(t) {
+                        std::collections::hash_map::Entry::Occupied(mut e) => {
+                            *e.get_mut() |= bm;
+                        }
+                        std::collections::hash_map::Entry::Vacant(v) => {
+                            let _ = v.insert(bm);
+                        }
+                    }
+                }
+                merged
+            });
         let mut name_trigram_postings: HashMap<[u8; 3], Vec<u8>> =
             HashMap::with_capacity(trigram_merged.len());
         for (trigram, bitmap) in &trigram_merged {
@@ -683,12 +734,10 @@ impl OverlayBuilder {
         }
         info!(
             ms = t_step.elapsed().as_millis(),
-            unique_names = merged_names_len,
             trigrams = name_trigram_postings.len(),
-            fst_bytes = name_fst_bytes.len(),
-            mem = %crate::mem::snapshot(), "TIMING step6: name FST + trigrams",
+            mem = %crate::mem::snapshot(), "TIMING step6a: trigram bitmaps (parallel)",
         );
-        Ok((name_fst_bytes, name_postings_bytes, name_trigram_postings))
+        Ok(name_trigram_postings)
     }
 
     /// Step 6.5 (BUG-006 U3): merge every segment's usage postings into one
