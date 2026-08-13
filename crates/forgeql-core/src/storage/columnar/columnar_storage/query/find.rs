@@ -773,12 +773,18 @@ impl ColumnarStorage {
     /// ordering starts with `name` ascending — the order the stream serves.
     ///
     /// Each streams the first `limit + offset` rows directly from the name FST
-    /// in lexicographic order, materialising only those rows. All are gated on
-    /// an empty dirty overlay, because dirty rows are not path-sorted and could
-    /// carry names that precede committed rows already streamed, and on unique
-    /// source paths, because the honest `total` below sums stored per-segment
-    /// counts that a duplicated path would double-count. Returns `None` when no
-    /// name-ordered fast-path applies, so the caller runs the pipeline.
+    /// in lexicographic order, materialising only those rows. The ascending
+    /// arms (bare LIMIT and `ORDER BY name ASC`) also serve a session with
+    /// dirty rows: every dirty segment carries its own sorted name FST, so the
+    /// overlay stream and the dirty streams merge name by name, overlay rows
+    /// under a shadowed path are skipped, and the total becomes the masked
+    /// stored counts plus the dirty segments' distinct counts. The descending
+    /// and kind-filtered arms still decline on a dirty session — they have not
+    /// learned the merge. All arms require unique source paths, because the
+    /// honest `total` below sums stored per-segment counts that a duplicated
+    /// path would double-count — on the dirty side the same holds for two
+    /// dirty segments over one path. Returns `None` when no name-ordered
+    /// fast-path applies, so the caller runs the pipeline.
     ///
     /// **A page these return is whole or they decline it.** Duplicates are
     /// collapsed after the stream, so a window holding two rows that are one
@@ -799,8 +805,24 @@ impl ColumnarStorage {
     /// of its page; the golden case that pinned that as an expected failure is
     /// now enforced.
     fn try_order_by_name_fast_paths(&self, clauses: &Clauses) -> Option<FindPage> {
-        if !self.dirty.is_empty() {
-            return None;
+        // Dirty rows sit outside the overlay's name index, but every dirty
+        // segment carries its own sorted name FST, so the ascending arms
+        // merge them with the overlay stream and mask the shadowed paths.
+        // The descending and kind-filtered arms have not learned the merge
+        // yet and still decline on a dirty session.
+        let dirty_active = !self.dirty.is_empty();
+        if dirty_active {
+            // Two dirty segments over one source path would double-count in
+            // the merged total exactly like the committed twin case below.
+            // Reindex keeps one segment per path; this guard keeps the total
+            // honest if that invariant ever moves.
+            let mut dirty_paths: std::collections::HashSet<&std::path::Path> =
+                std::collections::HashSet::new();
+            for ds in &self.dirty.added {
+                if !dirty_paths.insert(ds.source_path.as_path()) {
+                    return None;
+                }
+            }
         }
         // Two segments built from one source path can hold the same
         // (name, fql_kind, path, line) row, and the stored per-segment
@@ -821,16 +843,44 @@ impl ColumnarStorage {
         }
         let (mut results, matched) =
             if bare_limit_name_fast_path(clauses) || order_by_name_fast_path(clauses) {
-                (
-                    self.overlay().stream_names_asc(need, self.segments()),
-                    self.overlay().dedup_total(),
-                )
+                if dirty_active {
+                    let shadowed = &self.dirty.removed_paths;
+                    let masked_total: usize = self
+                        .overlay()
+                        .segments()
+                        .iter()
+                        .filter(|m| !shadowed.contains(&m.source_path))
+                        .map(|m| m.dedup_row_count as usize)
+                        .sum();
+                    let mut rows = self.overlay().stream_names_asc_merged(
+                        need,
+                        self.segments(),
+                        shadowed,
+                        &self.dirty.added,
+                    );
+                    // The pipeline stamps workspace usage totals onto every
+                    // row it serves for a dirty session; the merged stream
+                    // serves the same rows, so it stamps the same way.
+                    self.stamp_usage_counts(&mut rows);
+                    (rows, masked_total + self.dirty_distinct_total())
+                } else {
+                    (
+                        self.overlay().stream_names_asc(need, self.segments()),
+                        self.overlay().dedup_total(),
+                    )
+                }
             } else if order_by_name_desc_fast_path(clauses) {
+                if dirty_active {
+                    return None;
+                }
                 (
                     self.overlay().stream_names_desc(need, self.segments()),
                     self.overlay().dedup_total(),
                 )
             } else if let Some(kind) = order_by_name_kind_fast_path(clauses) {
+                if dirty_active {
+                    return None;
+                }
                 let kind_bm = self.overlay().prefilter_kind(kind)?;
                 let matched = usize::try_from(kind_bm.len()).unwrap_or(usize::MAX);
                 (
@@ -839,6 +889,9 @@ impl ColumnarStorage {
                     matched,
                 )
             } else if let Some(kind) = order_by_name_kind_desc_fast_path(clauses) {
+                if dirty_active {
+                    return None;
+                }
                 let kind_bm = self.overlay().prefilter_kind(kind)?;
                 let matched = usize::try_from(kind_bm.len()).unwrap_or(usize::MAX);
                 (
@@ -866,6 +919,26 @@ impl ColumnarStorage {
         // never had to read — see the note above this function.
         crate::filter::apply_clauses(&mut results, clauses);
         Some(FindPage::of(results, matched))
+    }
+
+    /// The number of distinct answer rows the dirty segments contribute:
+    /// distinct `(name, fql_kind, line)` per segment, summed. Paths are
+    /// unique across dirty segments (guarded where the merge is armed) and
+    /// every dirty path is masked out of the overlay side, so this sum joins
+    /// the masked stored counts without double-counting any row.
+    fn dirty_distinct_total(&self) -> usize {
+        let mut total = 0usize;
+        for ds in &self.dirty.added {
+            let all: RoaringBitmap = (0..ds.reader.row_count).collect();
+            let rows = ds.reader.materialize_rows(&all, Some(&ds.source_path));
+            let mut seen: std::collections::HashSet<(String, Option<String>, Option<usize>)> =
+                std::collections::HashSet::new();
+            for r in rows {
+                let _ = seen.insert((r.name, r.fql_kind, r.line));
+            }
+            total += seen.len();
+        }
+        total
     }
 
     /// Build the initial `segment index -> local row bitmap` candidate map.

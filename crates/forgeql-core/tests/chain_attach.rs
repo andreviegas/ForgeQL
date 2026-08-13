@@ -403,3 +403,100 @@ fn shadowing_one_path_never_shadows_its_byte_identical_twin() {
         "replaced file still serves its old rows: {by_file:?}"
     );
 }
+
+#[test]
+fn seeded_sessions_stream_the_ascending_shapes_with_an_honest_total() {
+    use forgeql_core::ir::{OrderBy, SortDirection};
+
+    let fx = chain_fixture();
+    let chained = chain_attach(&fx);
+    let (flat, _flat_tmp) = flat_storage_of_effective_state(&fx);
+
+    // The bare LIMIT shape rides the merged stream on a seeded session; the
+    // flat rebuild of the same state is the ground truth for rows and total.
+    let bare = Clauses {
+        limit: Some(3),
+        ..Clauses::default()
+    };
+    let chained_page = chained
+        .find_symbols(&bare, &fx.worktree)
+        .expect("chained bare");
+    let flat_page = flat.find_symbols(&bare, &fx.worktree).expect("flat bare");
+    assert_eq!(
+        columnar_key_tuples(&chained_page),
+        columnar_key_tuples(&flat_page),
+        "bare LIMIT page differs between merged stream and flat rebuild"
+    );
+    assert_eq!(
+        chained_page.total, flat_page.total,
+        "bare LIMIT total differs between merged stream and flat rebuild"
+    );
+
+    // ORDER BY name ASC rides the same merged stream.
+    let asc = Clauses {
+        order_by: Some(OrderBy {
+            field: "name".to_owned(),
+            direction: SortDirection::Asc,
+        }),
+        limit: Some(4),
+        ..Clauses::default()
+    };
+    let chained_page = chained
+        .find_symbols(&asc, &fx.worktree)
+        .expect("chained asc");
+    let flat_page = flat.find_symbols(&asc, &fx.worktree).expect("flat asc");
+    assert_eq!(
+        columnar_key_tuples(&chained_page),
+        columnar_key_tuples(&flat_page),
+        "ORDER BY name page differs between merged stream and flat rebuild"
+    );
+    assert_eq!(
+        chained_page.total, flat_page.total,
+        "ORDER BY name total differs between merged stream and flat rebuild"
+    );
+}
+
+#[test]
+fn the_merged_stream_matches_the_seeded_pipeline() {
+    use forgeql_core::ir::{CompareOp, OrderBy, Predicate, PredicateValue, SortDirection};
+
+    // Both routes run on the SAME seeded session: the streamed shape, and a
+    // pipeline twin whose WHERE matches every row (lines are 1-based) but
+    // declines the stream. If the merged stream ever drifted from what the
+    // seeded pipeline serves, this is the test that names it — comparing two
+    // streams against each other could not.
+    let fx = chain_fixture();
+    let chained = chain_attach(&fx);
+
+    let streamed = Clauses {
+        order_by: Some(OrderBy {
+            field: "name".to_owned(),
+            direction: SortDirection::Asc,
+        }),
+        limit: Some(4),
+        ..Clauses::default()
+    };
+
+    let mut pipeline = streamed.clone();
+    pipeline.where_predicates = vec![Predicate {
+        field: "line".to_owned(),
+        op: CompareOp::Gte,
+        value: PredicateValue::Number(1),
+    }];
+
+    let streamed_page = chained
+        .find_symbols(&streamed, &fx.worktree)
+        .expect("streamed");
+    let pipeline_page = chained
+        .find_symbols(&pipeline, &fx.worktree)
+        .expect("pipeline");
+    assert_eq!(
+        columnar_key_tuples(&streamed_page),
+        columnar_key_tuples(&pipeline_page),
+        "merged stream page differs from the seeded pipeline"
+    );
+    assert_eq!(
+        streamed_page.total, pipeline_page.total,
+        "merged stream total differs from the seeded pipeline"
+    );
+}

@@ -1003,8 +1003,10 @@ equal: the page is fully decided by the ordering, on every run and at every `k`.
 That path needs `k` no greater than 1000, no `OFFSET`, no
 `GROUP BY` and no `HAVING`; outside that gate nothing is trimmed, every matching
 row is materialised — unless the ascending name stream claims the clause-free
-shape (no `WHERE`, no `IN`/`EXCLUDE`, no uncommitted edits, unique source paths,
-the asked-for rows within the result budget), which reads `limit + offset` keys
+shape (no `WHERE`, no `IN`/`EXCLUDE`, unique source paths, the asked-for rows
+within the result budget; a session's uncommitted edits are merged into the
+stream from their own sorted name indexes rather than declining it), which
+reads `limit + offset` keys
 of the name index instead — and the scan can be refused where the old fetch cap
 let it complete with a wrong answer. A `HAVING` is deliberately excluded — it runs after the
 page is cut, so a query carrying one is refused here rather than answered from a

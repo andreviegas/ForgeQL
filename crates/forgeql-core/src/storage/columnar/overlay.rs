@@ -944,6 +944,94 @@ impl Overlay {
         results
     }
 
+    /// The ascending name stream, merged with a session's dirty segments and
+    /// masked by its shadow set — the uncommitted-edits / chained-commit
+    /// variant of [`Self::stream_names_asc`].
+    ///
+    /// Every source is sorted (the overlay FST and each dirty segment FST),
+    /// so the merge walks them name by name, and a name group is completed
+    /// across every source before the budget check — `apply_clauses` then
+    /// tie-breaks rows sharing a name exactly as the pipeline would. Overlay
+    /// rows whose segment path is shadowed are skipped: the dirty side owns
+    /// those paths, and serving both would answer one path from two layers.
+    pub(crate) fn stream_names_asc_merged(
+        &self,
+        need: usize,
+        segments: &[Arc<SegmentReader>],
+        shadowed: &std::collections::HashSet<PathBuf>,
+        extra: &[super::dirty_overlay::DirtySegment],
+    ) -> Vec<SymbolMatch> {
+        use fst::Streamer as _;
+        let mut results = Vec::new();
+        let mut ov_stream = self.name_fst.stream();
+        let mut ov_cur: Option<(Vec<u8>, u64)> = ov_stream.next().map(|(n, v)| (n.to_vec(), v));
+        let mut ex_streams: Vec<_> = extra.iter().map(|ds| ds.reader.name_fst.stream()).collect();
+        let mut ex_curs: Vec<Option<Vec<u8>>> = ex_streams
+            .iter_mut()
+            .map(|s| s.next().map(|(n, _)| n.to_vec()))
+            .collect();
+        loop {
+            // The smallest name any source still holds.
+            let mut min: Option<&[u8]> = ov_cur.as_ref().map(|(n, _)| n.as_slice());
+            for c in ex_curs.iter().flatten() {
+                match min {
+                    Some(m) if m <= c.as_slice() => {}
+                    _ => min = Some(c.as_slice()),
+                }
+            }
+            let Some(min) = min else { break };
+            let name = min.to_vec();
+            if let Some((n, packed)) = &ov_cur
+                && *n == name
+            {
+                for &global_id in self.decode_postings_slice(*packed) {
+                    let Some(ptr) = self.resolve_global(global_id) else {
+                        continue;
+                    };
+                    let Some(seg) = segments.get(ptr.segment_idx as usize) else {
+                        continue;
+                    };
+                    let Some(meta) = self.segments.get(ptr.segment_idx as usize) else {
+                        continue;
+                    };
+                    if shadowed.contains(&meta.source_path) {
+                        continue;
+                    }
+                    if let Some(row) = seg.materialize_one_row(ptr.local_row_idx, &meta.source_path)
+                    {
+                        results.push(row);
+                    }
+                }
+                ov_cur = ov_stream.next().map(|(n, v)| (n.to_vec(), v));
+            }
+            for (idx, cur) in ex_curs.iter_mut().enumerate() {
+                if cur.as_deref() == Some(name.as_slice()) {
+                    let ds = &extra[idx];
+                    // Segment name FSTs are keyed from Rust strings, so every
+                    // key is valid UTF-8; a key that were not would be skipped
+                    // here while dirty_distinct_total still counted its rows.
+                    debug_assert!(
+                        std::str::from_utf8(&name).is_ok(),
+                        "dirty segment FST key is not UTF-8"
+                    );
+                    if let Ok(name_str) = std::str::from_utf8(&name) {
+                        for local in ds.reader.lookup_name(name_str) {
+                            if let Some(row) = ds.reader.materialize_one_row(local, &ds.source_path)
+                            {
+                                results.push(row);
+                            }
+                        }
+                    }
+                    *cur = ex_streams[idx].next().map(|(n, _)| n.to_vec());
+                }
+            }
+            if results.len() >= need {
+                break;
+            }
+        }
+        results
+    }
+
     /// Like [`stream_names_asc`] but only emits rows whose global row ID is in `kind_bm`.
     ///
     /// Used by the `ORDER BY name ASC LIMIT N WHERE fql_kind = 'X'` fast-path to
