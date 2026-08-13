@@ -73,6 +73,11 @@ pub struct ColumnarStorage {
     /// restores it automatically on `ROLLBACK`) but excluded from user-facing
     /// `COMMIT MESSAGE` commits via `git::CLEAN_COMMIT_EXCLUDED`.
     delta_path: PathBuf,
+    /// The commit whose overlay this session serves from. Equal to the
+    /// attach commit for a flat open; for a chain attach it is the chain's
+    /// master commit, so a manifest written at the next COMMIT names the
+    /// real overlay and the chain stays one layer deep.
+    pub(crate) master_commit: String,
     /// Pre-computed index stats for `index_stats()`.
     ///
     /// Populated at construction from `overlay.row_count()` so that
@@ -132,6 +137,7 @@ impl ColumnarStorage {
             worktree_root,
             shared,
             dirty: DirtyOverlay::new(),
+            master_commit: String::new(),
             staging_dir,
             lang_registry,
             delta_path,

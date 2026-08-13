@@ -102,6 +102,17 @@ impl ColumnarBuildContext {
             .join(format!("{}.bin", &snapshot_hex[2..]))
     }
 
+    /// Path of the chain manifest for a commit — beside the overlay the
+    /// commit would otherwise have, with a `.chain` extension. Written at
+    /// commit time; read by `warm_or_open` when no overlay exists.
+    #[must_use]
+    pub fn chain_manifest_path_for(&self, snapshot_hex: &str) -> PathBuf {
+        self.overlays_dir
+            .join(self.versioned_provider())
+            .join(&snapshot_hex[..2])
+            .join(format!("{}.chain", &snapshot_hex[2..]))
+    }
+
     /// The context for a bare repository's own segment and overlay stores.
     ///
     /// The store layout, the provider id and the content-hash function are one

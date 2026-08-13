@@ -135,6 +135,33 @@ impl ColumnarStorage {
             }
         }
 
+        // Chain path: no overlay for this commit, but a manifest names the
+        // master overlay it grew from and the per-file segments its changes
+        // promoted. Seeding the session dirty overlay from those serves the
+        // same rows the full build would, through the read path every
+        // editing session already exercises — at the cost of the dirty-side
+        // fast-path declines, never of correctness. Any failure here falls
+        // through to the full build below: a bad manifest can cost time,
+        // never rows.
+        let manifest_path = ctx.chain_manifest_path_for(commit_sha);
+        if manifest_path.exists() {
+            match Self::open_via_chain(
+                ctx,
+                &manifest_path,
+                worktree_path.clone(),
+                commit_sha,
+                Arc::clone(&lang_registry),
+            ) {
+                Ok(storage) => return Ok(storage),
+                Err(e) => {
+                    tracing::warn!(
+                        %commit_sha,
+                        "columnar warm_or_open: chain attach failed — falling back \
+                         to a full build: {e}"
+                    );
+                }
+            }
+        }
         // Slow path: build under lock.
         match OverlayLock::acquire(&overlay_path) {
             Err(e) => {
@@ -270,10 +297,124 @@ impl ColumnarStorage {
         commit_sha: &str,
     ) -> Self {
         let mut storage = Self::from_shared(worktree_path, shared, lang_registry);
+        commit_sha.clone_into(&mut storage.master_commit);
         if let Err(e) = storage.load_delta() {
             tracing::warn!(%commit_sha, "columnar warm_or_open: delta load failed (non-fatal): {e}");
         }
         storage
+    }
+
+    /// Opens a chained commit: the master overlay plus a dirty overlay
+    /// seeded from the commit's chain manifest.
+    ///
+    /// Every failure is an error the caller turns into a full-build
+    /// fallback: an unreadable manifest, another index generation, a master
+    /// overlay not on disk, a named segment that does not open, or an entry
+    /// that shadows a master path without recording the replacement.
+    /// Nothing on this path may produce a smaller index silently — refusal
+    /// and fallback are the only exits besides a complete one.
+    fn open_via_chain(
+        ctx: &ColumnarBuildContext,
+        manifest_path: &Path,
+        worktree_path: PathBuf,
+        commit_sha: &str,
+        lang_registry: Arc<LanguageRegistry>,
+    ) -> Result<Self> {
+        use super::super::chain_manifest::ChainManifest;
+
+        let manifest = ChainManifest::load(manifest_path)?;
+        if manifest.enrich_ver != super::super::ENRICH_VER {
+            anyhow::bail!(
+                "chain manifest for {commit_sha} is from index generation {} (running {})",
+                manifest.enrich_ver,
+                super::super::ENRICH_VER
+            );
+        }
+        let master_path = ctx.overlay_path_for(&manifest.master_commit);
+        if !master_path.exists() {
+            anyhow::bail!(
+                "chain manifest for {commit_sha} names master {} whose overlay is not on disk",
+                manifest.master_commit
+            );
+        }
+        let shared = Self::shared_open(ctx, &master_path)
+            .with_context(|| format!("open master overlay for chained {commit_sha}"))?;
+        let mut storage = Self::finish_open(worktree_path, shared, lang_registry, commit_sha);
+        storage.master_commit.clone_from(&manifest.master_commit);
+        // A restored session delta already holds the seeded chain state plus
+        // any edits made on top of it; seeding again would duplicate rows.
+        if storage.dirty.is_empty() && storage.pending_reindex.is_empty() {
+            storage.seed_dirty_from_chain(&manifest, ctx)?;
+        }
+        info!(
+            %commit_sha,
+            master = %manifest.master_commit,
+            entries = manifest.entries.len(),
+            shadowed = manifest.removed_paths.len(),
+            "columnar warm_or_open: chain attach — master overlay + seeded changes"
+        );
+        Ok(storage)
+    }
+
+    /// Seeds the session dirty overlay from a chain manifest: one dirty
+    /// segment per entry, opened from the content-addressed store and
+    /// hard-linked into this session's staging directory so the delta file
+    /// restores it after a restart exactly like a session-built segment.
+    ///
+    /// Ownership is verified while seeding: an entry whose path the master
+    /// also holds must record the replacement, or one path would answer
+    /// from two layers at once. That inconsistency is a refusal, never a
+    /// repair.
+    fn seed_dirty_from_chain(
+        &mut self,
+        manifest: &super::super::chain_manifest::ChainManifest,
+        ctx: &ColumnarBuildContext,
+    ) -> Result<()> {
+        use super::super::delta_file::staged_segment_path;
+        use super::super::dirty_overlay::DirtySegment;
+
+        let master_paths: std::collections::HashSet<&Path> = self
+            .shared
+            .overlay
+            .segments()
+            .iter()
+            .map(|m| m.source_path.as_path())
+            .collect();
+        for entry in &manifest.entries {
+            if master_paths.contains(entry.source_path.as_path()) && entry.replaces_hex.is_empty() {
+                anyhow::bail!(
+                    "chain entry {} shadows a master segment without recording the \
+                     replacement — one path would answer from two layers",
+                    entry.source_path.display()
+                );
+            }
+            let store = ctx.segment_path_for(&entry.source_path, &entry.hex_content_id);
+            let staged =
+                staged_segment_path(&self.staging_dir, &entry.source_path, &entry.hex_content_id);
+            promote_segment(&store, &staged).with_context(|| {
+                format!("staging chain segment for {}", entry.source_path.display())
+            })?;
+            let reader = SegmentReader::open(&staged).with_context(|| {
+                format!(
+                    "opening chain segment {} for {}",
+                    entry.hex_content_id,
+                    entry.source_path.display()
+                )
+            })?;
+            self.dirty.added.push(DirtySegment {
+                reader: Arc::new(reader),
+                source_path: entry.source_path.clone(),
+                replaces_hex: entry.replaces_hex.clone(),
+            });
+        }
+        self.dirty
+            .removed_paths
+            .extend(manifest.removed_paths.iter().cloned());
+        self.dirty
+            .added_paths
+            .extend(manifest.added_paths.iter().cloned());
+        self.save_delta()?;
+        Ok(())
     }
 
     /// Whether rebuilding from `input` would regenerate a segment that is
@@ -653,10 +794,13 @@ impl ColumnarStorage {
         //    that commits ten times paid that ten times and threw nine of the
         //    results away, because only the last commit is ever attached to.
         //
-        //    Whoever attaches to this commit builds it instead: `warm_or_open`
-        //    already builds an overlay it does not find, so a later `USE` of
-        //    this commit — the takeover, or the branch landing on main — pays
-        //    once for the state it actually reads.
+        //    Whoever attaches to this commit no longer builds it either: the
+        //    chain manifest written in step 5 below names the master overlay
+        //    and these promoted segments, so a later `USE` of this commit
+        //    seeds a dirty overlay from the manifest and answers at once.
+        //    The full build survives only as the fallback for a missing or
+        //    unusable manifest — and as compaction, once a chain grows past
+        //    what the dirty-side read path serves well.
         //
         // 3. The session keeps answering from its base overlay plus the dirty
         //    one, which is what it was doing a moment ago and is still the
@@ -685,13 +829,39 @@ impl ColumnarStorage {
         self.refuse_if_base_segments_vanished(ctx)?;
 
         self.save_delta()?;
-        info!(
-            commit = %new_commit_oid,
-            staged = self.dirty.added.len(),
-            shadowed = self.dirty.removed_paths.len(),
-            "commit: overlay deferred to the next attach on this commit"
-        );
 
+        // 5. Write the chain manifest for the new commit: master overlay +
+        //    this session's cumulative changes. The next attacher opens the
+        //    master and seeds these instead of paying the full merge. The
+        //    dirty overlay is cumulative against the master, so the manifest
+        //    always names one master and one change set — never a chain of
+        //    chains. Best-effort like the deferred build it replaces: a
+        //    failed write costs the attacher time (full build), never rows.
+        if self.master_commit.is_empty() {
+            tracing::warn!(
+                commit = %new_commit_oid,
+                "commit: no master commit recorded — chain manifest not written"
+            );
+        } else {
+            let manifest = super::super::chain_manifest::ChainManifest::from_dirty(
+                &self.master_commit,
+                &self.dirty,
+            );
+            let manifest_path = ctx.chain_manifest_path_for(new_commit_oid);
+            match manifest.save(&manifest_path) {
+                Ok(()) => info!(
+                    commit = %new_commit_oid,
+                    staged = self.dirty.added.len(),
+                    shadowed = self.dirty.removed_paths.len(),
+                    "commit: chain manifest written; overlay build deferred to compaction"
+                ),
+                Err(e) => tracing::warn!(
+                    commit = %new_commit_oid,
+                    "commit: chain manifest write failed (next attach falls back \
+                     to a full build): {e}"
+                ),
+            }
+        }
         Ok(())
     }
 }

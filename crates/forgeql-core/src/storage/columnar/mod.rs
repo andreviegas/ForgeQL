@@ -32,6 +32,7 @@
 //! [`SymbolTable`]: crate::ast::index::SymbolTable
 
 pub mod build_context;
+pub mod chain_manifest;
 pub mod columnar_storage;
 pub mod delta_file;
 pub mod dirty_overlay;
