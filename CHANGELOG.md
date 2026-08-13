@@ -6,6 +6,50 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.165.0] — 2026-08-13 — a commit writes a manifest instead of rebuilding the index
+
+### Added
+
+- Attaching to a commit whose merged index was never built no longer pays a
+  full corpus merge. A commit now writes a small manifest naming the merged
+  index it grew from and the files it changed; the next attach opens that
+  index and serves the changes the same way uncommitted edits are served.
+  Rows and totals are identical to a full rebuild. Queries that ride the
+  name-stream and count fast paths take the slower complete path on such
+  commits, exactly as they do in a session with uncommitted edits, and a
+  missing or unreadable manifest falls back to the full build — a bad
+  manifest can cost time, never rows.
+- The ascending name-stream shapes — a bare `LIMIT` and `ORDER BY name` — no
+  longer fall back to the complete scan in a session with uncommitted edits,
+  or on a commit attached through its chain manifest. Every edited file's
+  index carries its own sorted name list, so the stream merges those with the
+  shared index name by name, skips the shared rows the edits replaced, and
+  reports a total that counts the merged answer. The descending and
+  kind-filtered stream shapes still take the complete scan in such sessions.
+- A commit chain that has grown past a configurable size
+  (`FORGEQL_CHAIN_COMPACT_PATHS`, default 512 changed-or-removed paths) is
+  compacted on attach: its merged index is assembled once from the master
+  index and the recorded changes, written where every later attach finds it,
+  and the superseded manifest is removed. Below the threshold an attach
+  keeps seeding the changes directly, which costs milliseconds; the
+  compaction is the one full merge, paid once per chain instead of never
+  bounding it.
+
+### Performance
+
+- The overlay build runs its enrichment-bitmap step, its name-index merge and
+  its trigram pass in parallel instead of back to back. The three read the
+  same immutable inputs and write different outputs, so the result is
+  unchanged; the wall-clock cost of the group drops toward the cost of the
+  slowest member. Peak build memory does not drop and can rise: the steps
+  now hold their working memory at the same time instead of one after
+  another.
+- The overlay build computes the substring-search trigram bitmaps in a
+  parallel pass over the per-file indexes instead of inside the serial
+  name-index merge. The bitmaps produced are unchanged; the serial part of
+  the build shrinks by the trigram work, which now spreads across cores.
+
+
 ## [0.164.0] — 2026-08-12 — a bare LIMIT rides the name index, and every stream counts the whole answer
 
 ### Performance
