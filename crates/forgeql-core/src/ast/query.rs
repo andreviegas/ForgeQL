@@ -162,6 +162,9 @@ pub fn group_files_by_depth(
             // "size" mirrors "total_size" so ORDER BY size works uniformly
             // across individual files and directory summary entries.
             "size":       total_size,
+            // "count" is the uniform name a directory row carries everywhere;
+            // "file_count" is kept for readers of the historical shape.
+            "count":      count,
             "file_count": count,
             "total_size": total_size,
             "kind":       "directory_summary",
@@ -171,7 +174,7 @@ pub fn group_files_by_depth(
 }
 
 /// Find the number of common leading path segments across all paths.
-fn common_prefix_depth(paths: &[&str]) -> usize {
+pub(crate) fn common_prefix_depth(paths: &[&str]) -> usize {
     if paths.is_empty() {
         return 0;
     }

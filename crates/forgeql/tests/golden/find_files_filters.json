@@ -1,11 +1,11 @@
 {
   "suite": "find_files_filters",
-  "description": "The FIND files predicate surface on the frozen Zephyr corpus: a numeric comparison on size, an exact path lookup, extension combined with an IN glob, and the heredoc form of a regex asserted equivalent to the inline form. clause_pipeline covers ORDER BY size DESC; these cover the filters that select which files are ordered at all. FIND files reports its total inside the response payload rather than at the top level, and that total counts every match rather than being capped by LIMIT — the glob case pins 3 rows out of 14 to hold that.",
+  "description": "The FIND files predicate surface on the frozen Zephyr corpus: a numeric comparison on size, an exact path lookup, extension combined with an IN glob, and the heredoc form of a regex asserted equivalent to the inline form. clause_pipeline covers ORDER BY size DESC; these cover the filters that select which files are ordered at all. FIND files reports its total inside the response payload rather than at the top level, and that total counts every match rather than being capped by LIMIT — the glob case pins 3 rows out of 14 to hold that. Directory rows carry their subtree byte total and would dominate a size ordering, so the size case scopes to files with path NOT LIKE.",
   "cases": [
     {
       "name": "size_comparison_selects_files_above_a_threshold",
       "use": "zephyr-andre.frozen",
-      "fql": "FIND files WHERE size > 50000 ORDER BY size DESC LIMIT 5",
+      "fql": "FIND files WHERE size > 50000 WHERE path NOT LIKE '%/' ORDER BY size DESC LIMIT 5",
       "assert": {
         "row_count": 5,
         "ordered": { "by": "size", "dir": "desc" },

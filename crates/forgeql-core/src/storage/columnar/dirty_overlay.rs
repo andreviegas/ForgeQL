@@ -159,6 +159,9 @@ impl DirtyOverlay {
     ///
     /// Called by `reindex_files` for exactly the files it would otherwise skip.
     pub fn add_path(&mut self, source_path: PathBuf) {
+        // A path added in-session is present now: any earlier removal record
+        // for it is stale and would mask the new file from the stored list.
+        let _ = self.removed_paths.remove(&source_path);
         let _ = self.added_paths.insert(source_path);
     }
 

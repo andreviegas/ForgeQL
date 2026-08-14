@@ -67,7 +67,7 @@ cleanly.
 | File structure | `SHOW outline OF 'file'` |
 | Class members | `SHOW members OF 'type'` |
 | Call graph | `SHOW callees OF 'name'` |
-| File listing | `FIND files [IN 'path/**'] [WHERE name = '...'] [WHERE extension = '...']` — every row carries `node_id` + `rev`; directories are rows too, marked by a trailing slash (`WHERE path LIKE '%/'`) |
+| File listing | `FIND files [IN 'path/**'] [WHERE name = '...'] [WHERE extension = '...']` — every row carries `node_id` + `rev`; directories are rows too, marked by a trailing slash (`WHERE path LIKE '%/'`): a directory row exists when files lie beneath it, its `size` is their total bytes — an empty directory created this session is addressable by its handle but not listed |
 | Whole file / directory as a node | `n<hex>` with no ordinal (straight from `FIND files`): `SHOW NODE '<hex>'` reads it, `'<hex>(k-m)'` a line range, `INSERT AFTER NODE '<hex>'` appends at EOF |
 | Review an uncommitted change | `SHOW DIFF STAT` — the file map; then `SHOW DIFF IN 'path/**'` for hunks. `EXPORT PATCH` covers **committed** work only. |
 | Hotspots | `FIND symbols WHERE fql_kind = 'function' ORDER BY usages DESC LIMIT 10` — `usages` is a real workspace-total count |

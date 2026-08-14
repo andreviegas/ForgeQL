@@ -10,11 +10,11 @@
         "row_count": 5,
         "ordered": { "by": "size", "dir": "desc" },
         "rows": [
-          { "path": "boards/", "size": 80026452 },
-          { "path": "drivers/", "size": 42654779 },
-          { "path": "tests/", "size": 40064694 },
-          { "path": "doc/", "size": 23791944 },
-          { "path": "subsys/", "size": 23303961 }
+          { "path": "boards/", "size": 80008892 },
+          { "path": "drivers/", "size": 42648123 },
+          { "path": "tests/", "size": 40047912 },
+          { "path": "doc/", "size": 23790713 },
+          { "path": "subsys/", "size": 23301428 }
         ]
       }
     },

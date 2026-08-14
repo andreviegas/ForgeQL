@@ -27,9 +27,19 @@ use common::{engine_with_session, execute_fql, node_rev, try_fql};
 
 #[test]
 fn find_files_hands_out_a_handle_and_a_rev_per_row() {
-    let (mut engine, sid, dir) = engine_with_session();
+    // Pre-registration: the stored list serves FIND files, and the engine
+    // owns the worktree — a file written behind its back is not workspace.
+    // One indexed file anchors the overlay — a workspace holding only
+    // unclaimed extensions cannot register a columnar session yet.
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("anchor.cpp"),
+        "int anchor() { return 0; }\n",
+    )
+    .unwrap();
     fs::create_dir_all(dir.path().join("pkg")).unwrap();
     fs::write(dir.path().join("pkg/a.txt"), "a\n").unwrap();
+    let (mut engine, sid, _dir) = common::columnar_session_in(dir).into_parts();
 
     match execute_fql(&mut engine, &sid, "FIND files WHERE path LIKE 'pkg%'") {
         ForgeQLResult::Show(show) => {
@@ -186,11 +196,19 @@ fn copy_node_to_a_trailing_slash_path_is_the_same_as_a_directory_handle() {
 
 #[test]
 fn copy_nodes_found_refuses_a_basename_collision_naming_both_sources() {
-    let (mut engine, sid, dir) = engine_with_session();
+    // One indexed file anchors the overlay — a workspace holding only
+    // unclaimed extensions cannot register a columnar session yet.
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("anchor.cpp"),
+        "int anchor() { return 0; }\n",
+    )
+    .unwrap();
     fs::create_dir_all(dir.path().join("a")).unwrap();
     fs::create_dir_all(dir.path().join("b")).unwrap();
     fs::write(dir.path().join("a/idle.txt"), "first\n").unwrap();
     fs::write(dir.path().join("b/idle.txt"), "second\n").unwrap();
+    let (mut engine, sid, dir) = common::columnar_session_in(dir).into_parts();
 
     // FIND files renders through the SHOW family; the armed set is implicit.
     let r = execute_fql(&mut engine, &sid, "FIND files WHERE name = 'idle.txt'");
@@ -220,11 +238,19 @@ fn copy_nodes_found_refuses_a_basename_collision_naming_both_sources() {
 
 #[test]
 fn move_nodes_found_refuses_a_basename_collision_and_moves_nothing() {
-    let (mut engine, sid, dir) = engine_with_session();
+    // One indexed file anchors the overlay — a workspace holding only
+    // unclaimed extensions cannot register a columnar session yet.
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("anchor.cpp"),
+        "int anchor() { return 0; }\n",
+    )
+    .unwrap();
     fs::create_dir_all(dir.path().join("a")).unwrap();
     fs::create_dir_all(dir.path().join("b")).unwrap();
     fs::write(dir.path().join("a/idle.txt"), "first\n").unwrap();
     fs::write(dir.path().join("b/idle.txt"), "second\n").unwrap();
+    let (mut engine, sid, dir) = common::columnar_session_in(dir).into_parts();
 
     let r = execute_fql(&mut engine, &sid, "FIND files WHERE name = 'idle.txt'");
     let ForgeQLResult::Show(show) = r else {
@@ -263,10 +289,18 @@ fn move_nodes_found_refuses_a_basename_collision_and_moves_nothing() {
 
 #[test]
 fn copy_nodes_found_reports_one_edit_per_destination_file() {
-    let (mut engine, sid, dir) = engine_with_session();
+    // One indexed file anchors the overlay — a workspace holding only
+    // unclaimed extensions cannot register a columnar session yet.
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("anchor.cpp"),
+        "int anchor() { return 0; }\n",
+    )
+    .unwrap();
     fs::create_dir_all(dir.path().join("pkg")).unwrap();
     fs::write(dir.path().join("pkg/one.txt"), "alpha\n").unwrap();
     fs::write(dir.path().join("pkg/two.txt"), "beta\n").unwrap();
+    let (mut engine, sid, dir) = common::columnar_session_in(dir).into_parts();
 
     let r = execute_fql(
         &mut engine,
@@ -303,11 +337,19 @@ fn copy_nodes_found_reports_one_edit_per_destination_file() {
 
 #[test]
 fn a_directory_rev_is_one_flat_xor_of_its_subtree_file_paths() {
-    let (mut engine, sid, dir) = engine_with_session();
+    // One indexed file anchors the overlay — a workspace holding only
+    // unclaimed extensions cannot register a columnar session yet.
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("anchor.cpp"),
+        "int anchor() { return 0; }\n",
+    )
+    .unwrap();
     fs::create_dir_all(dir.path().join("pkg/sub")).unwrap();
     fs::create_dir_all(dir.path().join("pkg/empty")).unwrap();
     fs::write(dir.path().join("pkg/a.txt"), "a\n").unwrap();
     fs::write(dir.path().join("pkg/sub/b.txt"), "b\n").unwrap();
+    let (mut engine, sid, _dir) = common::columnar_session_in(dir).into_parts();
 
     let text = match execute_fql(&mut engine, &sid, "FIND files WHERE path LIKE 'pkg%'") {
         ForgeQLResult::Show(show) => format!("{show}"),
@@ -326,14 +368,15 @@ fn a_directory_rev_is_one_flat_xor_of_its_subtree_file_paths() {
         0,
         "pkg/sub/b.txt",
     ));
-    let empty = forgeql_core::node_id::format_rev_exact(0);
     assert!(text.contains(&pkg), "pkg/ rev is the two-file XOR: {text}");
     assert!(
         text.contains(&sub),
         "pkg/sub/ folds only its own subtree: {text}"
     );
+    // A directory row exists when files lie beneath it: the empty directory
+    // is on disk but earns no row.
     assert!(
-        text.contains(&empty),
-        "an empty directory renders the zero rev: {text}"
+        !text.contains("pkg/empty"),
+        "an empty directory is not listed: {text}"
     );
 }

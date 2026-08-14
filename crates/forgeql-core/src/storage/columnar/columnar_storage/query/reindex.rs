@@ -82,6 +82,13 @@ impl ColumnarStorage {
             self.dirty.forget_path(&rel_path);
 
             if !path.exists() {
+                // A deletion with no segment to shadow still masks the
+                // persistent view: a non-indexed file lives only as a
+                // file-only entry in the overlay, and without this record the
+                // stored file list would keep serving a deleted file.
+                if old_hex.is_empty() {
+                    self.dirty.remove_path(rel_path.clone());
+                }
                 continue;
             }
 

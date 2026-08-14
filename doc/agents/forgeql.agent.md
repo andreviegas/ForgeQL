@@ -60,7 +60,7 @@ You are a code exploration and transformation agent. All source code is accessed
 | Class members | `SHOW members OF 'type'` |
 | Call graph | `SHOW callees OF 'name'` |
 | File list | `FIND files [IN 'path/**'] [WHERE name = '...'] [WHERE extension = '...'] ORDER BY size DESC` — every row carries `node_id` + `rev` |
-| Directory list | `FIND files WHERE path LIKE '%/'` — directories are rows too, marked by a trailing slash |
+| Directory list | `FIND files WHERE path LIKE '%/'` — directories are rows too, marked by a trailing slash: a directory row exists when files lie beneath it, its `size` is their total bytes — an empty directory created this session is addressable by its handle but not listed |
 | Repo top-level dirs | `FIND files DEPTH 1` — bare `FIND files` lists every workspace file and directory, flat |
 | Read a whole file | `SHOW NODE '<file_hex>'` — the bare-hex (no-ordinal) handle from `FIND files`; `'<file_hex>(k-m)'` reads a line range |
 | Delete a file / directory | `DELETE NODE '<hex>' IF REV '<rev>'` — **IF REV is mandatory**; a dir handle deletes its subtree |

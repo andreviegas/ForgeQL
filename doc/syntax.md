@@ -1260,8 +1260,9 @@ Applies to: `FIND files`
 | `path` / `file` | string | Relative file path. A **directory** row ends in `/` (`src/`) — that trailing slash is the only marker, so `WHERE path LIKE '%/'` lists directories and `NOT LIKE` excludes them. |
 | `name` | string | Bare file name (e.g. `Kconfig`, `CMakeLists.txt`). Works with `=`, `LIKE`, `MATCHES`. |
 | `extension` / `ext` | string | Extension without `.` (empty for extension-less files and directories) |
-| `size` | integer | File size in bytes; for a directory, its number of direct children |
+| `size` | integer | File size in bytes; for a directory, the total bytes of the files beneath it, any depth. A directory row exists when at least one file lies beneath it — an empty directory (only a session can create one; git cannot commit it) is addressable by its handle but not listed. |
 | `depth` | integer | Directory depth from workspace root |
+| `count` | integer | Directory rows only: the number of files beneath, any depth. Carried in `format=JSON`; the compact CSV schema is unchanged. |
 | `node_id` | string | The path's bare-hex handle (`n<hex>`) — on every path row, so a listed file or directory is actionable without a second lookup |
 | `rev` | string | Version stamp for the path: a file's is the SHA-256 of its bytes, a directory's is a membership XOR over the paths underneath it. Pass it to `IF REV`. |
 | `has_error` | `"true"` / `"false"` | The file did **not parse as its declared language** — it holds at least one `error_scope = 'root'` region. This is the `.c` that is not really C, or the JSON with an unbalanced brace. |

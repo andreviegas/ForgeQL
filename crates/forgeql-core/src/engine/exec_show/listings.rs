@@ -100,62 +100,27 @@ impl ForgeQLEngine {
         // shape: `node_kind` (a file row has no kind at all), `lang`,
         // `fql_kind`, `usages` and every other symbol-row name.
         let glob = clauses.in_glob.as_deref().unwrap_or("**");
-        let indexed_opt = engine.indexed_files();
-        let fast_path_ext: Option<&str> = indexed_opt.as_ref().and_then(|indexed| {
-            use crate::ir::{CompareOp, PredicateValue};
-            clauses
-                .where_predicates
-                .iter()
-                .find_map(|p| {
-                    if (p.field == "extension" || p.field == "ext")
-                        && p.op == CompareOp::Eq
-                        && let PredicateValue::String(s) = &p.value
-                    {
-                        return Some(s.as_str());
-                    }
-                    None
-                })
-                .filter(|ext| indexed.iter().any(|fe| fe.extension == *ext))
-        });
-        let mut entries: Vec<FileEntry> = if fast_path_ext.is_some() {
-            #[expect(
-                clippy::unwrap_used,
-                reason = "fast_path_ext.is_some() implies indexed_opt.is_some() — invariant established above"
-            )]
-            indexed_opt.unwrap()
-        } else {
-            // Files and directories in one list: a directory is an addressable
-            // node too, and an agent that has to run a second query to see them
-            // pays a round trip for nothing.
-            let mut raw = query::find_files(workspace, glob, &clauses.exclude_globs);
-            raw.extend(query::find_dirs(workspace, glob, &clauses.exclude_globs));
-            raw.iter()
-                .filter_map(|v| {
-                    let path = v.get("path").and_then(|p| p.as_str()).map(PathBuf::from)?;
-                    let extension = v
-                        .get("extension")
-                        .and_then(|e| e.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let size = v
-                        .get("size")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(0);
-                    let depth = Some(path.components().count());
-                    Some(FileEntry {
-                        path,
-                        extension,
-                        size,
-                        depth,
-                        count: None,
-                        error_count: None,
-                        parse_coverage: None,
-                        node_id: None,
-                        rev: None,
-                    })
-                })
-                .collect()
-        };
+        let mut entries: Vec<FileEntry> = engine.indexed_files().map_or_else(
+            || Self::walked_workspace_entries(workspace, glob, &clauses.exclude_globs),
+            |stored| {
+                // The stored union IS the workspace: overlay segments minus
+                // the ones the dirty overlay shadows, file-only entries for
+                // non-indexed files, and this session's dirty adds. Since the
+                // overlay format began carrying file-only entries that list
+                // is complete, and an overlay in an older format never
+                // reaches a running server (it is rebuilt on open) — so no
+                // query shape needs the filesystem walk for correctness. The
+                // walk survives only for backends with no stored list at all.
+                //
+                // Under DEPTH (without GROUP BY) the grouping pass below runs
+                // WHERE first and then derives its directory aggregates from
+                // the surviving files itself, so standing directory rows
+                // would be double-counted there; every other shape lists
+                // them.
+                let with_dirs = clauses.depth.is_none() || clauses.group_by.is_some();
+                Self::stored_workspace_entries(stored, glob, &clauses.exclude_globs, with_dirs)
+            },
+        );
         let max_depth = clauses.depth.unwrap_or(usize::MAX);
         stamp_error_counts(engine, workspace.root(), clauses, &mut entries)?;
 
@@ -183,6 +148,105 @@ impl ForgeQLEngine {
             "total":   total,
         }))
     }
+
+    /// The walking fallback, for storage backends that expose no stored file
+    /// list: enumerate the worktree and convert each row. Files and
+    /// directories in one list — a directory is an addressable node too, and
+    /// an agent that has to run a second query to see them pays a round trip
+    /// for nothing.
+    fn walked_workspace_entries(
+        workspace: &Workspace,
+        glob: &str,
+        exclude: &[String],
+    ) -> Vec<FileEntry> {
+        let mut raw = query::find_files(workspace, glob, exclude);
+        raw.extend(query::find_dirs(workspace, glob, exclude));
+        raw.iter()
+            .filter_map(|v| {
+                let path = v.get("path").and_then(|p| p.as_str()).map(PathBuf::from)?;
+                let extension = v
+                    .get("extension")
+                    .and_then(|e| e.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let size = v
+                    .get("size")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                let depth = Some(path.components().count());
+                Some(FileEntry {
+                    path,
+                    extension,
+                    size,
+                    depth,
+                    count: None,
+                    error_count: None,
+                    parse_coverage: None,
+                    node_id: None,
+                    rev: None,
+                })
+            })
+            .collect()
+    }
+    /// The workspace file list served from the stored union, with directory
+    /// rows derived from it — no filesystem walk, no per-file stat.
+    ///
+    /// When `with_dirs` is set, a directory is a row when at least one
+    /// workspace file lies beneath it; its `size` is the total bytes of those
+    /// files and its `count` how many they are — one source and one meaning,
+    /// where the walked path used to emit the same directory twice, `size`
+    /// meaning child count in one row and summed bytes in the other. An
+    /// empty directory (possible only when created this session — git cannot
+    /// commit one) is addressable by the handle its creation returned but is
+    /// not listed here. The DEPTH shape passes `with_dirs = false`: its
+    /// grouping pass applies WHERE first and then derives directory
+    /// aggregates from the surviving files itself, so standing rows would be
+    /// double-counted there.
+    fn stored_workspace_entries(
+        stored: Vec<FileEntry>,
+        glob: &str,
+        exclude: &[String],
+        with_dirs: bool,
+    ) -> Vec<FileEntry> {
+        let mut files: Vec<FileEntry> = stored
+            .into_iter()
+            .filter(|e| query::glob_matches(&e.path, glob))
+            .filter(|e| !exclude.iter().any(|ex| query::glob_matches(&e.path, ex)))
+            .collect();
+        if !with_dirs {
+            return files;
+        }
+
+        let mut dirs: std::collections::BTreeMap<PathBuf, (u64, usize)> =
+            std::collections::BTreeMap::new();
+        for f in &files {
+            for anc in f.path.ancestors().skip(1) {
+                if anc.as_os_str().is_empty() {
+                    break;
+                }
+                let slot = dirs.entry(anc.to_path_buf()).or_default();
+                slot.0 = slot.0.saturating_add(f.size);
+                slot.1 += 1;
+            }
+        }
+        let dir_entries = dirs
+            .into_iter()
+            .filter(|(p, _)| query::glob_matches(p, glob))
+            .filter(|(p, _)| !exclude.iter().any(|ex| query::glob_matches(p, ex)))
+            .map(|(p, (bytes, files_beneath))| FileEntry {
+                depth: Some(p.components().count()),
+                path: PathBuf::from(format!("{}/", p.display())),
+                extension: String::new(),
+                size: bytes,
+                count: Some(files_beneath),
+                error_count: None,
+                parse_coverage: None,
+                node_id: None,
+                rev: None,
+            });
+        files.extend(dir_entries);
+        files
+    }
 }
 
 /// Base JSON object for a file entry: `path`, `extension`, `size`.
@@ -190,11 +254,16 @@ impl ForgeQLEngine {
 /// `node_id` and `rev` are stamped later, by `stamp_path_handles`, on the rows
 /// that survive LIMIT.
 fn file_entry_json(fe: &FileEntry) -> serde_json::Value {
-    serde_json::json!({
+    let mut obj = serde_json::json!({
         "path":      fe.path.display().to_string(),
         "extension": fe.extension,
         "size":      fe.size,
-    })
+    });
+    // A directory row carries the number of files beneath it.
+    if let Some(count) = fe.count {
+        obj["count"] = serde_json::Value::from(count);
+    }
+    obj
 }
 
 /// Format file entries into result JSON, applying the clause-dependent shape:

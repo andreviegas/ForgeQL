@@ -724,12 +724,17 @@ impl ColumnarStorage {
         }
 
         // File-only entries (FQOV v8+): non-indexed workspace files tracked
-        // only for path + size.  These are never shadowed by the dirty overlay
-        // because the dirty overlay only holds symbol segments.
+        // only for path + size.  A dirty segment never replaces one (segments
+        // hold symbols), but a session can still DELETE the file — an entry
+        // whose path sits in removed_paths is gone from the worktree and must
+        // not be listed.
         for (rel_path, size) in file_only {
             // Session infrastructure, not source: the worktree gitfile pointer
             // and forgeql's own runtime artifacts (`.forgeql-session`, …).
             if crate::result::FileEntry::is_runtime_artifact(rel_path) {
+                continue;
+            }
+            if self.dirty.removed_paths.contains(rel_path) {
                 continue;
             }
             entries.push(plain_file_entry(rel_path, u64::from(*size)));
@@ -747,6 +752,9 @@ impl ColumnarStorage {
         // committed structure at all, so without this it is listed by nothing.
         for rel_path in &self.dirty.added_paths {
             if crate::result::FileEntry::is_runtime_artifact(rel_path) {
+                continue;
+            }
+            if self.dirty.removed_paths.contains(rel_path) {
                 continue;
             }
             let size = self.on_disk_size(rel_path);

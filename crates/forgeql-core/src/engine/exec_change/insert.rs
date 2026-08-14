@@ -67,13 +67,16 @@ impl ForgeQLEngine {
                 std::fs::create_dir_all(parent)?;
             }
             crate::workspace::file_io::write_atomic(&abs, &[])?;
-            created.push(abs);
+            created.push(abs.clone());
         }
 
         // Record the creation so ROLLBACK removes it: the path is untracked
         // until COMMIT stages it, so `git reset --hard` would leave it behind.
         self.record_created(sid, &created);
-        self.reindex_session(sid, std::slice::from_ref(&PathBuf::from(&rel)));
+        // The reindex loop probes and reads the path itself, so it needs the
+        // absolute form — a relative one fails its exists() check silently and
+        // the creation is never recorded in the dirty overlay.
+        self.reindex_session(sid, std::slice::from_ref(&abs));
 
         let node_id = format!(
             "n{}",
