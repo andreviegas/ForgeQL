@@ -6,6 +6,69 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.166.0] — 2026-08-14 — FIND files is served from the index, and a bulk copy refuses to overwrite itself
+
+### Fixed
+
+- `COPY NODES FOUND TO 'dir/'` and `MOVE NODES FOUND TO 'dir/'` now refuse a
+  set in which two members share a basename, naming both sources and the
+  destination they collide on. Previously both members targeted the same new
+  file and the second silently appended to the first — two unrelated files
+  welded into one, reported as success. With every destination claimed exactly
+  once, the reported `edit_count` again equals the number of destination files
+  a copy creates. A refused statement writes nothing: destinations are now
+  validated for every member before any directory is created.
+- Symbol resolution in a session with uncommitted edits no longer lets an
+  edited file that merely mentions a name outrank the file that declares it.
+  Previously, once any edited file carried the name as a bare reference,
+  `SHOW members OF 'Type'` — and `SHOW body` / `SHOW context` / `SHOW
+  callees`, which share the resolver — answered from that file and failed
+  with "AST node not found" for a symbol that plainly exists elsewhere.
+  A declaration edited in-session still wins exactly as before; only bare
+  reference rows now rank behind the persistent index instead of ahead of it.
+
+### Performance
+
+- `FIND files` answers every query shape from the index's own file list —
+  the union of indexed segments, non-indexed file entries and the session's
+  uncommitted adds, with deletions masked — instead of walking the worktree
+  and stat-ing every file on each call. Only the extension-filtered shape
+  used the stored list before; the guard dated from when older overlays
+  carried source files only, a reason that no longer exists. Directory rows
+  are now derived from that same list: one row per directory that has files
+  beneath it, `size` the total bytes of those files (previously the same
+  directory could appear twice, once with `size` meaning child count and
+  once meaning summed bytes). An empty directory created in-session is
+  addressable by the handle its creation returned but is not listed. The
+  filesystem walk survives only for storage backends that expose no file
+  list. On a 95,000-file corpus an unscoped `FIND files` previously burned
+  tens of minutes of CPU; the listing itself is now free of filesystem work,
+  and what remains is the per-row rev stamping of the rows actually
+  returned.
+- A complete `FIND files` result no longer takes a different route from a
+  truncated one. Arming the result set's master rev re-derived every member
+  through the engine — and each directory member's lookup walked the whole
+  worktree, so an unbounded listing of a 95,000-file corpus burned upward of
+  fifteen minutes after the rows themselves were ready in seconds, while
+  `LIMIT 90000` (truncated, so never armed) returned in under forty. The set
+  is now armed from the revs already carried by the served rows, for every
+  FIND verb; the fresh per-member derivation remains where it belongs, in
+  the `IF REV` verification before a bulk mutation. The total is counted in
+  the same single clause pass that filters the rows — no clone, no second
+  pass — and `LIMIT` only windows the end of that one pipeline. Without
+  `LIMIT`, `FIND files` now serves the standard 20-row FIND page with the
+  honest total, so the previously unbounded verb pages like every other
+  FIND. A directory-heavy scaling test pins that a complete listing costs
+  the same route as a truncated one, and a parity test pins that a master
+  rev armed from served rows verifies against the fresh lookup.
+- `FIND files` computes directory revs in one pass over the worktree instead
+  of re-scanning the entire file list for every directory row. On a
+  95,000-file corpus an unscoped `FIND files` previously spun for over 17
+  minutes of CPU without answering; the listing is now one walk plus a lookup
+  per row. The revs themselves are unchanged: a directory rev is still the
+  same flat XOR of the path fingerprints of every file underneath it.
+
+
 ## [0.165.0] — 2026-08-13 — a commit writes a manifest instead of rebuilding the index
 
 ### Added
