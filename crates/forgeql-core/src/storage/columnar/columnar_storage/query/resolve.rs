@@ -27,6 +27,8 @@ impl ColumnarStorage {
     /// 4. Collect two lists — `all` (every passing candidate) and `preferred`
     ///    (candidates whose `fql_kind` is in `prefer_kinds`, if given).
     /// 5. Pick: last preferred candidate → last definition candidate → last overall.
+    ///    A dirty declaration pre-empts all of this (stage 1); a dirty mention
+    ///    (empty `fql_kind`) ranks after every persistent stage instead.
     /// 6. Convert the chosen row to a [`SymbolLocation`].
     pub(super) fn resolve_impl(
         &self,
@@ -39,17 +41,26 @@ impl ColumnarStorage {
 
         // Stage 1 — Dirty overlay: scan added segments before touching the persistent
         // index.  This ensures names that are *new* in the dirty overlay (not yet in
-        // the persistent FST) are resolved, and dirty always wins over persistent.
-        if !self.dirty.is_empty()
-            && let Some(loc) =
-                self.resolve_in_dirty(lookup_name, enclosing_owner, clauses, root, prefer_kinds)
-        {
-            return Some(loc);
-        }
+        // the persistent FST) are resolved, and a dirty declaration always wins over
+        // persistent.  A dirty row with an empty fql_kind is a mention — the name
+        // written at a reference site, not a declaration — and must not veto a
+        // persistent declaration: an edited file that merely mentions a symbol would
+        // otherwise hijack its resolution. Mentions are held as a last resort,
+        // consulted only after every persistent stage has missed.
+        let dirty_mention: Option<SymbolLocation> = if self.dirty.is_empty() {
+            None
+        } else {
+            let (hit, mention) =
+                self.resolve_in_dirty(lookup_name, enclosing_owner, clauses, root, prefer_kinds);
+            if let Some(loc) = hit {
+                return Some(loc);
+            }
+            mention
+        };
 
         let global_bm = self.overlay().lookup_name_bitmap(lookup_name);
         if global_bm.is_empty() {
-            return None;
+            return dirty_mention;
         }
         let by_segment = self.group_by_segment(&global_bm);
 
@@ -93,11 +104,13 @@ impl ColumnarStorage {
             prefer_kinds,
         );
         if all.is_empty() {
-            return None;
+            return dirty_mention;
         }
 
         let chosen = self.pick_best_resolved(&all, &preferred);
-        chosen.map(|(seg_idx, local_row)| self.location_for_row(seg_idx, local_row, root))
+        chosen
+            .map(|(seg_idx, local_row)| self.location_for_row(seg_idx, local_row, root))
+            .or(dirty_mention)
     }
 
     /// Zone-map prune for numeric range predicates: drop (or, for impossible
@@ -239,9 +252,12 @@ impl ColumnarStorage {
 
 impl ColumnarStorage {
     /// Stage 1 of `resolve_impl`: scan the dirty overlay's added segments before
-    /// the persistent index, so a name that is new in (or shadowed by) the dirty
-    /// overlay always wins. Returns the alphabetically-last match (preferring
-    /// `prefer_kinds`), or `None` to fall through to the persistent index.
+    /// the persistent index, so a declaration that is new in (or shadowed by) the
+    /// dirty overlay always wins. Returns `(hit, mention)`: `hit` is the
+    /// alphabetically-last dirty declaration (preferring `prefer_kinds`) and ends
+    /// the resolution; `mention` is the alphabetically-last reference row (empty
+    /// `fql_kind`), which the caller may use only after the persistent stages
+    /// miss — a dirty mention must never veto a persistent declaration.
     fn resolve_in_dirty(
         &self,
         lookup_name: &str,
@@ -249,9 +265,10 @@ impl ColumnarStorage {
         clauses: &Clauses,
         root: &Path,
         prefer_kinds: Option<&[&str]>,
-    ) -> Option<SymbolLocation> {
+    ) -> (Option<SymbolLocation>, Option<SymbolLocation>) {
         let mut dirty_all: Vec<SymbolLocation> = Vec::new();
         let mut dirty_preferred: Vec<SymbolLocation> = Vec::new();
+        let mut dirty_mentions: Vec<SymbolLocation> = Vec::new();
         for ds in &self.dirty.added {
             // Apply IN/EXCLUDE glob filter — mirrors segments_passing_path_filter
             // from Stage 2; without it, `IN 'file'` is silently ignored for dirty
@@ -310,7 +327,15 @@ impl ColumnarStorage {
                 if prefer_kinds.is_some_and(|kinds| kinds.contains(&fql_kind_str)) {
                     dirty_preferred.push(loc.clone());
                 }
-                dirty_all.push(loc);
+                // An empty fql_kind is a reference row — the name written at a
+                // site, not a declaration. It may answer only when nothing else
+                // can, so it goes to the mention bucket the caller consults
+                // after the persistent stages, never ahead of them.
+                if fql_kind_str.is_empty() {
+                    dirty_mentions.push(loc);
+                } else {
+                    dirty_all.push(loc);
+                }
             }
         }
         // Sort by path ascending so .pop() returns the alphabetically-last match —
@@ -318,9 +343,10 @@ impl ColumnarStorage {
         // insertion-order (edit-order) dependency.
         dirty_preferred.sort_by(|a, b| a.path.cmp(&b.path));
         if let Some(last) = dirty_preferred.pop() {
-            return Some(last);
+            return (Some(last), None);
         }
         dirty_all.sort_by(|a, b| a.path.cmp(&b.path));
-        dirty_all.pop()
+        dirty_mentions.sort_by(|a, b| a.path.cmp(&b.path));
+        (dirty_all.pop(), dirty_mentions.pop())
     }
 }

@@ -947,3 +947,68 @@ fn move_lines_reports_symmetric_range_counts() {
         "a clean move reports written == removed"
     );
 }
+
+#[test]
+fn an_edit_that_mentions_a_symbol_does_not_hijack_its_resolution() {
+    let (mut engine, sid, _dir) = engine_with_session();
+
+    // Baseline: the enum resolves to its definition in motor_control.h.
+    let before = match execute_fql(&mut engine, &sid, "SHOW members OF 'ErrorMotor'") {
+        ForgeQLResult::Show(show) => format!("{show}"),
+        _ => panic!("expected Show result"),
+    };
+    assert!(before.contains("TIMEOUT"), "baseline members: {before}");
+
+    // Make the .cpp dirty with a MENTION of the enum — a reference row, not a
+    // declaration. The dirty overlay must not hijack resolution away from the
+    // persistent definition in the header: before the fix, the dirty
+    // reference row (empty fql_kind) won stage 1 outright, SHOW members
+    // re-parsed the .cpp, found no enum definition there, and errored
+    // "AST node not found" for a symbol that exists.
+    let cpp = common::path_handle("motor_control.cpp");
+    let r = execute_fql(
+        &mut engine,
+        &sid,
+        &format!(
+            "INSERT AFTER NODE '{cpp}' WITH 'static enum ErrorMotor ultimo_error_registrado = OK;'"
+        ),
+    );
+    let ForgeQLResult::Mutation(mr) = r else {
+        panic!("expected Mutation result");
+    };
+    assert!(mr.applied);
+
+    let after = match execute_fql(&mut engine, &sid, "SHOW members OF 'ErrorMotor'") {
+        ForgeQLResult::Show(show) => format!("{show}"),
+        _ => panic!("expected Show result"),
+    };
+    assert!(
+        after.contains("TIMEOUT"),
+        "members still answer from the definition: {after}"
+    );
+
+    // A declaration edited in-session must still win — only mentions were
+    // demoted. Grow the enum in the header and confirm members answer from
+    // the dirty version, not the stale persistent segment.
+    let h = common::path_handle("motor_control.h");
+    let rev = common::node_rev(&mut engine, &sid, &h);
+    let r = execute_fql(
+        &mut engine,
+        &sid,
+        &format!(
+            "CHANGE NODE '{h}' IF REV '{rev}' MATCHING 'FALLO   = 2' WITH 'FALLO   = 2, SOBRECARGA = 3'"
+        ),
+    );
+    let ForgeQLResult::Mutation(mr) = r else {
+        panic!("expected Mutation result");
+    };
+    assert!(mr.applied);
+    let grown = match execute_fql(&mut engine, &sid, "SHOW members OF 'ErrorMotor'") {
+        ForgeQLResult::Show(show) => format!("{show}"),
+        _ => panic!("expected Show result"),
+    };
+    assert!(
+        grown.contains("SOBRECARGA"),
+        "a dirty declaration still pre-empts the persistent index: {grown}"
+    );
+}
