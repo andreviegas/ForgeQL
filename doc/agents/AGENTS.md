@@ -123,7 +123,7 @@ Edit indexed code by stable `node_id` **only**: `CHANGE NODE` replaces a node, `
 | `UNDO` / `UNDO LAST-n` | Reverse recent mutations from the per-session undo ring |
 | `CHANGE NODES FOUND IF REV '<master>' MATCHING 'a' WITH 'b'` | Sweep the replacement across **every member of the previous FIND** — a handle contributes its whole span, a usage row its one line (a usage row displays its file's handle so you can edit the site directly, but still contributes only its line here) |
 | `DELETE NODES FOUND IF REV '<master>'` | Delete every member. `IF REV` **mandatory** |
-| `MOVE NODES FOUND IF REV '<master>' TO 'dir/'` · `COPY NODES FOUND TO 'dir/'` | Relocate every member into a directory, each keeping its basename. MOVE is gated, COPY is not |
+| `MOVE NODES FOUND IF REV '<master>' TO 'dir/'` · `COPY NODES FOUND TO 'dir/'` | Relocate every member into a directory, each keeping its basename; two members sharing a basename are refused, never merged. MOVE is gated, COPY is not |
 | Raw-text `CHANGE FILE` / copy / move | Non-indexed files only — see the syntax reference |
 
 **The diff is the contract.** Mutations are mechanical — the engine never fixes commas, wraps braces, or re-indents. Every mutation returns `new_node_id`, `lines_written`, `lines_removed`, `structural_errors` (a structured file the edit left unparseable — fix it before moving on), and a boundary diff whose context lines carry inline `node_id(offset)` handles. Read the diff after every mutation: if it shows a seam you created, issue the follow-up `CHANGE NODE '<id>(off)'` yourself. A large `lines_removed` on a small edit means you clobbered more than intended — `UNDO` reverses it.

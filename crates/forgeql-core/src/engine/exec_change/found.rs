@@ -1,6 +1,7 @@
 //! The FOUND set: arming, master-rev verification, and the bulk
 //! `CHANGE / DELETE / MOVE / COPY NODES FOUND` verbs that act on it.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
@@ -500,6 +501,17 @@ impl ForgeQLEngine {
         {
             let (workspace, _engine) = self.require_workspace_and_engine(session_id)?;
             let root = workspace.root().to_path_buf();
+
+            // Validate every member before touching the filesystem, so every
+            // refusal below is write-free — a mid-loop bail after a
+            // create_dir_all would leave untracked directories behind that
+            // ROLLBACK cannot see. Each member's destination is dst_dir + its
+            // basename, computed before anything lands on disk, so an exists()
+            // check alone cannot see two SET members claiming the same
+            // destination. Claim each destination once; a second claim is
+            // refused, never concatenated.
+            let mut claimed: HashMap<PathBuf, &str> = HashMap::new();
+            let mut resolved: Vec<(PathBuf, PathBuf)> = Vec::new();
             for rel in &paths {
                 let src_abs = workspace.safe_path(rel)?;
                 if src_abs.is_dir() {
@@ -523,6 +535,19 @@ impl ForgeQLEngine {
                         dst_rel.display()
                     );
                 }
+                if let Some(first) = claimed.insert(dst_abs.clone(), rel.as_str()) {
+                    bail!(
+                        "{verb} NODES FOUND: '{first}' and '{rel}' share the basename '{}' — \
+                         both would land at '{}', and the engine will not concatenate them. \
+                         Copy each to its own directory, or narrow the FIND.",
+                        basename.to_string_lossy(),
+                        dst_rel.display()
+                    );
+                }
+                resolved.push((src_abs, dst_abs));
+            }
+
+            for (rel, (src_abs, dst_abs)) in paths.iter().zip(resolved) {
                 created_dirs.extend(missing_ancestors(&dst_abs, &root));
                 if let Some(parent) = dst_abs.parent() {
                     std::fs::create_dir_all(parent)?;

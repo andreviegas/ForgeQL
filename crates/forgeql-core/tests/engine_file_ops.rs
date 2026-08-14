@@ -183,3 +183,157 @@ fn copy_node_to_a_trailing_slash_path_is_the_same_as_a_directory_handle() {
         "a\n"
     );
 }
+
+#[test]
+fn copy_nodes_found_refuses_a_basename_collision_naming_both_sources() {
+    let (mut engine, sid, dir) = engine_with_session();
+    fs::create_dir_all(dir.path().join("a")).unwrap();
+    fs::create_dir_all(dir.path().join("b")).unwrap();
+    fs::write(dir.path().join("a/idle.txt"), "first\n").unwrap();
+    fs::write(dir.path().join("b/idle.txt"), "second\n").unwrap();
+
+    // FIND files renders through the SHOW family; the armed set is implicit.
+    let r = execute_fql(&mut engine, &sid, "FIND files WHERE name = 'idle.txt'");
+    let ForgeQLResult::Show(show) = r else {
+        panic!("expected Show result");
+    };
+    let listed = format!("{show}");
+    assert!(
+        listed.contains("a/idle.txt") && listed.contains("b/idle.txt"),
+        "both same-basename files armed: {listed}"
+    );
+
+    // Both members keep their basename, so both claim dst/idle.txt. That must
+    // refuse, not concatenate two unrelated files into one and report success.
+    let err = try_fql(&mut engine, &sid, "COPY NODES FOUND TO 'dst/'")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("a/idle.txt") && err.contains("b/idle.txt"),
+        "the refusal names both sources: {err}"
+    );
+    assert!(
+        !dir.path().join("dst").exists(),
+        "a refused copy writes nothing — not even the destination directory"
+    );
+}
+
+#[test]
+fn move_nodes_found_refuses_a_basename_collision_and_moves_nothing() {
+    let (mut engine, sid, dir) = engine_with_session();
+    fs::create_dir_all(dir.path().join("a")).unwrap();
+    fs::create_dir_all(dir.path().join("b")).unwrap();
+    fs::write(dir.path().join("a/idle.txt"), "first\n").unwrap();
+    fs::write(dir.path().join("b/idle.txt"), "second\n").unwrap();
+
+    let r = execute_fql(&mut engine, &sid, "FIND files WHERE name = 'idle.txt'");
+    let ForgeQLResult::Show(show) = r else {
+        panic!("expected Show result");
+    };
+    // FIND files renders through the SHOW family — the master rev rides in
+    // the metadata map rather than in a found_rev column.
+    let rev = show
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("found_rev"))
+        .and_then(|v| v.as_str())
+        .expect("a complete FIND issues a master rev")
+        .to_owned();
+
+    let err = try_fql(
+        &mut engine,
+        &sid,
+        &format!("MOVE NODES FOUND IF REV '{rev}' TO 'dst/'"),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("a/idle.txt") && err.contains("b/idle.txt"),
+        "the refusal names both sources: {err}"
+    );
+    assert!(
+        dir.path().join("a/idle.txt").exists() && dir.path().join("b/idle.txt").exists(),
+        "a refused move unlinks nothing"
+    );
+    assert!(
+        !dir.path().join("dst").exists(),
+        "a refused move creates no directories"
+    );
+}
+
+#[test]
+fn copy_nodes_found_reports_one_edit_per_destination_file() {
+    let (mut engine, sid, dir) = engine_with_session();
+    fs::create_dir_all(dir.path().join("pkg")).unwrap();
+    fs::write(dir.path().join("pkg/one.txt"), "alpha\n").unwrap();
+    fs::write(dir.path().join("pkg/two.txt"), "beta\n").unwrap();
+
+    let r = execute_fql(
+        &mut engine,
+        &sid,
+        "FIND files WHERE name LIKE '%.txt' WHERE path LIKE 'pkg%'",
+    );
+    let ForgeQLResult::Show(show) = r else {
+        panic!("expected Show result");
+    };
+    let listed = format!("{show}");
+    assert!(
+        listed.contains("pkg/one.txt") && listed.contains("pkg/two.txt"),
+        "two distinct basenames armed: {listed}"
+    );
+
+    let r = execute_fql(&mut engine, &sid, "COPY NODES FOUND TO 'dst/'");
+    let ForgeQLResult::Mutation(mr) = r else {
+        panic!("expected Mutation result");
+    };
+    assert!(mr.applied);
+    // The count and the filesystem must agree: with every destination claimed
+    // exactly once, edit_count is the number of destination files.
+    assert_eq!(mr.edit_count, 2);
+    assert_eq!(mr.files_changed.len(), 2);
+    assert_eq!(
+        fs::read_to_string(dir.path().join("dst/one.txt")).unwrap(),
+        "alpha\n"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("dst/two.txt")).unwrap(),
+        "beta\n"
+    );
+}
+
+#[test]
+fn a_directory_rev_is_one_flat_xor_of_its_subtree_file_paths() {
+    let (mut engine, sid, dir) = engine_with_session();
+    fs::create_dir_all(dir.path().join("pkg/sub")).unwrap();
+    fs::create_dir_all(dir.path().join("pkg/empty")).unwrap();
+    fs::write(dir.path().join("pkg/a.txt"), "a\n").unwrap();
+    fs::write(dir.path().join("pkg/sub/b.txt"), "b\n").unwrap();
+
+    let text = match execute_fql(&mut engine, &sid, "FIND files WHERE path LIKE 'pkg%'") {
+        ForgeQLResult::Show(show) => format!("{show}"),
+        _ => panic!("expected Show result"),
+    };
+
+    // The documented contract, pinned end to end: a directory rev is one flat
+    // XOR of the path fingerprints of every file underneath it, at any depth,
+    // reading no file. The stamper computes it in one pass over the worktree;
+    // this asserts that pass produces exactly the per-directory fold.
+    let pkg = forgeql_core::node_id::format_rev_exact(forgeql_core::node_id::fold_path_rev(
+        forgeql_core::node_id::fold_path_rev(0, "pkg/a.txt"),
+        "pkg/sub/b.txt",
+    ));
+    let sub = forgeql_core::node_id::format_rev_exact(forgeql_core::node_id::fold_path_rev(
+        0,
+        "pkg/sub/b.txt",
+    ));
+    let empty = forgeql_core::node_id::format_rev_exact(0);
+    assert!(text.contains(&pkg), "pkg/ rev is the two-file XOR: {text}");
+    assert!(
+        text.contains(&sub),
+        "pkg/sub/ folds only its own subtree: {text}"
+    );
+    assert!(
+        text.contains(&empty),
+        "an empty directory renders the zero rev: {text}"
+    );
+}

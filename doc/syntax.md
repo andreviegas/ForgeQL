@@ -524,7 +524,7 @@ rev, line range, and source — enough to re-target without another read.
 | `INSERT … NODE '<file_hex>' WITH …` | Prepend at BOF / append at EOF of a whole file | none — it cannot clobber |
 | `CHANGE NODES FOUND MATCHING …` | Sweep the replacement across **every member of the previous FIND**, in one plan | `IF REV` (master) |
 | `DELETE NODES FOUND` | Delete every member | `IF REV` (master) |
-| `MOVE NODES FOUND … TO '<dir>'` | Move every member into a directory, each keeping its basename | `IF REV` (master) |
+| `MOVE NODES FOUND … TO '<dir>'` | Move every member into a directory, each keeping its basename; two members sharing a basename are refused, never merged | `IF REV` (master) |
 | `COPY NODES FOUND TO '<dir>'` | Same, sources stay put | none — it creates |
 
 #### FOUND — mutating a whole FIND result

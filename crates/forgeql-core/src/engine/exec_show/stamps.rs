@@ -7,7 +7,8 @@
 //! is gated instead on whether the query named those fields at all, which is
 //! what keeps a plain `FIND files` from paying for an index scan.
 
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
@@ -69,7 +70,7 @@ pub(super) fn stamp_member_handles(
 /// when file content changes (per-file revs cover that).
 pub(super) fn stamp_path_handles(workspace: &Workspace, results: &mut [serde_json::Value]) {
     let root = workspace.root();
-    let mut worktree: Option<Vec<PathBuf>> = None;
+    let mut dir_revs: Option<HashMap<PathBuf, u64>> = None;
     for row in results.iter_mut() {
         let Some(path) = row.get("path").and_then(|p| p.as_str()).map(str::to_owned) else {
             continue;
@@ -80,21 +81,32 @@ pub(super) fn stamp_path_handles(workspace: &Workspace, results: &mut [serde_jso
         }
         let abs = root.join(rel);
         let node_id = crate::node_id::path_handle(rel);
+
         let rev = if path.ends_with('/') || abs.is_dir() {
-            let files = worktree.get_or_insert_with(|| {
-                workspace
-                    .files()
-                    .filter(|p| !crate::result::FileEntry::is_runtime_artifact(p))
-                    .map(|abs| abs.strip_prefix(root).unwrap_or(&abs).to_path_buf())
-                    .collect()
+            // One walk covers every directory row: fold each file's path
+            // fingerprint into all of its ancestor directories, then a row's
+            // rev is a map lookup. Folding per row instead re-scans the whole
+            // worktree per directory — O(dirs × files), minutes of CPU on a
+            // 95,000-file corpus. The XOR is order-free, so the revs are
+            // identical either way.
+            let revs = dir_revs.get_or_insert_with(|| {
+                let mut map: HashMap<PathBuf, u64> = HashMap::new();
+                for file in workspace.files() {
+                    if crate::result::FileEntry::is_runtime_artifact(&file) {
+                        continue;
+                    }
+                    let rel_file = file.strip_prefix(root).unwrap_or(&file);
+                    let folded = crate::node_id::fold_path_rev(0, &rel_file.to_string_lossy());
+                    for dir in rel_file.ancestors().skip(1) {
+                        if dir.as_os_str().is_empty() {
+                            break;
+                        }
+                        *map.entry(dir.to_path_buf()).or_default() ^= folded;
+                    }
+                }
+                map
             });
-            let rel_path = PathBuf::from(rel);
-            let xor = files
-                .iter()
-                .filter(|f| f.starts_with(&rel_path))
-                .fold(0u64, |acc, f| {
-                    crate::node_id::fold_path_rev(acc, &f.to_string_lossy())
-                });
+            let xor = revs.get(Path::new(rel)).copied().unwrap_or(0);
             crate::node_id::format_rev_exact(xor)
         } else {
             crate::node_id::file_rev(&abs)

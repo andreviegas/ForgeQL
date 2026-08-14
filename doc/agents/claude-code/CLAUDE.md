@@ -58,7 +58,7 @@ The local workspace may be empty — never fall back to local filesystem tools (
 | Page a truncated/buffered output | `SHOW MORE [HEAD n \| TAIL n \| n-m] [WHERE text MATCHES '...']` |
 | Grep the last `VERIFY` log (no rebuild) | `SHOW MORE WHERE text MATCHES 'error\|warning'` |
 | Review an uncommitted change | `SHOW DIFF STAT` for the file map, then `SHOW DIFF IN 'path/**'` |
-| Repo top-level dirs | `FIND files` (returns depth-1 entries) |
+| Repo top-level dirs | `FIND files DEPTH 1` — bare `FIND files` lists every workspace file and directory, flat |
 | Find a file by name | `FIND files WHERE name = 'Kconfig'` (also `LIKE`/`MATCHES`) |
 | Insert around a node | `INSERT BEFORE/AFTER NODE '<id>' WITH '...'` |
 | Delete a node | `DELETE NODE '<id>' IF REV '<rev>'` — `'<id>(n-m)'` deletes lines within it |
@@ -166,7 +166,7 @@ COPY NODE '<src_id>' TO 'api/v2/'
 -- these act on every member in ONE atomic mutation (one diff, one UNDO step).
 CHANGE NODES FOUND IF REV '<master>' MATCHING [WORD] 'a' WITH 'b'  -- sweep each member's span
 DELETE NODES FOUND IF REV '<master>'                    -- IF REV mandatory: it destroys
-MOVE NODES FOUND IF REV '<master>' TO 'dir/'            -- each member keeps its basename
+MOVE NODES FOUND IF REV '<master>' TO 'dir/'            -- each member keeps its basename; same-basename members are refused, never merged
 COPY NODES FOUND TO 'dir/'                              -- creation only, so ungated
 
 -- Heredoc form when content contains quotes: WITH <<TAG … TAG (tag uppercase, own line)
