@@ -1060,9 +1060,9 @@ tiers, so the peak can overshoot the bound by one tier's finds), and the
 in-memory backend's scan, trimmed or not — an armed trim holds the retained
 window to a few multiples of the `LIMIT`, which keeps any small page well
 clear of the budget and refuses a `LIMIT` so large that even its trimmed
-window outgrows it. `FIND files` carries none: its answer is one small row
-per workspace file, so its size is the workspace's file count, never anything
-a query matches.
+window outgrows it. `FIND files` carries none — and no longer needs one: it
+pages at the standard 20-row FIND default with an honest `total`, so its
+response size is bounded by the page, never by the workspace.
 
 ---
 

@@ -21,6 +21,12 @@ use crate::{
 
 use super::stamps::{stamp_error_counts, stamp_member_handles, stamp_path_handles};
 
+/// The page a `FIND files` without `LIMIT` serves — the standard FIND
+/// default. The total stays honest, so truncation is visible and `OFFSET`
+/// pages the rest; an unbounded listing of a large workspace is how a
+/// session wedges.
+const FIND_FILES_DEFAULT_LIMIT: usize = 20;
+
 impl ForgeQLEngine {
     pub(super) fn exec_show_outline(
         workspace: &Workspace,
@@ -124,19 +130,35 @@ impl ForgeQLEngine {
         let max_depth = clauses.depth.unwrap_or(usize::MAX);
         stamp_error_counts(engine, workspace.root(), clauses, &mut entries)?;
 
-        // Rows that survive the filters but not the LIMIT. `count` alone cannot
-        // tell a complete result from a capped one, and `LAST` has to know:
-        // a set armed from rows the agent never saw is not a set it chose.
-        let total = {
-            let mut unbounded = clauses.clone();
-            unbounded.limit = None;
-            unbounded.offset = None;
-            let mut probe = entries.clone();
-            crate::filter::apply_clauses(&mut probe, &unbounded);
-            probe.len()
-        };
+        // One pipeline, LIMIT at its end. The WHERE predicates (and GROUP BY,
+        // which aggregates in place) run once, unbounded and unordered; the
+        // total is the size of that answer — a count, not a second
+        // materialisation — and the delivery clauses only order and window
+        // it. The presence or absence of a bound must never select a
+        // different route through this function.
+        let mut shaping = clauses.clone();
+        shaping.order_by = None;
+        shaping.limit = None;
+        shaping.offset = None;
+        shaping.depth = None;
+        crate::filter::apply_clauses(&mut entries, &shaping);
+        let total = entries.len();
 
-        let mut results = format_file_results(&mut entries, clauses, max_depth);
+        let mut delivery = clauses.clone();
+        delivery.where_predicates.clear();
+        delivery.group_by = None;
+        if clauses.group_by.is_some() {
+            // The depth branch below is gated on GROUP BY being absent, and
+            // GROUP BY was already applied above.
+            delivery.depth = None;
+        }
+        // Without LIMIT, FIND files serves the standard FIND page: the total
+        // stays honest, so truncation is visible and OFFSET pages the rest.
+        // The one unbounded verb is the one that could wedge a session.
+        if delivery.limit.is_none() {
+            delivery.limit = Some(FIND_FILES_DEFAULT_LIMIT);
+        }
+        let mut results = format_file_results(&mut entries, &delivery, max_depth);
         stamp_path_handles(workspace, &mut results);
         let count = results.len();
         Ok(serde_json::json!({

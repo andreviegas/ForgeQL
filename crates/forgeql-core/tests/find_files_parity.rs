@@ -166,7 +166,13 @@ fn walk_reference(root: &Path) -> (BTreeMap<String, u64>, BTreeMap<String, (u64,
 #[test]
 fn the_stored_list_matches_the_worktree_exactly_across_every_session_state() {
     let (mut engine, sid, dir) = parity_session();
-    let (rows, total) = file_list(&mut engine, &sid, &format!("FIND files {EXCLUDES}"));
+    // The explicit LIMIT clears the default page: this test wants the whole
+    // universe, and the total must not depend on the bound.
+    let (rows, total) = file_list(
+        &mut engine,
+        &sid,
+        &format!("FIND files {EXCLUDES} LIMIT 100000"),
+    );
 
     let (want_files, want_dirs) = walk_reference(dir.path());
 
@@ -293,4 +299,104 @@ fn depth_one_lists_each_directory_once_with_deep_survivor_aggregates() {
     assert_eq!(dir_rows[0].size, 5, "deep survivor bytes only");
     assert_eq!(dir_rows[0].count, Some(1), "deep survivor count only");
     assert!(seen.contains(&"assets/data.bin".to_owned()), "{seen:?}");
+}
+
+#[test]
+fn without_a_limit_find_files_serves_the_standard_page_with_an_honest_total() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("anchor.cpp"),
+        "int anchor() { return 0; }\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join("many")).unwrap();
+    for i in 0..30 {
+        fs::write(dir.path().join(format!("many/f{i:02}.bin")), b"x").unwrap();
+    }
+    let (mut engine, sid, _dir) = columnar_session_in(dir).into_parts();
+
+    // 20 rows delivered, every matching row counted: truncation is visible
+    // and OFFSET pages the rest. The absence of a bound never again means
+    // "materialise everything".
+    let (rows, total) = file_list(&mut engine, &sid, "FIND files IN 'many/**'");
+    assert_eq!(rows.len(), 20, "the standard FIND page");
+    assert_eq!(total, 31, "the whole answer counted: 30 files + many/");
+}
+
+#[test]
+fn a_master_rev_armed_from_served_rows_verifies_against_a_fresh_lookup() {
+    let (mut engine, sid, _dir) = parity_session();
+    // A complete FIND files arms its master rev from the revs on the rows it
+    // just served — including a DIRECTORY member, whose fresh lookup at
+    // verify time takes the worktree resolver. The two derivations must
+    // agree, or every FOUND verb on such a set would refuse with a false
+    // rev_mismatch. The MOVE below must be refused for being a directory —
+    // the check that runs AFTER the master rev verified.
+    let r = execute_fql(
+        &mut engine,
+        &sid,
+        &format!("FIND files {EXCLUDES} WHERE path LIKE 'src%' LIMIT 1000"),
+    );
+    let ForgeQLResult::Show(show) = r else {
+        panic!("expected Show result");
+    };
+    let rev = show
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("found_rev"))
+        .and_then(|v| v.as_str())
+        .expect("a complete FIND issues a master rev")
+        .to_owned();
+    let err = common::try_fql(
+        &mut engine,
+        &sid,
+        &format!("MOVE NODES FOUND IF REV '{rev}' TO 'elsewhere/'"),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("is a directory"),
+        "the master rev must verify (a mismatch would surface first): {err}"
+    );
+}
+
+#[test]
+fn a_complete_listing_takes_the_same_route_as_a_truncated_one() {
+    // Directory-heavy on purpose: the historical cliff was a complete
+    // listing re-deriving every member at arming time, where each DIRECTORY
+    // member's lookup walks the whole worktree — O(dirs × workspace).
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("anchor.cpp"),
+        "int anchor() { return 0; }\n",
+    )
+    .unwrap();
+    for i in 0..2000 {
+        let d = dir.path().join(format!("blob/d{i:04}"));
+        fs::create_dir_all(&d).unwrap();
+        for j in 0..5 {
+            fs::write(d.join(format!("f{j}.bin")), b"x").unwrap();
+        }
+    }
+    let (mut engine, sid, _dir) = columnar_session_in(dir).into_parts();
+
+    let started = std::time::Instant::now();
+    let (rows, total) = file_list(&mut engine, &sid, "FIND files IN 'blob/**' LIMIT 12000");
+    let truncated = started.elapsed();
+    assert_eq!(total, 12_001, "10,000 files + 2,001 directories");
+    assert_eq!(rows.len(), 12_000, "one short of complete: no master rev");
+
+    let started = std::time::Instant::now();
+    let (rows, _) = file_list(&mut engine, &sid, "FIND files IN 'blob/**' LIMIT 100000");
+    let complete = started.elapsed();
+    assert_eq!(rows.len(), 12_001);
+    // The absence of truncation must not select a different route: the
+    // complete listing arms its master rev from the rows it just served, so
+    // its cost is the truncated cost plus one row — never a per-member
+    // re-derive. The margin is generous to absorb shared-runner noise; the
+    // defect this pins was a >25x cliff.
+    assert!(
+        complete < truncated * 3 + std::time::Duration::from_secs(2),
+        "complete {complete:?} vs truncated {truncated:?}"
+    );
 }

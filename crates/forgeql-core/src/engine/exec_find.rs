@@ -355,7 +355,19 @@ impl ForgeQLEngine {
             } else {
                 Vec::new()
             };
-        self.arm_found_set(sid, origin, members, total, results.len())
+        // Master-rev input: the served rows already carry each member's rev,
+        // so the set is armed from what was just shown instead of re-deriving
+        // every member through the engine. Alignment holds because members
+        // were built 1:1 from these rows; any gap falls back to the lookup.
+        let revs = (members.len() == results.len() && results.iter().all(|r| r.rev.is_some()))
+            .then(|| {
+                members
+                    .iter()
+                    .zip(results)
+                    .map(|(m, r)| (m.key(), r.rev.clone().unwrap_or_default()))
+                    .collect()
+            });
+        self.arm_found_set(sid, origin, members, revs, total, results.len())
     }
 
     /// Store the set, or clear it when there is nothing addressable to store.
@@ -369,6 +381,7 @@ impl ForgeQLEngine {
         sid: &str,
         origin: &str,
         members: Vec<FoundMember>,
+        served_revs: Option<Vec<(String, String)>>,
         total: usize,
         returned: usize,
     ) -> Option<String> {
@@ -386,7 +399,15 @@ impl ForgeQLEngine {
         // never shown, and a set the agent did not see is not a set it chose.
         let complete = total == returned;
         let master_rev = if complete {
-            self.master_rev_of(sid, &members).ok()
+            // The rows this set was armed from were just served with their
+            // revs on them; hashing those pairs is free. The lookup fallback
+            // re-derives every member through the engine — for a directory
+            // member that walks the worktree per call — so it survives only
+            // for callers that could not supply the served revs.
+            served_revs.map_or_else(
+                || self.master_rev_of(sid, &members).ok(),
+                |pairs| Some(FoundSet::master_rev(&pairs)),
+            )
         } else {
             None
         };
@@ -428,25 +449,34 @@ impl ForgeQLEngine {
         let aggregate = matches!(op, crate::ir::ForgeQLIR::FindFiles { clauses, .. }
             if clauses.group_by.is_some());
 
-        let (members, total, returned) = match &result {
+        let (members, revs, total, returned) = match &result {
             ForgeQLResult::Show(ShowResult {
                 content: ShowContent::FileList { files, total },
                 ..
-            }) if !aggregate && files.iter().all(|f| f.node_id.is_some()) => (
-                files
+            }) if !aggregate && files.iter().all(|f| f.node_id.is_some()) => {
+                let members: Vec<FoundMember> = files
                     .iter()
                     .map(|f| FoundMember {
                         node_id: f.node_id.clone(),
                         path: f.path.to_string_lossy().into_owned(),
                         line: None,
                     })
-                    .collect(),
-                *total,
-                files.len(),
-            ),
-            _ => (Vec::new(), 0, 0),
+                    .collect();
+                // The served rows carry their revs; arm the set from them so
+                // a complete listing never re-derives every member (a
+                // directory member's lookup walks the worktree per call).
+                let revs = files.iter().all(|f| f.rev.is_some()).then(|| {
+                    members
+                        .iter()
+                        .zip(files.iter())
+                        .map(|(m, f)| (m.key(), f.rev.clone().unwrap_or_default()))
+                        .collect()
+                });
+                (members, revs, *total, files.len())
+            }
+            _ => (Vec::new(), None, 0, 0),
         };
-        let found_rev = self.arm_found_set(sid, "find_files", members, total, returned);
+        let found_rev = self.arm_found_set(sid, "find_files", members, revs, total, returned);
 
         // FIND files renders through the SHOW family, whose result has no
         // `found_rev` column of its own — the master rev rides in the metadata
