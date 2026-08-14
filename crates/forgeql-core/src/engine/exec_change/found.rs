@@ -110,10 +110,54 @@ impl ForgeQLEngine {
         let session = self.require_session(sid)?;
         let root = session.worktree_path.clone();
         let engine = session.engine_for(&crate::ir::Backend::Default)?;
+        // Whole-path members are answered from the member's own recorded path,
+        // not by reverse-resolving the handle: handle and path were bound to
+        // each other by the FIND that armed the set. Resolving a directory
+        // handle through find_node walks the whole worktree per call, so a
+        // large armed set paid members x workspace at the gate — the same
+        // cliff the arming path had. One lazy walk (built only when the set
+        // holds a directory) folds every file into all of its ancestors, and
+        // each directory member is then a map lookup; the XOR is order-free,
+        // so the rev is byte-identical to the per-directory fold. A member
+        // whose path is gone yields the rev "gone", which can match nothing —
+        // the refusal tells the agent to re-run the FIND, where the old
+        // reverse lookup surfaced a raw not-found error instead.
+        let mut dir_revs: Option<HashMap<PathBuf, u64>> = None;
         members
             .iter()
             .map(|m| {
                 let rev = match &m.node_id {
+                    Some(id) if !id.strip_prefix('n').unwrap_or(id).contains('.') => {
+                        let rel = Path::new(m.path.trim_end_matches('/'));
+                        let abs = root.join(rel);
+                        if m.path.ends_with('/') || abs.is_dir() {
+                            let revs = dir_revs.get_or_insert_with(|| {
+                                let mut map: HashMap<PathBuf, u64> = HashMap::new();
+                                for file in crate::storage::path_node::worktree_files(&root) {
+                                    let folded =
+                                        crate::node_id::fold_path_rev(0, &file.to_string_lossy());
+                                    for dir in file.ancestors().skip(1) {
+                                        if dir.as_os_str().is_empty() {
+                                            break;
+                                        }
+                                        *map.entry(dir.to_path_buf()).or_default() ^= folded;
+                                    }
+                                }
+                                map
+                            });
+                            if abs.is_dir() {
+                                // An existing directory with no files beneath it
+                                // folds nothing: rev of 0, same as dir_node.
+                                let xor = revs.get(rel).copied().unwrap_or(0);
+                                crate::node_id::format_rev_exact(xor)
+                            } else {
+                                "gone".to_string()
+                            }
+                        } else {
+                            crate::storage::path_node::file_node(id, rel, &root)
+                                .map_or_else(|_| "gone".to_string(), |n| n.rev)
+                        }
+                    }
                     Some(id) => engine
                         .find_node(id, &root)?
                         .map_or_else(|| "gone".to_string(), |n| n.rev),
@@ -129,6 +173,7 @@ impl ForgeQLEngine {
             })
             .collect()
     }
+
     /// The master rev of a member list as it stands right now.
     ///
     /// The single place a master rev is derived, so the rev FIND issues and the

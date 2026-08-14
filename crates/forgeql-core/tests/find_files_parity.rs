@@ -400,3 +400,99 @@ fn a_complete_listing_takes_the_same_route_as_a_truncated_one() {
         "complete {complete:?} vs truncated {truncated:?}"
     );
 }
+
+#[test]
+fn the_mutation_gate_verifies_a_directory_heavy_set_in_one_walk() {
+    // The verify half of the arming cliff: IF REV on a FOUND verb re-derives
+    // every member's rev fresh, and a directory member's reverse lookup used
+    // to walk the whole worktree per call — members × workspace at the gate.
+    // Whole-path members are now answered from their recorded paths, with one
+    // walk shared by every directory member, so the gate costs about one
+    // serve, never members × walk. The MOVE below must be refused for being
+    // a directory — the check that runs AFTER the master rev verified.
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("anchor.cpp"),
+        "int anchor() { return 0; }\n",
+    )
+    .unwrap();
+    for i in 0..2000 {
+        let d = dir.path().join(format!("blob/d{i:04}"));
+        fs::create_dir_all(&d).unwrap();
+        for j in 0..5 {
+            fs::write(d.join(format!("f{j}.bin")), b"x").unwrap();
+        }
+    }
+    let (mut engine, sid, _dir) = columnar_session_in(dir).into_parts();
+
+    let started = std::time::Instant::now();
+    let r = execute_fql(&mut engine, &sid, "FIND files IN 'blob/**' LIMIT 100000");
+    let served = started.elapsed();
+    let ForgeQLResult::Show(show) = r else {
+        panic!("expected Show result");
+    };
+    let rev = show
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("found_rev"))
+        .and_then(|v| v.as_str())
+        .expect("a complete FIND issues a master rev")
+        .to_owned();
+
+    let started = std::time::Instant::now();
+    let err = common::try_fql(
+        &mut engine,
+        &sid,
+        &format!("MOVE NODES FOUND IF REV '{rev}' TO 'elsewhere/'"),
+    )
+    .unwrap_err()
+    .to_string();
+    let verified = started.elapsed();
+    assert!(
+        err.contains("is a directory"),
+        "the master rev must verify (a mismatch would surface first): {err}"
+    );
+    assert!(
+        verified < served * 3 + std::time::Duration::from_secs(2),
+        "verified {verified:?} vs served {served:?}"
+    );
+}
+
+#[test]
+fn a_member_gone_from_disk_reads_as_a_set_change_not_an_error() {
+    // The FOUND contract says a deleted member reads as `gone`, flipping the
+    // master rev exactly as an edit would. The old reverse lookup surfaced a
+    // raw not-found error instead, so an out-of-band deletion turned the
+    // refusal-with-recovery into a dead end. The gate must answer with a
+    // rev_mismatch that tells the agent to re-run the FIND.
+    let (mut engine, sid, dir) = parity_session();
+    let r = execute_fql(
+        &mut engine,
+        &sid,
+        &format!("FIND files {EXCLUDES} WHERE path NOT LIKE '%/' LIMIT 1000"),
+    );
+    let ForgeQLResult::Show(show) = r else {
+        panic!("expected Show result");
+    };
+    let rev = show
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("found_rev"))
+        .and_then(|v| v.as_str())
+        .expect("a complete FIND issues a master rev")
+        .to_owned();
+
+    fs::remove_file(dir.path().join("assets/data.bin")).unwrap();
+
+    let err = common::try_fql(
+        &mut engine,
+        &sid,
+        &format!("MOVE NODES FOUND IF REV '{rev}' TO 'elsewhere/'"),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("rev_mismatch"),
+        "a vanished member is a set change, not an internal error: {err}"
+    );
+}
