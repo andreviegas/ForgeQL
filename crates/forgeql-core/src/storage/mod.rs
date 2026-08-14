@@ -114,6 +114,35 @@ pub mod path_node {
             .collect()
     }
 
+    /// Every directory's rev fingerprint, folded in one walk.
+    ///
+    /// The single definition of what a directory's rev *is*, because three
+    /// callers derive one and they must agree to the bit: the rev `FIND files`
+    /// stamps on a directory row, the rev the bulk `IF REV` gate re-derives,
+    /// and the rev a bare directory handle resolves to. Two of them disagreeing
+    /// does not look like a bug — it looks like the directory changed, so every
+    /// mutation on it is refused with a rev_mismatch that re-running the FIND
+    /// cannot clear.
+    ///
+    /// A file's fingerprint folds into every ancestor, and the XOR is
+    /// order-free, so a directory's rev is independent of walk order and of
+    /// which subtree it was reached through. A directory with no files beneath
+    /// it has no entry: its rev is 0, the same value an empty fold yields.
+    #[must_use]
+    pub fn dir_revs(files: &[PathBuf]) -> std::collections::HashMap<PathBuf, u64> {
+        let mut map: std::collections::HashMap<PathBuf, u64> = std::collections::HashMap::new();
+        for file in files {
+            let folded = crate::node_id::fold_path_rev(0, &file.to_string_lossy());
+            for dir in file.ancestors().skip(1) {
+                if dir.as_os_str().is_empty() {
+                    break;
+                }
+                *map.entry(dir.to_path_buf()).or_default() ^= folded;
+            }
+        }
+        map
+    }
+
     /// Resolve a bare handle against the worktree itself.
     ///
     /// This is the only place a directory can be found (no catalog lists them,
@@ -214,12 +243,12 @@ pub mod path_node {
     /// every byte. (Content staleness is the per-file rev's job.)
     #[must_use]
     pub fn dir_node(node_id: &str, rel: &Path, root: &Path, files: &[PathBuf]) -> FindNodeResult {
-        let rev = files
-            .iter()
-            .filter(|f| f.starts_with(rel))
-            .fold(0u64, |acc, f| {
-                crate::node_id::fold_path_rev(acc, &f.to_string_lossy())
-            });
+        // Fold every directory to read one of them: the extra work is one hash
+        // per file over a walk that already hashed each path to find this
+        // handle, and it buys the guarantee that this rev and the one a listing
+        // stamps come from the same line of code rather than two that agree
+        // today.
+        let rev = dir_revs(files).get(rel).copied().unwrap_or(0);
         FindNodeResult {
             node_id: node_id.to_owned(),
             fql_kind: "dir".to_owned(),
@@ -929,5 +958,70 @@ mod tests {
     #[test]
     fn stub_satisfies_dyn_trait_bound() {
         let _: Box<dyn StorageEngine> = Box::new(StubColumnarStorage);
+    }
+
+    // --- directory revs ---
+
+    #[test]
+    fn a_directory_rev_folds_every_file_beneath_it_at_any_depth() {
+        let files = [
+            PathBuf::from("src/a.rs"),
+            PathBuf::from("src/deep/b.rs"),
+            PathBuf::from("other/c.rs"),
+        ];
+        let revs = super::path_node::dir_revs(&files);
+        let fold = |paths: &[&str]| {
+            paths
+                .iter()
+                .fold(0u64, |acc, p| crate::node_id::fold_path_rev(acc, p))
+        };
+        assert_eq!(
+            revs.get(Path::new("src")).copied(),
+            Some(fold(&["src/a.rs", "src/deep/b.rs"])),
+            "a directory covers its whole subtree, not just its own children"
+        );
+        assert_eq!(
+            revs.get(Path::new("src/deep")).copied(),
+            Some(fold(&["src/deep/b.rs"]))
+        );
+        // The root is not a member of any listing, so it is not folded either.
+        assert_eq!(revs.get(Path::new("")).copied(), None);
+        assert_eq!(
+            revs.get(Path::new("nothing")).copied(),
+            None,
+            "an unrelated path folds nothing"
+        );
+    }
+
+    #[test]
+    fn dir_node_reports_the_same_rev_a_listing_stamps() {
+        // The three derivations of a directory rev — a listing's stamp, the
+        // bulk IF REV gate, and this handle resolve — must agree to the bit or
+        // every mutation on a directory is refused with a rev_mismatch that
+        // re-running the FIND cannot clear. They agree because they are one
+        // function; this asserts the handle path really routes through it.
+        let files = [PathBuf::from("src/a.rs"), PathBuf::from("src/deep/b.rs")];
+        let expected = super::path_node::dir_revs(&files)
+            .get(Path::new("src"))
+            .copied()
+            .expect("src holds files");
+        let node = super::path_node::dir_node(
+            "nabcdef012345",
+            Path::new("src"),
+            Path::new("/nonexistent-root"),
+            &files,
+        );
+        assert_eq!(node.rev, crate::node_id::format_rev_exact(expected));
+    }
+
+    #[test]
+    fn a_directory_with_no_files_beneath_it_revs_as_zero() {
+        let node = super::path_node::dir_node(
+            "nabcdef012345",
+            Path::new("empty"),
+            Path::new("/nonexistent-root"),
+            &[PathBuf::from("src/a.rs")],
+        );
+        assert_eq!(node.rev, crate::node_id::format_rev_exact(0));
     }
 }

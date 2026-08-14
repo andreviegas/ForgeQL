@@ -83,28 +83,14 @@ pub(super) fn stamp_path_handles(workspace: &Workspace, results: &mut [serde_jso
         let node_id = crate::node_id::path_handle(rel);
 
         let rev = if path.ends_with('/') || abs.is_dir() {
-            // One walk covers every directory row: fold each file's path
-            // fingerprint into all of its ancestor directories, then a row's
-            // rev is a map lookup. Folding per row instead re-scans the whole
-            // worktree per directory — O(dirs × files), minutes of CPU on a
-            // 95,000-file corpus. The XOR is order-free, so the revs are
-            // identical either way.
+            // One walk covers every directory row: a row's rev is then a map
+            // lookup. Folding per row instead re-scans the whole worktree per
+            // directory — O(dirs × files), minutes of CPU on a 95,000-file
+            // corpus.
             let revs = dir_revs.get_or_insert_with(|| {
-                let mut map: HashMap<PathBuf, u64> = HashMap::new();
-                for file in workspace.files() {
-                    if crate::result::FileEntry::is_runtime_artifact(&file) {
-                        continue;
-                    }
-                    let rel_file = file.strip_prefix(root).unwrap_or(&file);
-                    let folded = crate::node_id::fold_path_rev(0, &rel_file.to_string_lossy());
-                    for dir in rel_file.ancestors().skip(1) {
-                        if dir.as_os_str().is_empty() {
-                            break;
-                        }
-                        *map.entry(dir.to_path_buf()).or_default() ^= folded;
-                    }
-                }
-                map
+                crate::storage::path_node::dir_revs(&crate::storage::path_node::worktree_files(
+                    root,
+                ))
             });
             let xor = revs.get(Path::new(rel)).copied().unwrap_or(0);
             crate::node_id::format_rev_exact(xor)

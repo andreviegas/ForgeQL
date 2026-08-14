@@ -116,12 +116,13 @@ impl ForgeQLEngine {
         // handle through find_node walks the whole worktree per call, so a
         // large armed set paid members x workspace at the gate — the same
         // cliff the arming path had. One lazy walk (built only when the set
-        // holds a directory) folds every file into all of its ancestors, and
-        // each directory member is then a map lookup; the XOR is order-free,
-        // so the rev is byte-identical to the per-directory fold. A member
-        // whose path is gone yields the rev "gone", which can match nothing —
-        // the refusal tells the agent to re-run the FIND, where the old
-        // reverse lookup surfaced a raw not-found error instead.
+        // holds a directory) folds every directory's rev, and each directory
+        // member is then a map lookup; it is the same `dir_revs` a listing
+        // stamps from and a bare handle resolves through, so the two sides of
+        // this gate cannot drift. A member whose path is gone yields the rev
+        // "gone", which can match nothing — the refusal tells the agent to
+        // re-run the FIND, where the old reverse lookup surfaced a raw
+        // not-found error instead.
         let mut dir_revs: Option<HashMap<PathBuf, u64>> = None;
         members
             .iter()
@@ -132,18 +133,9 @@ impl ForgeQLEngine {
                         let abs = root.join(rel);
                         if m.path.ends_with('/') || abs.is_dir() {
                             let revs = dir_revs.get_or_insert_with(|| {
-                                let mut map: HashMap<PathBuf, u64> = HashMap::new();
-                                for file in crate::storage::path_node::worktree_files(&root) {
-                                    let folded =
-                                        crate::node_id::fold_path_rev(0, &file.to_string_lossy());
-                                    for dir in file.ancestors().skip(1) {
-                                        if dir.as_os_str().is_empty() {
-                                            break;
-                                        }
-                                        *map.entry(dir.to_path_buf()).or_default() ^= folded;
-                                    }
-                                }
-                                map
+                                crate::storage::path_node::dir_revs(
+                                    &crate::storage::path_node::worktree_files(&root),
+                                )
                             });
                             if abs.is_dir() {
                                 // An existing directory with no files beneath it
