@@ -6,6 +6,50 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.167.0] — 2026-08-14 — a bulk mutation gate that no longer re-walks the worktree per member
+
+### Performance
+
+- Verifying `IF REV` on a bulk `NODES FOUND` mutation no longer re-walks the
+  worktree once per member. Whole-path members are answered from their
+  recorded paths — one walk, built only when the set holds a directory, is
+  shared by every directory member — so the gate on a directory-heavy set
+  costs about one listing where it previously cost members × workspace
+  (minutes at 95,000-file scale, the same cliff the arming path had).
+  Symbol-handle members still resolve through the index, and the per-file
+  content fingerprint is unchanged. A 2,000-directory set now verifies in
+  under a second where it previously took four minutes.
+
+### Fixed
+
+- A member deleted out from under an armed set now reads as a set change and
+  is refused with the usual re-run-the-`FIND` recovery, where it previously
+  surfaced a raw not-found error with no stated way forward.
+
+### Changed
+
+- A directory's revision fingerprint now has one definition instead of three.
+  A listing stamps a directory row's `rev`, a bulk `IF REV` gate re-derives
+  it, and a bare directory handle resolves to it — three copies of the same
+  fold, each of which had to agree to the bit or every mutation on a
+  directory would be refused with a mismatch that re-running the `FIND` could
+  never clear. They now call one function. Behaviour is unchanged; the
+  previous copies agreed, but nothing was checking that they still did.
+
+### Tests
+
+- The regression test guarding symbol resolution against uncommitted edits now
+  builds its fixture from an edit that really produces a reference row — a Rust
+  struct literal in a session-created file — and asserts that row exists in the
+  index before asserting anything about resolution. The previous fixture edit, a
+  bodyless C++ enum reference, indexes no row at all, so the test kept passing
+  even with the mention demotion it guards removed. Behaviour of the engine is
+  unchanged; only the test's evidence is.
+- Unit tests now pin what a directory rev means and that the bare-handle
+  resolver really derives it the same way a listing does — the end-to-end test
+  that used to compare those two derivations stopped covering the resolver
+  when the bulk gate moved to the one-walk derivation.
+
 ## [0.166.0] — 2026-08-14 — FIND files is served from the index, and a bulk copy refuses to overwrite itself
 
 ### Fixed
