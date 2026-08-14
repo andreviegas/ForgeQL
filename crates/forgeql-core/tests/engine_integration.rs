@@ -959,18 +959,24 @@ fn an_edit_that_mentions_a_symbol_does_not_hijack_its_resolution() {
     };
     assert!(before.contains("TIMEOUT"), "baseline members: {before}");
 
-    // Make the .cpp dirty with a MENTION of the enum — a reference row, not a
-    // declaration. The dirty overlay must not hijack resolution away from the
-    // persistent definition in the header: before the fix, the dirty
-    // reference row (empty fql_kind) won stage 1 outright, SHOW members
-    // re-parsed the .cpp, found no enum definition there, and errored
-    // "AST node not found" for a symbol that exists.
-    let cpp = common::path_handle("motor_control.cpp");
+    // A mention row is a name row with an EMPTY fql_kind, emitted when a
+    // language names a node (extract_name) whose kind has no kind_map entry.
+    // A Rust struct literal (`ErrorMotor { .. }`) is exactly that shape. The
+    // C++ edit this test first used (`static enum ErrorMotor x = OK;`) emits
+    // NO row at all — a bodyless specifier is deliberately skipped as a use,
+    // not a definition — so that fixture never created the row this test
+    // exists to demote, and the test stayed green with the demotion reverted.
+    let r = execute_fql(&mut engine, &sid, "INSERT NODE FOR 'registro.rs'");
+    let ForgeQLResult::Mutation(mr) = r else {
+        panic!("expected Mutation result");
+    };
+    assert!(mr.applied);
+    let rs = common::path_handle("registro.rs");
     let r = execute_fql(
         &mut engine,
         &sid,
         &format!(
-            "INSERT AFTER NODE '{cpp}' WITH 'static enum ErrorMotor ultimo_error_registrado = OK;'"
+            "INSERT AFTER NODE '{rs}' WITH 'fn registra_error() {{ let _ = ErrorMotor {{ codigo: 1 }}; }}'"
         ),
     );
     let ForgeQLResult::Mutation(mr) = r else {
@@ -978,6 +984,33 @@ fn an_edit_that_mentions_a_symbol_does_not_hijack_its_resolution() {
     };
     assert!(mr.applied);
 
+    // Precondition, asserted so this test can never go vacuous again: the
+    // dirty overlay must now hold a reference row for the name — same name,
+    // empty fql_kind, in the session-born file. If this fails, the fixture
+    // stopped producing a mention and nothing below tests the demotion.
+    let r = execute_fql(
+        &mut engine,
+        &sid,
+        "FIND symbols WHERE name = 'ErrorMotor' LIMIT 50",
+    );
+    let ForgeQLResult::Query(qr) = r else {
+        panic!("expected Query result");
+    };
+    let mention = qr
+        .results
+        .iter()
+        .find(|m| m.path.as_ref().is_some_and(|p| p.ends_with("registro.rs")))
+        .expect("precondition: the struct literal must emit an ErrorMotor row in registro.rs");
+    assert!(
+        mention.fql_kind.as_deref().unwrap_or("").is_empty(),
+        "precondition: the registro.rs row must be a reference row (empty fql_kind), got {:?}",
+        mention.fql_kind
+    );
+
+    // The mention must not hijack resolution away from the persistent
+    // definition: before the demotion, the dirty reference row won stage 1
+    // outright, SHOW members looked for the type in the mentioning file,
+    // found no definition there, and errored for a symbol that exists.
     let after = match execute_fql(&mut engine, &sid, "SHOW members OF 'ErrorMotor'") {
         ForgeQLResult::Show(show) => format!("{show}"),
         _ => panic!("expected Show result"),
