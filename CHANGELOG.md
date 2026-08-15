@@ -6,6 +6,68 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.168.0] — 2026-08-15 — a broken question is answered as a fact about the question
+
+### Fixed
+
+- `WHERE`/`HAVING` predicates using `MATCHES`/`NOT MATCHES` now reject an
+  uncompilable regex pattern before any row is read, naming the field, the
+  operator, and the underlying regex error. Previously an invalid pattern was
+  silently treated as "matches nothing" for `MATCHES`, and — worse —
+  "matches everything" for `NOT MATCHES`, so a broken pattern on the negated
+  form returned a plausible-looking, unfiltered result instead of an obviously
+  empty one.
+- `SHOW body`/`context`/`members`/`callees` and `FIND callees OF` now refuse an
+  unknown or misspelled `WHERE` field by name, instead of reporting a
+  misleading "no symbol matches" or "eliminated by filters" as if the symbol
+  itself were the problem. A real field with no satisfying candidate still
+  gets the old message, unchanged — only a genuinely unrecognized field name
+  is now told apart. Both storage backends share the same field-recognition
+  check, and the legacy backend's enrichment-field dictionary has been
+  completed with several fields (`is_override`, `is_final`, `macro_expansion`,
+  `macro_def_file`, `macro_def_line`, `macro_arity`, `enclosing_type`,
+  `owner_kind`, `suffix_meaning`) that were previously recognized only by
+  accident, when a workspace's own data happened to carry a matching column.
+- Four more enrichment fields an enricher really writes — `error_scope`,
+  `expansion_depth`, `expanded_reads` and `expansion_failure_reason` — are
+  recognised by that same refusal, which previously called them unknown.
+  Because it decides typo-or-real from a fixed list, a field the list omitted
+  was rejected as a misspelling on any corpus holding no row for it, and
+  `doc/syntax.md` offers `WHERE error_scope = 'root'` as a worked example. A
+  query on one of these now reaches the ordinary no-candidate message instead
+  of being refused as nonsense.
+
+### Tests
+
+- A new golden suite, `broken_query_refused`, pins the refusals above the way
+  an agent meets them: by writing a statement and reading the answer. It
+  covers an uncompilable `MATCHES` and `NOT MATCHES` pattern, the same in
+  `HAVING`, and an unknown `WHERE` field, and each refusal travels with a
+  control proving the query answers once the broken part is removed — so a
+  refusal can never be mistaken for an empty corpus, and the validation can
+  never regress into refusing a working query. The pattern check previously
+  had unit tests only; those construct the clause value and call the checking
+  function directly, so all three stayed green when the single line wiring the
+  check into the engine was deleted, and the protection could have been lost
+  without any test noticing. The new suite fails in exactly that case. The
+  filter test module now states the rule that separates the two levels.
+- A second new golden suite, `open_defects`, pins five known-open defects as
+  expected failures: `-1` and context-dependent `0` literals stamped
+  `is_magic` against the documented exemption list; the `'false'` value of
+  most boolean enrichment fields answering zero rows while `has_doc` and
+  `is_magic` answer both values; `SHOW NODE … LINES A-B` failing to parse
+  while the error advertises the clause; an unknown `fql_kind` value matching
+  nothing silently instead of being refused; and local variables reporting the
+  corpus-wide count of their name as `usages`. Each case asserts the correct
+  behaviour, runs without failing the gate while the defect stands, and fails
+  the gate on a PASS — so the commit that fixes a defect must promote its case
+  in the same change.
+- The golden runner evaluated `error: true` / `error_contains` only on the
+  steps of a multi-step case — on a single-query case the keys were accepted
+  and silently never read, so such a case could pass with no assertion
+  evaluated. A single-query case now honours them with the same contract as a
+  step.
+
 ## [0.167.0] — 2026-08-14 — a bulk mutation gate that no longer re-walks the worktree per member
 
 ### Performance
