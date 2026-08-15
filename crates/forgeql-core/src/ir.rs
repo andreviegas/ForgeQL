@@ -638,6 +638,33 @@ pub enum ForgeQLIR {
     },
 }
 
+/// The `Clauses` a query IR op carries, if any.
+///
+/// Every clause-carrying variant names its own field `clauses`, so this is
+/// checked once here rather than duplicated at each call site that needs to
+/// look at a query's clauses without caring which verb it is.
+#[must_use]
+pub const fn clauses_of(op: &ForgeQLIR) -> Option<&Clauses> {
+    match op {
+        ForgeQLIR::ShowCommits { clauses, .. }
+        | ForgeQLIR::FindSymbols { clauses, .. }
+        | ForgeQLIR::FindUsages { clauses, .. }
+        | ForgeQLIR::FindFiles { clauses, .. }
+        | ForgeQLIR::ShowNode { clauses, .. }
+        | ForgeQLIR::ShowContext { clauses, .. }
+        | ForgeQLIR::ShowSignature { clauses, .. }
+        | ForgeQLIR::ShowOutline { clauses, .. }
+        | ForgeQLIR::ShowMembers { clauses, .. }
+        | ForgeQLIR::ShowBody { clauses, .. }
+        | ForgeQLIR::ShowCallees { clauses, .. }
+        | ForgeQLIR::ShowLines { clauses, .. }
+        | ForgeQLIR::ShowMore { clauses, .. }
+        | ForgeQLIR::ChangeContent { clauses, .. }
+        | ForgeQLIR::ShowDiff { clauses, .. } => Some(clauses),
+        _ => None,
+    }
+}
+
 /// Serde helper: skip-serializing `Backend` when it holds the `Default` variant.
 ///
 /// Used in all read-only `ForgeQLIR` variants so that the JSON wire format

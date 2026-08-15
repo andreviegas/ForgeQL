@@ -72,13 +72,22 @@ fn read_bytes_for_show(workspace: &Workspace, location: &SymbolLocation) -> Resu
 /// everything between them.
 pub(super) fn lookup_missed(symbol: &str, lookup: &Clauses) -> anyhow::Error {
     if lookup.where_predicates.is_empty() {
-        anyhow::anyhow!("symbol '{symbol}' not found")
-    } else {
-        anyhow::anyhow!(
-            "no symbol '{symbol}' matches {}",
-            crate::filter::describe_predicates(&lookup.where_predicates)
-        )
+        return anyhow::anyhow!("symbol '{symbol}' not found");
     }
+    for pred in &lookup.where_predicates {
+        if !crate::filter::is_known_symbol_field(&pred.field) {
+            return anyhow::anyhow!(
+                "unknown WHERE field '{}': it is not a field a symbol row carries and no \
+                 enricher declares it, so it can never match. To search file contents use \
+                 SHOW LINES OF '<file>' WHERE text MATCHES '…' instead.",
+                pred.field
+            );
+        }
+    }
+    anyhow::anyhow!(
+        "no symbol '{symbol}' matches {}",
+        crate::filter::describe_predicates(&lookup.where_predicates)
+    )
 }
 
 /// Extract the `backend` selector from any supported SHOW / `FindFiles` op.

@@ -211,6 +211,50 @@ pub fn reject_depth(verb: &str, clauses: &Clauses) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Rejects a query whose `MATCHES`/`NOT MATCHES` pattern does not compile as regex.
+///
+/// `eval_predicate_on` can only answer yes-or-no per row, so an uncompilable
+/// pattern there has no way to say "the query itself is broken" — it
+/// silently matched nothing (`MATCHES`) or everything (`NOT MATCHES`)
+/// instead. Checked once here, before dispatch, independently of which verb
+/// or backend is about to run the query: pattern validity has no row-shape
+/// or storage dependency, unlike the field-name checks beside this one, so
+/// it does not need to be duplicated per verb.
+///
+/// # Errors
+///
+/// Returns an error naming the field, the operator and the pattern when a
+/// `MATCHES`/`NOT MATCHES` predicate's pattern fails to compile as regex.
+pub fn reject_invalid_patterns(op: &crate::ir::ForgeQLIR) -> anyhow::Result<()> {
+    let Some(clauses) = crate::ir::clauses_of(op) else {
+        return Ok(());
+    };
+    for pred in clauses
+        .where_predicates
+        .iter()
+        .chain(&clauses.having_predicates)
+    {
+        let op_word = match pred.op {
+            CompareOp::Matches => "MATCHES",
+            CompareOp::NotMatches => "NOT MATCHES",
+            _ => continue,
+        };
+        let PredicateValue::String(pat) = &pred.value else {
+            continue;
+        };
+        if let Err(e) = Regex::new(pat) {
+            anyhow::bail!(
+                "invalid regex in {field} {op_word} '{pattern}': {err}",
+                field = pred.field,
+                op_word = op_word,
+                pattern = pat,
+                err = e,
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Refuse any universal clause on a verb that reads none of them.
 ///
 /// The parser accepts the clause block wherever the grammar allows it, which
@@ -502,6 +546,24 @@ pub fn describe_predicates(predicates: &[crate::ir::Predicate]) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Whether `field` could ever answer against a resolved symbol.
+///
+/// True either because a symbol row carries it directly, or because some
+/// enricher declares it — even if this particular symbol never satisfies it.
+/// Both storage backends use this to tell an unknown/misspelled field apart
+/// from a real field that simply has no candidate matching it: the legacy
+/// backend's `eliminated_by_filters` and the columnar-facing
+/// `ForgeQLEngine::lookup_missed` word the same situation, and both must
+/// agree on which fields are real.
+#[must_use]
+pub fn is_known_symbol_field(field: &str) -> bool {
+    let canonical = crate::field_tiers::canonical(field);
+    crate::result::SymbolMatch::STR_FIELDS.contains(&canonical)
+        || crate::result::SymbolMatch::NUM_FIELDS.contains(&canonical)
+        || crate::field_tiers::lookup(field).is_some()
+        || crate::storage::legacy::is_known_enrichment_field(canonical)
 }
 
 // -----------------------------------------------------------------------

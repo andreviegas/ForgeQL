@@ -282,3 +282,96 @@ fn find_globals_with_conflicting_node_kind_returns_empty() {
         results.iter().map(|r| &r.name).collect::<Vec<_>>(),
     );
 }
+
+#[cfg(feature = "test-helpers")]
+#[test]
+fn show_body_where_unknown_field_is_refused_not_silently_reported_as_missing() {
+    use std::fs;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let fixtures = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("tests/fixtures");
+    fs::copy(
+        fixtures.join("motor_control.h"),
+        tmp.path().join("motor_control.h"),
+    )
+    .unwrap();
+    fs::copy(
+        fixtures.join("motor_control.cpp"),
+        tmp.path().join("motor_control.cpp"),
+    )
+    .unwrap();
+
+    let data_dir = tmp.path().join("data");
+    let mut engine = ForgeQLEngine::new(data_dir, make_registry()).unwrap();
+    let session_id = engine.register_local_session(tmp.path()).unwrap();
+
+    let op =
+        crate::parser::parse("SHOW body OF 'encenderMotor' WHERE bogus_field_xyz = 'x'").unwrap();
+    let err = engine
+        .execute(
+            auth(AuthContext::Tester),
+            Some(&SessionCoords::from_session_id(&session_id).unwrap()),
+            &op[0],
+        )
+        .result
+        .unwrap_err();
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("unknown WHERE field"),
+        "a typo'd field must be refused by name, not reported as a missing symbol: {msg}"
+    );
+    assert!(
+        !msg.contains("no symbol"),
+        "must not fall back to the symbol-not-found message for an unknown field: {msg}"
+    );
+}
+
+#[cfg(feature = "test-helpers")]
+#[test]
+fn show_body_where_valid_field_finds_no_candidate_still_names_the_symbol() {
+    use std::fs;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let fixtures = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("tests/fixtures");
+    fs::copy(
+        fixtures.join("motor_control.h"),
+        tmp.path().join("motor_control.h"),
+    )
+    .unwrap();
+    fs::copy(
+        fixtures.join("motor_control.cpp"),
+        tmp.path().join("motor_control.cpp"),
+    )
+    .unwrap();
+
+    let data_dir = tmp.path().join("data");
+    let mut engine = ForgeQLEngine::new(data_dir, make_registry()).unwrap();
+    let session_id = engine.register_local_session(tmp.path()).unwrap();
+
+    // `is_magic` is a real, known field — it just never applies to a function
+    // symbol, so this must still be told apart from an unknown field name.
+    let op = crate::parser::parse("SHOW body OF 'encenderMotor' WHERE is_magic = 'true'").unwrap();
+    let err = engine
+        .execute(
+            auth(AuthContext::Tester),
+            Some(&SessionCoords::from_session_id(&session_id).unwrap()),
+            &op[0],
+        )
+        .result
+        .unwrap_err();
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("encenderMotor"),
+        "a real field with no satisfying candidate must still name the symbol: {msg}"
+    );
+    assert!(
+        !msg.contains("unknown WHERE field"),
+        "a real, known field must not be reported as unknown: {msg}"
+    );
+}

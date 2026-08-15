@@ -63,9 +63,19 @@ fn split_qualified_name(name: &str) -> Option<(&str, &str)> {
 fn eliminated_by_filters(name: &str, clauses: &Clauses) -> String {
     use std::fmt::Write;
 
+    for pred in &clauses.where_predicates {
+        if !crate::filter::is_known_symbol_field(&pred.field) {
+            return format!(
+                "unknown WHERE field '{}': it is not a field a symbol row carries and no \
+                 enricher declares it, so it can never match. To search file contents use \
+                 SHOW LINES OF '<file>' WHERE text MATCHES '…' instead.",
+                pred.field
+            );
+        }
+    }
+
     let mut hint = format!(
-        "symbol '{name}' exists in the index \
-         but all candidates were eliminated by filters."
+        "symbol '{name}' exists in the index but all candidates were eliminated by filters."
     );
     if let Some(ref glob) = clauses.in_glob {
         let _ = write!(hint, " IN '{glob}' excluded all matches.");

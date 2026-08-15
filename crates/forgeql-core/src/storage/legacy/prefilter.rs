@@ -279,6 +279,27 @@ const UNSCOPED_ENRICHMENT_FIELDS: &[&str] = &[
     // naming.rs — applies to every named symbol.
     "naming",
     "name_length",
+    // Confirmed real and implemented (2026-08-15 audit against doc/syntax.md),
+    // but absent from FIELD_KIND_MAP above and from field_tiers.rs: each was
+    // only ever recognized by the columnar backend's live "does any loaded
+    // segment have this column" fallback, which made a `SHOW`-family query
+    // misreport "no symbol matches" for a real field, and made `FIND symbols`
+    // itself wrongly refuse a real field on a corpus that happens to have no
+    // populated row for it (`is_override`/`is_final` have zero matches in
+    // this repository's own fixtures, since none exercise a C++ override or
+    // final method — a corpus gap, not a name gap). No kind-inference
+    // function is given because none is needed for name recognition, only
+    // for the prefilter's kind-narrowing optimization, which these simply
+    // forgo.
+    "suffix_meaning",
+    "owner_kind",
+    "enclosing_type",
+    "macro_def_file",
+    "macro_def_line",
+    "macro_arity",
+    "macro_expansion",
+    "is_override",
+    "is_final",
 ];
 /// Whether `field` is a known enrichment field name for ANY language — the
 /// field→kind map, plus the unscoped fields that map declares no kinds for.

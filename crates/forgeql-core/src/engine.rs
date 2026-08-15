@@ -376,6 +376,7 @@ impl ForgeQLEngine {
         sid: Option<&str>,
         op: &ForgeQLIR,
     ) -> Result<ForgeQLResult> {
+        crate::filter::reject_invalid_patterns(op)?;
         match op {
             // --- Source / session management ---
             ForgeQLIR::CreateSource { name, url } => self.create_source(name, url),

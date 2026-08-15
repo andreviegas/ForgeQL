@@ -181,6 +181,61 @@ fn apply_clauses_filter_by_kind_eq() {
 }
 
 #[test]
+fn reject_invalid_patterns_flags_uncompilable_regex() {
+    let clauses = Clauses {
+        where_predicates: vec![Predicate {
+            field: "name".into(),
+            op: CompareOp::Matches,
+            value: PredicateValue::String("^parse[".into()),
+        }],
+        ..Default::default()
+    };
+    let op = crate::ir::ForgeQLIR::FindSymbols {
+        backend: crate::ir::Backend::default(),
+        clauses,
+    };
+    let err = reject_invalid_patterns(&op).unwrap_err().to_string();
+    assert!(err.contains("invalid regex"), "unexpected message: {err}");
+}
+
+#[test]
+fn reject_invalid_patterns_covers_not_matches_too() {
+    // NOT MATCHES on an uncompilable pattern used to degrade to a silent
+    // no-op retain (every row kept) instead of failing — the more
+    // dangerous direction, since the result looked like a legitimate
+    // unfiltered answer rather than a suspiciously empty one.
+    let clauses = Clauses {
+        where_predicates: vec![Predicate {
+            field: "name".into(),
+            op: CompareOp::NotMatches,
+            value: PredicateValue::String("^parse[".into()),
+        }],
+        ..Default::default()
+    };
+    let op = crate::ir::ForgeQLIR::FindSymbols {
+        backend: crate::ir::Backend::default(),
+        clauses,
+    };
+    assert!(reject_invalid_patterns(&op).is_err());
+}
+
+#[test]
+fn reject_invalid_patterns_leaves_a_compilable_pattern_alone() {
+    let clauses = Clauses {
+        where_predicates: vec![Predicate {
+            field: "name".into(),
+            op: CompareOp::Matches,
+            value: PredicateValue::String("^parse".into()),
+        }],
+        ..Default::default()
+    };
+    let op = crate::ir::ForgeQLIR::FindSymbols {
+        backend: crate::ir::Backend::default(),
+        clauses,
+    };
+    assert!(reject_invalid_patterns(&op).is_ok());
+}
+#[test]
 fn apply_clauses_numeric_predicate_gte() {
     let mut items = vec![
         make_symbol("a", "Function", 2),
