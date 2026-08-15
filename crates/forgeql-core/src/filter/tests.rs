@@ -1,3 +1,32 @@
+//! Unit tests for the filter layer.
+//!
+//! # Before adding a test here, check it can fail for the right reason
+//!
+//! A test in this module builds a `Clauses`/`ForgeQLIR` value by hand and
+//! calls one function with it. That proves the function's logic. It cannot
+//! prove the engine ever calls the function — the query never passes through
+//! the parser or `execute`, so **deleting the call site leaves every test in
+//! this module green**. That is not hypothetical: the `MATCHES` pattern
+//! check landed with three passing tests here and no test that the engine
+//! consulted it at all.
+//!
+//! So the rule is not "unit or golden", it is **whichever level can observe
+//! the thing you changed**:
+//!
+//! - Changed what a function computes — which operators it covers, which
+//!   values it accepts, what an error string says? A test here is the right
+//!   size, and cheap.
+//! - Changed what an agent sees when they type a statement — a new refusal,
+//!   a different message, a row that appears or stops appearing? That needs
+//!   a case in `crates/forgeql/tests/golden/`, which spawns a real server
+//!   and can only reach the engine by writing FQL. It is the only level that
+//!   crosses the DSL boundary, so it is the only level that pins the wiring.
+//!   Refusals belong in `broken_query_refused.json`.
+//!
+//! The check that settles it: delete the line that wires your change into
+//! the engine and run the suite. If it stays green, the feature can ship
+//! dead and nothing will say so.
+
 use super::*;
 use crate::ir::{Clauses, OrderBy, Predicate, PredicateValue};
 use crate::result::SymbolMatch;
@@ -1514,6 +1543,38 @@ fn file_entry_runtime_artifacts_detected() {
         assert!(
             !FileEntry::is_runtime_artifact(std::path::Path::new(name)),
             "{name} must NOT be filtered"
+        );
+    }
+}
+
+#[test]
+fn every_field_an_enricher_writes_is_recognised() {
+    // `is_known_symbol_field` decides typo-or-real from a fixed list, so a
+    // field an enricher writes but the list omits is refused as a typo —
+    // on any corpus that happens to carry no row for it, which for the
+    // macro and parse-error fields is most of them. Each name below is
+    // written by an enricher (grep `insert("` under ast/enrich/) and named
+    // in doc/syntax.md's field tables; `error_scope` appears there inside a
+    // recommended query. Extend this list whenever an enricher does.
+    for field in [
+        "error_scope",
+        "expansion_depth",
+        "expanded_reads",
+        "expansion_failure_reason",
+        "macro_arity",
+        "macro_expansion",
+        "macro_def_file",
+        "macro_def_line",
+        "is_override",
+        "is_final",
+        "enclosing_type",
+        "owner_kind",
+        "suffix_meaning",
+    ] {
+        assert!(
+            crate::filter::is_known_symbol_field(field),
+            "'{field}' is written by an enricher and documented, but the refusal \
+             check calls it unknown — a real query on it would be rejected as a typo"
         );
     }
 }

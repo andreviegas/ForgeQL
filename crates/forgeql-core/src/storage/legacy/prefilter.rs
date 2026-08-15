@@ -300,6 +300,20 @@ const UNSCOPED_ENRICHMENT_FIELDS: &[&str] = &[
     "macro_expansion",
     "is_override",
     "is_final",
+    // The rest of what the same enrichers emit. Naming a field here is what
+    // makes it real to the refusal check, so a field an enricher writes but
+    // this list omits is refused as a typo on a corpus that simply has no
+    // row carrying it — `error_scope` is the sharp case, since
+    // `doc/syntax.md` offers `WHERE error_scope = 'root'` as a worked
+    // example. Every name below is written by an enricher and documented:
+    // `error_scope` by ast/enrich/error_scope.rs, the three expansion fields
+    // by ast/enrich/macro_expand_enrich.rs beside the four macro_* entries
+    // above. When an enricher learns a new field, it belongs here in the
+    // same commit.
+    "error_scope",
+    "expansion_depth",
+    "expanded_reads",
+    "expansion_failure_reason",
 ];
 /// Whether `field` is a known enrichment field name for ANY language — the
 /// field→kind map, plus the unscoped fields that map declares no kinds for.

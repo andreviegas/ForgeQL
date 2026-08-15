@@ -1,0 +1,84 @@
+{
+ "suite": "broken_query_refused",
+ "description": "The engine's own doctrine, pinned end-to-end: zero rows is a claim about the corpus, an error is a fact about the query, so a question that can never be answered must be refused rather than answered emptily. These cases exist at this level and not as unit tests on purpose. A unit test builds the clause value by hand and calls the checking function directly, so it stays green when the call site is deleted and the check never runs -- the MATCHES pattern validation shipped with three such tests and nothing asserting the engine consulted it. Only a golden case reaches the engine the way an agent does, by writing FQL, so only a golden case pins the wiring. Every refusal here travels with a control proving the same query answers once the broken part is removed, so a refusal can never be confused with an empty corpus.",
+ "cases": [
+  {
+   "name": "control_the_unfiltered_query_answers_many_rows",
+   "description": "Anchors both pattern cases: without a pattern this query answers, so a refusal below is the pattern being rejected and not an empty corpus.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' IN 'crates/forgeql-core/src/**' LIMIT 5",
+   "assert": {
+    "row_count": 5
+   }
+  },
+  {
+   "name": "matches_with_an_uncompilable_pattern_is_refused",
+   "description": "An unclosed character class is not a pattern that matches nothing -- it is not a pattern at all. Answering zero rows would report it as a fact about the code.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name MATCHES '^parse[' IN 'crates/forgeql-core/src/**' LIMIT 5",
+   "assert": {
+    "error": true,
+    "error_contains": "invalid regex"
+   }
+  },
+  {
+   "name": "not_matches_with_an_uncompilable_pattern_is_refused_not_answered_unfiltered",
+   "description": "The dangerous direction, and the reason this suite exists. A broken pattern that matches nothing makes its negation match EVERYTHING, so the agent asked to narrow a list and silently received the whole unfiltered list -- a plausible answer rather than a suspiciously empty one. The control above returns the same five rows this query would have wrongly returned.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name NOT MATCHES '^parse[' IN 'crates/forgeql-core/src/**' LIMIT 5",
+   "assert": {
+    "error": true,
+    "error_contains": "invalid regex"
+   }
+  },
+  {
+   "name": "a_valid_pattern_is_not_refused",
+   "description": "The other half of the contract: validation must not cost a working query. A compilable pattern still answers.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name MATCHES '^resolve' IN 'crates/forgeql-core/src/**' LIMIT 5",
+   "assert": {
+    "row_count": 5
+   }
+  },
+  {
+   "name": "an_invalid_pattern_in_having_is_refused_too",
+   "description": "HAVING predicates carry patterns as WHERE does, and are checked on the same pass. Without this the check could regress to WHERE-only and no other case would notice.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' GROUP BY file HAVING file MATCHES '^src[' LIMIT 5",
+   "assert": {
+    "error": true,
+    "error_contains": "invalid regex"
+   }
+  },
+  {
+   "name": "control_a_real_field_with_no_match_still_names_the_symbol",
+   "description": "Anchors the case below. A field that exists but selects nothing must keep reporting the symbol, not be mistaken for a typo -- over-refusing here would break every legitimately empty filter.",
+   "use": "forgeql-pub.frozen",
+   "fql": "SHOW body OF 'resolve_in_worktree' WHERE fql_kind = 'variable'",
+   "assert": {
+    "error": true,
+    "error_contains": "no symbol 'resolve_in_worktree' matches"
+   }
+  },
+  {
+   "name": "an_unknown_where_field_blames_the_field_not_the_symbol",
+   "description": "A misspelled or invented field can never match, so reporting 'no symbol matches' sends the agent hunting for a symbol that is present and fine. The refusal must name the field.",
+   "use": "forgeql-pub.frozen",
+   "fql": "SHOW body OF 'resolve_in_worktree' WHERE flurb = 'x'",
+   "assert": {
+    "error": true,
+    "error_contains": "unknown WHERE field 'flurb'"
+   }
+  },
+  {
+   "name": "a_field_an_enricher_writes_is_never_called_unknown",
+   "description": "The refusal decides typo-or-real from a fixed list, so a field an enricher writes but the list omits is refused as a typo on any corpus carrying no row for it. doc/syntax.md offers WHERE error_scope = 'root' as a worked example, so this must reach the ordinary no-candidate message and never the unknown-field refusal.",
+   "use": "forgeql-pub.frozen",
+   "fql": "SHOW body OF 'resolve_in_worktree' WHERE error_scope = 'root'",
+   "assert": {
+    "error": true,
+    "error_contains": "no symbol 'resolve_in_worktree' matches"
+   }
+  }
+ ]
+}
