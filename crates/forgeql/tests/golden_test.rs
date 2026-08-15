@@ -690,7 +690,27 @@ fn run_case(h: &Arc<Mutex<Harness>>, case: &Case) -> Result<(), Failed> {
             .fql
             .as_deref()
             .ok_or_else(|| Failed::from("case has neither 'fql' nor 'steps'"))?;
-        let result = { h.lock().unwrap().run(&sid, fql) }.map_err(Failed::from)?;
+        let outcome = { h.lock().unwrap().run(&sid, fql) };
+        // `error: true` — the query itself is expected to fail, same contract
+        // as a step. Mapping the error straight to Failed before reading the
+        // assert silently ignored it: a case could carry `error: true` and
+        // pass without any assertion ever being evaluated.
+        if case.assert.error == Some(true) {
+            return match &outcome {
+                Ok(_) => Err(Failed::from("expected an error, but the query succeeded")),
+                Err(e) => {
+                    if let Some(want) = case.assert.error_contains.as_deref()
+                        && !e.contains(want)
+                    {
+                        return Err(Failed::from(format!(
+                            "expected error containing {want:?}, got: {e}"
+                        )));
+                    }
+                    Ok(())
+                }
+            };
+        }
+        let result = outcome.map_err(Failed::from)?;
         let fails = check(&case.assert, &result);
         return if fails.is_empty() {
             Ok(())

@@ -1,0 +1,131 @@
+{
+ "suite": "open_defects",
+ "description": "Soft pins for known-open defects. Every expect_fail case here asserts the behaviour that is CORRECT per the documentation or the engine's own stated doctrine, and is expected to fail until the defect is fixed — the runner reports it without going red, and a PASS fails the gate so the fixing commit must promote the case (and tighten its assert where the fix settles a shape this case had to leave open). Each expect_fail travels with a control on the same fixture, so corpus drift or an unregistered corpus fails a control loudly instead of masquerading as the expected failure.",
+ "cases": [
+  {
+   "name": "control_the_fixture_holds_five_negative_one_literals",
+   "description": "Anchors the two magic-number cases below: the fixture's -1 literals exist and are countable. If this drifts, the cases below are asserting against a fixture that moved, not a fix.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'number' WHERE name = '-1' IN 'tests/fixtures/enrichment_patterns.cpp'",
+   "assert": {
+    "row_count": 5
+   }
+  },
+  {
+   "name": "a_negative_one_literal_is_never_magic",
+   "description": "The enrichment table documents is_magic as true for unexplained constants and lists -1 in the exemptions (not 0, 1, -1, 2, powers of 2, bitmasks). So no -1 literal may carry is_magic = true.",
+   "use": "forgeql-pub.frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "all five -1 literals in the fixture are stamped is_magic = true against the documented exemption; the likely mechanism is that the exemption compares the literal without absorbing the unary minus, so -1 never matches the -1 exemption; either the enricher or the doc must move, and changing the enricher moves smell-audit counts on every corpus, so the direction is a behaviour call",
+   "fql": "FIND symbols WHERE fql_kind = 'number' WHERE name = '-1' WHERE is_magic = 'true' IN 'tests/fixtures/enrichment_patterns.cpp'",
+   "assert": {
+    "row_count": 0
+   }
+  },
+  {
+   "name": "a_zero_literal_is_never_magic",
+   "description": "Same exemption list, sharper contradiction: 0 is the first value on it, yet 39 zero literals in the fixture carry is_magic = true. The stamped zeros sit in conditions and returns (if (a > 0), return 0) while initializer zeros (int x = 0) are exempt — so the exemption is context-dependent where the doc says it is value-dependent.",
+   "use": "forgeql-pub.frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "zeros in condition and return position are stamped magic while initializer zeros are not; the doc promises a value-based exemption (not 0, 1, -1, 2, powers of 2), so either the enricher stops stamping exempt values in those contexts or the doc says which contexts re-arm the exemption",
+   "fql": "FIND symbols WHERE fql_kind = 'number' WHERE name = '0' WHERE is_magic = 'true' IN 'tests/fixtures/enrichment_patterns.cpp'",
+   "assert": {
+    "row_count": 0
+   }
+  },
+  {
+   "name": "control_a_true_valued_boolean_field_is_queryable",
+   "description": "Anchors the false-value case below: the has_todo field exists, posts, and answers for its true value on this corpus.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_todo = 'true' LIMIT 3",
+   "assert": {
+    "row_count": 3
+   }
+  },
+  {
+   "name": "a_boolean_fields_false_value_is_queryable",
+   "description": "The enrichment tables list has_todo, has_escape, has_shadow, is_recursive and friends as boolean fields without saying only one of the two values is addressable. has_doc = 'false' and is_magic = 'false' answer thousands of rows, so the negative case is already a supported query shape — but has_todo = 'false' (and has_escape, has_shadow, is_recursive) answer zero rows on a corpus full of functions without TODOs, indistinguishable from a corpus claim.",
+   "use": "forgeql-pub.frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "most boolean enrichers post only their true value, so the false predicate matches nothing and the empty result reads as a fact about the corpus; has_doc and is_magic store both values, which makes the gap inconsistent rather than a documented design; the fix is to post the negative for the rest, or to refuse the predicate with a hint naming the restriction — if refusal is chosen, re-aim this assert to error: true",
+   "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_todo = 'false' LIMIT 3",
+   "assert": {
+    "row_count": 3
+   }
+  },
+  {
+   "name": "control_the_lines_clause_target_exists",
+   "description": "Anchors the parse case below: the function the multi-step case reads is present and unique in the fixture.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE name = 'controlFlowPatterns' IN 'tests/fixtures/enrichment_patterns.cpp'",
+   "assert": {
+    "row_count": 1
+   }
+  },
+  {
+   "name": "the_advertised_lines_clause_parses_on_show_node",
+   "description": "SHOW NODE advertises a lines_clause — the parse error for LINES 2-4 itself lists lines_clause as expected — but the range form, the exact syntax the standalone SHOW LINES statement uses, fails to parse at the hyphen. The node-relative suffix '<id>(n-m)' covers the need, but a clause the grammar advertises should parse, or the error should state the shape it does accept.",
+   "use": "forgeql-pub.frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "SHOW NODE '<id>' LINES A-B is a parse error while SHOW LINES A-B OF '<file>' works, and the error message lists lines_clause among the expected clauses, which is actively misleading; when the grammar accepts the form, promote this case and pin the returned rows",
+   "steps": [
+    {
+     "fql": "FIND symbols WHERE name = 'controlFlowPatterns' IN 'tests/fixtures/enrichment_patterns.cpp'",
+     "assert": {
+      "row_count": 1
+     },
+     "capture": {
+      "node": "results.0.node_id"
+     }
+    },
+    {
+     "fql": "SHOW NODE '${node}' LINES 2-4"
+    }
+   ]
+  },
+  {
+   "name": "control_a_known_kind_filters_the_outline",
+   "description": "Anchors the unknown-kind case below: a kind inside the closed universe filters the same file's outline to its one struct.",
+   "use": "forgeql-pub.frozen",
+   "fql": "SHOW outline OF 'tests/fixtures/canonical/canonical.rs' WHERE fql_kind = 'struct'",
+   "assert": {
+    "row_count": 1
+   }
+  },
+  {
+   "name": "an_unknown_kind_value_is_refused_not_silently_empty",
+   "description": "fql_kind is a closed universe ('impl' is not in it — Rust impl blocks are 'class'), so a typo'd or guessed kind can never match, yet the outline answers header-only silence indistinguishable from 'the file has none of those'. The engine's own refusal doctrine says zero rows is a claim about the corpus and an error is a fact about the query; a value no language can ever produce deserves the error.",
+   "use": "forgeql-pub.frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "an unknown fql_kind value silently matches nothing on every filtering verb; FIND at least prints a zero total, SHOW outline prints nothing at all; the fix is a parse- or validation-time check against the closed kind enum, refusing with the accepted values the way node_kind and other unanswerable fields are already refused",
+   "fql": "SHOW outline OF 'tests/fixtures/canonical/canonical.rs' WHERE fql_kind = 'impl'",
+   "assert": {
+    "error": true,
+    "error_contains": "fql_kind"
+   }
+  },
+  {
+   "name": "control_scoped_variables_share_one_name_count",
+   "description": "Anchors the case below, and documents the defect's shape: ten let-bindings named session_id in ten different test files all report the identical usages value — the corpus-wide count of the NAME, not references to any binding.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE name = 'session_id' WHERE fql_kind = 'variable' IN 'crates/forgeql-core/tests/**'",
+   "assert": {
+    "row_count": 10,
+    "all_same": "usages"
+   }
+  },
+  {
+   "name": "a_local_variables_usages_is_not_a_corpus_wide_name_count",
+   "description": "For the blast-radius workflow the agent docs recommend (FIND usages, ORDER BY usages DESC), a local variable carrying a global name-frequency is a trap. The engine does not track scoped references, so the honest answers are suppressing the field on locals (what this asserts: the key absent from the row) or a real per-binding count (re-aim this assert when that is built).",
+   "use": "forgeql-pub.frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "every local variable row carries the corpus-wide count of its name (236 for session_id on this corpus), meaningless for a scoped binding and indistinguishable from a real reference count; suppress the field on local-scope variables or compute a per-binding count",
+   "fql": "FIND symbols WHERE name = 'session_id' WHERE fql_kind = 'variable' IN 'crates/forgeql-core/tests/**'",
+   "assert": {
+    "pointer": {
+     "/results/0/usages": null
+    }
+   }
+  }
+ ]
+}
