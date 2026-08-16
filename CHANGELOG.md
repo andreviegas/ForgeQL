@@ -6,6 +6,40 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.169.0] — 2026-08-16 — the index stops rebuilding strings it already holds as integers
+
+**Re-indexes once on upgrade:** the enrichment version moves to 68, so cached
+segments and overlays are re-keyed. What is rebuilt is byte-identical to what
+it replaces.
+
+### Performance
+
+Measured on a 29,864,281-row corpus (the Linux kernel, 80,426 segments), cold,
+against 0.168.0 on the same machine:
+
+| | before | after |
+|---|---|---|
+| enrichment-bitmap phase | 78,156 ms | 26,948 ms |
+| whole overlay build | 111,630 ms | 77,078 ms |
+| macro-collection phase, anonymous memory | 6.3 GiB | 4.5 GiB |
+| cold index, peak resident | 19.48 GiB | 18.97 GiB |
+
+- The enrichment-bitmap phase of the overlay build now walks segment columns as
+  the 32-bit value ids they already are, resolving each distinct value to text
+  once per segment instead of rebuilding a string per field per row — on the
+  corpus above, roughly 10^8 allocations removed from the production of a
+  133 MB blob.
+- Collecting macro definitions no longer keeps a path per definition and three
+  copies of every macro name; both are interned and the records carry 4-byte
+  ids. On the corpus above the table's paths fall from 759 MiB to 10 MiB and
+  its name copies from 257 MiB to nothing. This phase holds almost no
+  reclaimable memory, so it is the one that decides whether a constrained host
+  can index at all.
+
+Output is unchanged, and checked rather than argued: the overlay checksum is
+identical before and after at 29.9M, 3.06M and 589k rows, which covers every
+key, every bitmap and every decision to drop an over-budget field.
+
 ## [0.168.0] — 2026-08-15 — a broken question is answered as a fact about the question
 
 ### Fixed
