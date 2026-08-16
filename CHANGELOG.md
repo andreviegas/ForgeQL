@@ -6,6 +6,40 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.170.0] — 2026-08-16 — the name index merges in parallel, and a file indexes the same way twice
+
+**Re-indexes once on upgrade:** the enrichment version moves to 69, so cached
+segments and overlays are re-keyed.
+
+### Performance
+
+Measured on a 29,864,281-row corpus (the Linux kernel, 80,426 segments), cold,
+against 0.169.0 on the same machine:
+
+| | before | after |
+|---|---|---|
+| name-FST merge | 48,646 ms | 43,487 ms |
+| usages-count FST | 12,958 ms | 3,841 ms |
+| whole overlay build | 77,078 ms | 57,115 ms |
+| cold index, wall clock | 6:23 | 5:09 |
+
+- The overlay's name and usages-count indexes are merged in parallel shards of
+  the key space rather than by one sequential pass over every segment. The
+  shards are disjoint, so the merge still holds one copy of the keys and peak
+  memory does not move; a first-byte summary read from each segment lets a
+  shard skip the segments it has no keys in.
+
+### Fixed
+
+- Indexing the same file twice now produces the same segment bytes. The
+  enrichment columns were walked in hash order, and because a string column's
+  values are interned into the segment's string pool as the column is walked,
+  every run assigned different ids — 3,237 of 3,240 segments differed between
+  two cold indexes of one C corpus; it is now 34.
+
+Answers are unchanged by either: the overlay checksum is identical before and
+after on every corpus measured, including the 29.9M-row one.
+
 ## [0.169.0] — 2026-08-16 — the index stops rebuilding strings it already holds as integers
 
 **Re-indexes once on upgrade:** the enrichment version moves to 68, so cached
