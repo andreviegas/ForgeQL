@@ -758,9 +758,13 @@ impl OverlayBuilder {
                 )
             })
             .collect();
+        let prep_ms = t_step.elapsed().as_millis();
+        let t_merge = std::time::Instant::now();
+        let shard_cpu_micros = std::sync::atomic::AtomicU64::new(0);
         let shards: Vec<BTreeMap<Vec<u8>, Vec<u32>>> = name_shard_bounds()
             .par_iter()
             .map(|&(byte, lo, hi)| {
+                let t_shard = std::time::Instant::now();
                 let mut merged: BTreeMap<Vec<u8>, Vec<u32>> = BTreeMap::new();
                 for ((_, _, reader), &(name_postings_raw, row_offset, mask)) in
                     segs.iter().zip(&seg_inputs)
@@ -777,21 +781,35 @@ impl OverlayBuilder {
                     }
                     let mut stream = range.into_stream();
                     while let Some((name_bytes, encoded)) = stream.next() {
-                        let local_rows = decode_name_postings_raw(encoded, name_postings_raw);
-                        let global_rows: Vec<u32> =
-                            local_rows.into_iter().map(|r| r + row_offset).collect();
-                        merged
-                            .entry(name_bytes.to_vec())
-                            .or_default()
-                            .extend(global_rows);
+                        let local_rows = name_postings_slice(encoded, name_postings_raw);
+                        let global_rows = local_rows.iter().map(|&r| r + row_offset);
+                        // A name recurs in ~4 segments, so most iterations hit an
+                        // existing entry; `entry()` would allocate a key Vec for
+                        // every one of them, `get_mut` allocates for none.
+                        if let Some(existing) = merged.get_mut(name_bytes) {
+                            existing.extend(global_rows);
+                        } else {
+                            let _ = merged.insert(name_bytes.to_vec(), global_rows.collect());
+                        }
                     }
                 }
+                let _ = shard_cpu_micros.fetch_add(
+                    u64::try_from(t_shard.elapsed().as_micros()).unwrap_or(u64::MAX),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
                 merged
             })
             .collect();
+        let merge_ms = t_merge.elapsed().as_millis();
+        let merge_cpu_ms = shard_cpu_micros.load(std::sync::atomic::Ordering::Relaxed) / 1000;
         let merged_names_len: usize = shards.iter().map(BTreeMap::len).sum();
         let mut name_postings_bytes: Vec<u8> = Vec::new();
         let mut fst_builder = MapBuilder::memory();
+        // `serial_ms` is dominated by `MapBuilder::insert`: timing the three
+        // sub-phases separately measured sort+dedup at 25 ms and the postings
+        // write at 48 ms against 3,755 ms of insert, so this is ~98% FST build.
+        // It cannot be parallelised — MapBuilder requires ascending keys.
+        let t_serial = std::time::Instant::now();
         for shard in shards {
             for (name_bytes, mut rows) in shard {
                 rows.sort_unstable();
@@ -807,9 +825,16 @@ impl OverlayBuilder {
                     .context("inserting name into overlay FST")?;
             }
         }
+        let serial_ms = t_serial.elapsed().as_millis();
+        let t_finalise = std::time::Instant::now();
         let name_fst_bytes = fst_builder.into_inner().context("finalising overlay FST")?;
         info!(
             ms = t_step.elapsed().as_millis(),
+            prep_ms,
+            merge_ms,
+            merge_cpu_ms,
+            serial_ms,
+            finalise_ms = t_finalise.elapsed().as_millis(),
             unique_names = merged_names_len,
             fst_bytes = name_fst_bytes.len(),
             mem = %crate::mem::snapshot(), "TIMING step6: name FST + postings (parallel)",
@@ -903,9 +928,12 @@ impl OverlayBuilder {
             .par_iter()
             .map(|(_, _, reader)| reader.usages_fst.as_ref().map_or([0; 4], first_byte_mask))
             .collect();
+        let t_merge = std::time::Instant::now();
+        let shard_cpu_micros = std::sync::atomic::AtomicU64::new(0);
         let shards: Vec<BTreeMap<Vec<u8>, u64>> = name_shard_bounds()
             .par_iter()
             .map(|&(byte, lo, hi)| {
+                let t_shard = std::time::Instant::now();
                 let mut counts: BTreeMap<Vec<u8>, u64> = BTreeMap::new();
                 for ((_, _, reader), mask) in segs.iter().zip(&seg_masks) {
                     let Some(fst) = &reader.usages_fst else {
@@ -926,13 +954,20 @@ impl OverlayBuilder {
                         *counts.entry(name_bytes.to_vec()).or_default() += encoded & 0xFFFF_FFFF;
                     }
                 }
+                let _ = shard_cpu_micros.fetch_add(
+                    u64::try_from(t_shard.elapsed().as_micros()).unwrap_or(u64::MAX),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
                 counts
             })
             .collect();
+        let merge_ms = t_merge.elapsed().as_millis();
+        let merge_cpu_ms = shard_cpu_micros.load(std::sync::atomic::Ordering::Relaxed) / 1000;
         let names: usize = shards.iter().map(BTreeMap::len).sum();
         if names == 0 {
             return Ok(Vec::new());
         }
+        let t_serial = std::time::Instant::now();
         let mut fst_builder = MapBuilder::memory();
         for shard in &shards {
             for (name, count) in shard {
@@ -941,11 +976,17 @@ impl OverlayBuilder {
                     .context("usages_count_fst insert")?;
             }
         }
+        let serial_ms = t_serial.elapsed().as_millis();
+        let t_finalise = std::time::Instant::now();
         let bytes = fst_builder
             .into_inner()
             .context("finalising usages_count FST")?;
         info!(
             ms = t_step.elapsed().as_millis(),
+            merge_ms,
+            merge_cpu_ms,
+            serial_ms,
+            finalise_ms = t_finalise.elapsed().as_millis(),
             names,
             bytes = bytes.len(),
             mem = %crate::mem::snapshot(), "TIMING step6.5: usages-count FST (parallel)"
@@ -1070,14 +1111,23 @@ fn collect_file_only(worktree_root: &Path, indexed: &HashSet<PathBuf>) -> Vec<(P
 ///
 /// This mirrors `decode_name_postings` in `segment_reader.rs`.
 fn decode_name_postings_raw(encoded: u64, name_postings: &[u8]) -> Vec<u32> {
+    name_postings_slice(encoded, name_postings).to_vec()
+}
+
+/// The same decode, borrowed rather than copied.
+///
+/// The merge calls this once per (name, segment) pair — 3 M times on a
+/// mid-sized corpus — so handing back the mapped slice instead of a fresh
+/// `Vec` removes one heap allocation per call from the hot loop.
+fn name_postings_slice(encoded: u64, name_postings: &[u8]) -> &[u32] {
     let count = usize::try_from(encoded & 0xFFFF_FFFF).unwrap_or(usize::MAX);
     let byte_offset = usize::try_from((encoded >> 32) & 0xFFFF_FFFF).unwrap_or(usize::MAX);
-    let end = byte_offset + count * 4;
+    let end = byte_offset.saturating_add(count.saturating_mul(4));
     if end > name_postings.len() {
-        return Vec::new();
+        return &[];
     }
     #[expect(clippy::indexing_slicing, reason = "bounds checked above")]
-    cast_slice::<u8, u32>(&name_postings[byte_offset..end]).to_vec()
+    cast_slice::<u8, u32>(&name_postings[byte_offset..end])
 }
 
 /// One shard: its first byte, then the `(lower, upper)` key bounds it owns —
