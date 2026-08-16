@@ -398,6 +398,17 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        simply cannot be compared, byte for byte, against a v69 build of
 ///        the same file. Answers do not change: the overlay checksum is
 ///        identical across the bump.
+///   70 — enricher changes on the C/C++ body walk. `MetricsEnricher` counts
+///        return/goto/string/throw in one bounded traversal instead of four,
+///        and the escape enricher collects local, array and static
+///        declarations in one walk instead of three — both output-preserving,
+///        pinned by test rather than by checksum. Landing with them:
+///        `escape_vars` is emitted from a sorted view of the local names
+///        rather than straight out of a hash set, so the same file no longer
+///        spells the same variables in a different order on each run. That
+///        last one DOES change a stored value, which is why a v69 segment
+///        must not be reused: it would keep serving whichever order it
+///        happened to record.
 pub const ENRICH_VER: u32 = 70;
 
 /// The filename used for the columnar delta file in the repository root.

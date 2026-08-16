@@ -244,6 +244,13 @@ fn scan_macro_escapes(
     if call_kind.is_empty() {
         return;
     }
+    // Sorted once, outside the walk: `escape_vars` is emitted in discovery
+    // order, so iterating the set directly spelled the same names in a
+    // different order on every run — a HashSet is seeded per process. The
+    // sibling `escape_kinds` below is already sorted for this reason.
+    let mut locals_sorted: Vec<&str> = local_names.iter().copied().collect();
+    locals_sorted.sort_unstable();
+
     walk_dfs(ctx.node, |node| {
         if node.kind() != call_kind {
             return;
@@ -261,7 +268,7 @@ fn scan_macro_escapes(
         if let Some(result) =
             super::macro_resolve::resolve_macro(table, &func_name, &args, expander, &mut budget, 0)
         {
-            for &local_name in local_names {
+            for &local_name in &locals_sorted {
                 let pattern = format!("&{local_name}");
                 if result.expanded.contains(&pattern) {
                     acc.escaping.push(local_name.to_string());
