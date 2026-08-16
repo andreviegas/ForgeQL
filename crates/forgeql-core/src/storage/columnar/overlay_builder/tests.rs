@@ -1,4 +1,5 @@
-//! Unit tests for the enrichment-bitmap step of [`OverlayBuilder`].
+//! Unit tests for the enrichment-bitmap and name-shard steps of
+//! [`OverlayBuilder`].
 //!
 //! These drive `step55_build_enrich_bitmaps` over real flushed segments and
 //! decode the blob it hands back.  That is one level below the engine: the
@@ -171,4 +172,93 @@ fn field_inside_budget_keeps_every_value_and_unions_across_segments() {
     // has to union its rows, not replace them.
     let rows: Vec<u32> = decoded["under=u0"].iter().collect();
     assert_eq!(rows, vec![0, 32, 72]);
+}
+
+/// Walk `keys` the way the sharded merge does and return what came back.
+///
+/// Builds an FST of `keys`, takes its [`first_byte_mask`], then for every shard
+/// in [`name_shard_bounds`] either streams the shard's byte range or skips the
+/// FST because the mask says the byte is absent — exactly the loop in
+/// `step6_build_name_fst`. Returns the keys collected, sorted, so a caller can
+/// compare against the keys it put in.
+fn keys_via_shard_walk(keys: &[&[u8]]) -> Vec<Vec<u8>> {
+    let mut builder = MapBuilder::memory();
+    for (value, key) in keys.iter().enumerate() {
+        builder.insert(key, value as u64).expect("ascending insert");
+    }
+    let map = FstMap::new(builder.into_inner().expect("finalise")).expect("valid fst");
+    let mask = first_byte_mask(&map);
+
+    let mut seen: Vec<Vec<u8>> = Vec::new();
+    for (byte, lo, hi) in name_shard_bounds() {
+        if !shard_present(&mask, byte) {
+            continue;
+        }
+        let mut range = map.range();
+        if let Some(lo) = lo {
+            range = range.ge(lo);
+        }
+        if let Some(hi) = hi {
+            range = range.lt(hi);
+        }
+        let mut stream = range.into_stream();
+        while let Some((key, _)) = stream.next() {
+            seen.push(key.to_vec());
+        }
+    }
+    seen.sort();
+    seen
+}
+
+/// Assert the shard walk over `keys` returns each of them exactly once.
+fn assert_shard_walk_is_lossless(keys: &[&[u8]], what: &str) {
+    let mut expected: Vec<Vec<u8>> = keys.iter().map(|key| key.to_vec()).collect();
+    expected.sort();
+    assert_eq!(keys_via_shard_walk(keys), expected, "{what}");
+}
+
+/// The first-byte shard partition, pinned end to end on hand-built FSTs.
+///
+/// `step6_build_name_fst` no longer walks each segment once; it walks each
+/// segment once *per shard*, taking only the keys in that shard's byte range,
+/// and skips a segment outright when [`first_byte_mask`] says the shard's byte
+/// is not among the FST root's transitions. A key that falls in no shard, or in
+/// a shard the mask wrongly skips, disappears from the overlay silently — the
+/// merge has no way to notice, and the corpus checksums cannot see it either,
+/// because no corpus is guaranteed to contain the keys that exercise the ends.
+///
+/// So each case below isolates ONE branch, holding a key that survives only if
+/// that branch is right. Sharing an FST would defeat this: put `b""` and
+/// `b"\x00a"` in one map and the transition sets bit 0 on its own, so dropping
+/// the `is_final` arm would still pass.
+#[test]
+fn every_key_lands_in_exactly_one_first_byte_shard() {
+    // The empty key is a final root, never a transition. Alone in shard 0, so
+    // this fails if `first_byte_mask` stops folding `is_final` onto bit 0.
+    assert_shard_walk_is_lossless(&[b"", b"abc"], "the empty key");
+
+    // Shard 0's range is open below. This fails if it gains a `ge([0])` bound
+    // — `b""` sorts before `[0]` — and the `0x00` key pins the range's top end.
+    assert_shard_walk_is_lossless(&[b"", b"\x00a", b"abc"], "0x00-prefixed keys");
+
+    // Shard 255's range is open above: there is no `[256]` to bound it with, so
+    // `checked_add` yields `None`. This fails if that becomes a wrapping add,
+    // which would bound the shard at `[0]` and make its range empty.
+    assert_shard_walk_is_lossless(&[b"abc", b"\xff", b"\xffz"], "0xFF-prefixed keys");
+
+    // Nothing is dropped or double-counted across the whole byte range, with a
+    // multi-byte UTF-8 name reaching above the ASCII block.
+    assert_shard_walk_is_lossless(
+        &[
+            b"",
+            b"\x00a",
+            b"Zed",
+            b"_underscore",
+            b"abc",
+            b"abcd",
+            b"\xc3\xa9x",
+            b"\xff",
+        ],
+        "the whole byte range at once",
+    );
 }

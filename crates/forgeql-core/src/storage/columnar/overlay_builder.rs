@@ -19,9 +19,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use bytemuck::cast_slice;
-use fst::{MapBuilder, Streamer as _};
+use fst::{IntoStreamer as _, Map as FstMap, MapBuilder, Streamer as _};
 use ignore::WalkBuilder;
 use rayon::prelude::*;
 use roaring::RoaringBitmap;
@@ -736,43 +736,83 @@ impl OverlayBuilder {
         row_offsets: &[u32],
     ) -> Result<(Vec<u8>, Vec<u8>)> {
         let t_step = std::time::Instant::now();
-        let mut merged_names: BTreeMap<Vec<u8>, Vec<u32>> = BTreeMap::new();
-        for (seg_idx, (_, _, reader)) in segs.iter().enumerate() {
-            let row_offset = row_offsets[seg_idx];
-            let name_postings_raw = reader.name_postings_bytes();
-            let mut stream = reader.name_fst.stream();
-            while let Some((name_bytes, encoded)) = stream.next() {
-                let local_rows = decode_name_postings_raw(encoded, name_postings_raw);
-                let global_rows: Vec<u32> =
-                    local_rows.into_iter().map(|r| r + row_offset).collect();
-                merged_names
-                    .entry(name_bytes.to_vec())
-                    .or_default()
-                    .extend(global_rows);
-            }
-        }
-        let merged_names_len = merged_names.len();
+        // `zip` truncates to the shorter side, so a short `row_offsets` would
+        // drop the tail segments' names from the merge instead of failing.
+        ensure!(
+            segs.len() == row_offsets.len(),
+            "overlay name merge got {} segments but {} row offsets",
+            segs.len(),
+            row_offsets.len(),
+        );
+        // Resolve per segment once instead of once per (segment, shard): the
+        // postings blob is a hash probe, and the first-byte mask lets a shard
+        // skip outright every segment that cannot hold one of its keys.
+        let seg_inputs: Vec<(&[u8], u32, ShardMask)> = segs
+            .par_iter()
+            .zip(row_offsets)
+            .map(|((_, _, reader), &row_offset)| {
+                (
+                    reader.name_postings_bytes(),
+                    row_offset,
+                    first_byte_mask(&reader.name_fst),
+                )
+            })
+            .collect();
+        let shards: Vec<BTreeMap<Vec<u8>, Vec<u32>>> = name_shard_bounds()
+            .par_iter()
+            .map(|&(byte, lo, hi)| {
+                let mut merged: BTreeMap<Vec<u8>, Vec<u32>> = BTreeMap::new();
+                for ((_, _, reader), &(name_postings_raw, row_offset, mask)) in
+                    segs.iter().zip(&seg_inputs)
+                {
+                    if !shard_present(&mask, byte) {
+                        continue;
+                    }
+                    let mut range = reader.name_fst.range();
+                    if let Some(lo) = lo {
+                        range = range.ge(lo);
+                    }
+                    if let Some(hi) = hi {
+                        range = range.lt(hi);
+                    }
+                    let mut stream = range.into_stream();
+                    while let Some((name_bytes, encoded)) = stream.next() {
+                        let local_rows = decode_name_postings_raw(encoded, name_postings_raw);
+                        let global_rows: Vec<u32> =
+                            local_rows.into_iter().map(|r| r + row_offset).collect();
+                        merged
+                            .entry(name_bytes.to_vec())
+                            .or_default()
+                            .extend(global_rows);
+                    }
+                }
+                merged
+            })
+            .collect();
+        let merged_names_len: usize = shards.iter().map(BTreeMap::len).sum();
         let mut name_postings_bytes: Vec<u8> = Vec::new();
         let mut fst_builder = MapBuilder::memory();
-        for (name_bytes, mut rows) in merged_names {
-            rows.sort_unstable();
-            rows.dedup();
-            let byte_offset = name_postings_bytes.len();
-            let count = rows.len();
-            for r in &rows {
-                name_postings_bytes.extend_from_slice(&r.to_le_bytes());
+        for shard in shards {
+            for (name_bytes, mut rows) in shard {
+                rows.sort_unstable();
+                rows.dedup();
+                let byte_offset = name_postings_bytes.len();
+                let count = rows.len();
+                for r in &rows {
+                    name_postings_bytes.extend_from_slice(&r.to_le_bytes());
+                }
+                let packed = ((byte_offset as u64) << 32) | (count as u64);
+                fst_builder
+                    .insert(&name_bytes, packed)
+                    .context("inserting name into overlay FST")?;
             }
-            let packed = ((byte_offset as u64) << 32) | (count as u64);
-            fst_builder
-                .insert(&name_bytes, packed)
-                .context("inserting name into overlay FST")?;
         }
         let name_fst_bytes = fst_builder.into_inner().context("finalising overlay FST")?;
         info!(
             ms = t_step.elapsed().as_millis(),
             unique_names = merged_names_len,
             fst_bytes = name_fst_bytes.len(),
-            mem = %crate::mem::snapshot(), "TIMING step6: name FST + postings",
+            mem = %crate::mem::snapshot(), "TIMING step6: name FST + postings (parallel)",
         );
         Ok((name_fst_bytes, name_postings_bytes))
     }
@@ -859,25 +899,47 @@ impl OverlayBuilder {
     /// usage postings (the overlay blob is then zero-length).
     fn step65_build_usages_count_fst(segs: &[(PathBuf, String, SegmentReader)]) -> Result<Vec<u8>> {
         let t_step = std::time::Instant::now();
-        let mut counts: BTreeMap<Vec<u8>, u64> = BTreeMap::new();
-        for (_, _, reader) in segs {
-            let Some(fst) = &reader.usages_fst else {
-                continue;
-            };
-            let mut stream = fst.stream();
-            while let Some((name_bytes, encoded)) = stream.next() {
-                *counts.entry(name_bytes.to_vec()).or_default() += encoded & 0xFFFF_FFFF;
-            }
-        }
-        if counts.is_empty() {
+        let seg_masks: Vec<ShardMask> = segs
+            .par_iter()
+            .map(|(_, _, reader)| reader.usages_fst.as_ref().map_or([0; 4], first_byte_mask))
+            .collect();
+        let shards: Vec<BTreeMap<Vec<u8>, u64>> = name_shard_bounds()
+            .par_iter()
+            .map(|&(byte, lo, hi)| {
+                let mut counts: BTreeMap<Vec<u8>, u64> = BTreeMap::new();
+                for ((_, _, reader), mask) in segs.iter().zip(&seg_masks) {
+                    let Some(fst) = &reader.usages_fst else {
+                        continue;
+                    };
+                    if !shard_present(mask, byte) {
+                        continue;
+                    }
+                    let mut range = fst.range();
+                    if let Some(lo) = lo {
+                        range = range.ge(lo);
+                    }
+                    if let Some(hi) = hi {
+                        range = range.lt(hi);
+                    }
+                    let mut stream = range.into_stream();
+                    while let Some((name_bytes, encoded)) = stream.next() {
+                        *counts.entry(name_bytes.to_vec()).or_default() += encoded & 0xFFFF_FFFF;
+                    }
+                }
+                counts
+            })
+            .collect();
+        let names: usize = shards.iter().map(BTreeMap::len).sum();
+        if names == 0 {
             return Ok(Vec::new());
         }
-        let names = counts.len();
         let mut fst_builder = MapBuilder::memory();
-        for (name, count) in &counts {
-            fst_builder
-                .insert(name, *count)
-                .context("usages_count_fst insert")?;
+        for shard in &shards {
+            for (name, count) in shard {
+                fst_builder
+                    .insert(name, *count)
+                    .context("usages_count_fst insert")?;
+            }
         }
         let bytes = fst_builder
             .into_inner()
@@ -886,7 +948,7 @@ impl OverlayBuilder {
             ms = t_step.elapsed().as_millis(),
             names,
             bytes = bytes.len(),
-            mem = %crate::mem::snapshot(), "TIMING step6.5: usages-count FST"
+            mem = %crate::mem::snapshot(), "TIMING step6.5: usages-count FST (parallel)"
         );
         Ok(bytes)
     }
@@ -1016,6 +1078,65 @@ fn decode_name_postings_raw(encoded: u64, name_postings: &[u8]) -> Vec<u32> {
     }
     #[expect(clippy::indexing_slicing, reason = "bounds checked above")]
     cast_slice::<u8, u32>(&name_postings[byte_offset..end]).to_vec()
+}
+
+/// One shard: its first byte, then the `(lower, upper)` key bounds it owns —
+/// either end open.
+type NameShard = (u8, Option<[u8; 1]>, Option<[u8; 1]>);
+
+/// Disjoint `(lower, upper)` key bounds partitioning the whole key space by
+/// first byte, in ascending order: shard `i` owns every name whose first byte
+/// is `i`, and shard 0 additionally owns the empty name.
+///
+/// This is what lets a name merge run in parallel without costing memory. A
+/// per-thread partial map would store every shared name once per thread; a
+/// shard stores each name exactly once, because the shards are disjoint. And
+/// because they are also in ascending order, concatenating them yields the same
+/// strictly ascending key sequence a single sorted map would — which is what
+/// `fst::MapBuilder` requires, and why the merged output is byte-identical.
+///
+/// The price is that each shard re-opens a range stream per segment. That is
+/// bounded by segment count rather than row count, and `first_byte_mask` skips
+/// the segments a shard has no keys in, which is most of them.
+fn name_shard_bounds() -> Vec<NameShard> {
+    (0..=u8::MAX)
+        .map(|b| {
+            let lo = if b == 0 { None } else { Some([b]) };
+            (b, lo, b.checked_add(1).map(|hi| [hi]))
+        })
+        .collect()
+}
+
+/// A 256-bit set of the first bytes a segment's keys can start with.
+type ShardMask = [u64; 4];
+
+/// Read off the FST root node's outgoing transitions the set of first bytes any
+/// key in `map` can start with — for identifier-shaped names that is a few
+/// dozen of the 256, so a shard can skip most segments outright instead of
+/// opening a range stream that would find nothing. Bit 0 doubles as "shard 0
+/// has work", since shard 0 owns the empty key as well as the `\0`-prefixed
+/// ones, and an empty key is a final root rather than a transition.
+fn first_byte_mask<D: AsRef<[u8]>>(map: &FstMap<D>) -> ShardMask {
+    let mut mask: ShardMask = [0; 4];
+    let root = map.as_fst().root();
+    let mut set = |byte: u8| {
+        if let Some(word) = mask.get_mut(usize::from(byte) / 64) {
+            *word |= 1_u64 << (u32::from(byte) % 64);
+        }
+    };
+    if root.is_final() {
+        set(0);
+    }
+    for transition in root.transitions() {
+        set(transition.inp);
+    }
+    mask
+}
+
+/// Whether `mask` says the segment holds any key in shard `byte`.
+fn shard_present(mask: &ShardMask, byte: u8) -> bool {
+    mask.get(usize::from(byte) / 64)
+        .is_some_and(|word| word & (1_u64 << (u32::from(byte) % 64)) != 0)
 }
 
 /// Decode a hex string (e.g. a `hex_content_id`) to raw bytes.
