@@ -574,9 +574,29 @@ impl OverlayBuilder {
         }
     }
 
-    /// Category 2 of step 5.5: numeric fields not covered by the posting index
-    /// (`POSTING_ENRICHMENT_FIELDS`), read row-by-row.  Same bucket-pruning rule
-    /// as the posting pass.
+    /// Category 2 of step 5.5: enrichment fields not covered by the posting
+    /// index (`POSTING_ENRICHMENT_FIELDS`).  Same bucket-pruning rule as the
+    /// posting pass.
+    ///
+    /// The walk is column-major and integer-only.  A row's value for a column
+    /// is already a `u32` id into that segment's own string table, so the rows
+    /// accumulate as `value id -> global rows` and no text is touched while
+    /// walking them; only at the end of a column is each DISTINCT id resolved
+    /// once and merged into `enrich_raw`.  That is the point of the shape: the
+    /// string and `format!` work is `O(segments x distinct values)`, bounded by
+    /// `overlay_budget`, instead of `O(rows x fields)`.  Reading a row used to
+    /// build a `HashMap<String, String>` of freshly cloned column names and
+    /// copied values, and then a third `String` per field to key the map — on a
+    /// 30M-row corpus, order 10^8 allocations to produce a 133 MB blob.
+    ///
+    /// Value ids are per-segment, which is why the accumulator is per-segment:
+    /// the same text can carry different ids in two segments, so nothing keyed
+    /// on an id may outlive the segment that issued it.
+    ///
+    /// Column-major does not reorder the pruning.  Within a column the values
+    /// are merged in the order the rows first produce them — the order the
+    /// row-by-row walk saw them in — and a field's budget is spent only on its
+    /// own values, so no field's fate depends on when another field is read.
     fn collect_numeric_enrichment(
         segs: &[(PathBuf, String, SegmentReader)],
         row_offsets: &[u32],
@@ -586,34 +606,83 @@ impl OverlayBuilder {
         pruned_fields: &mut HashSet<String>,
     ) {
         let posting_field_set: HashSet<&str> = POSTING_ENRICHMENT_FIELDS.iter().copied().collect();
+        // Cleared and refilled per column, never reallocated per row.  `order`
+        // keeps first-appearance order, which the map itself does not hold.
+        let mut by_value: HashMap<u32, RoaringBitmap> = HashMap::new();
+        let mut order: Vec<u32> = Vec::new();
         for (seg_idx, (_, _, reader)) in segs.iter().enumerate() {
             let row_offset = row_offsets[seg_idx];
             let canonical_bm = &seg_dedup[seg_idx].0;
-            for local_row in canonical_bm {
-                let global_row = local_row + row_offset;
-                for (field_name, value_str) in reader.enrichment_for_row(local_row) {
-                    if posting_field_set.contains(field_name.as_str()) {
-                        continue;
-                    }
-                    if pruned_fields.contains(&field_name) {
-                        continue;
-                    }
-                    let seen = field_seen.entry(field_name.clone()).or_default();
-                    if !seen.contains(&value_str) {
-                        if seen.len() >= overlay_budget(&field_name) {
-                            let _ = pruned_fields.insert(field_name.clone());
-                            let pfx = format!("{field_name}=");
-                            enrich_raw.retain(|k, _| !k.starts_with(&pfx));
-                            continue;
-                        }
-                        let _ = seen.insert(value_str.clone());
-                    }
-                    if pruned_fields.contains(&field_name) {
-                        continue;
-                    }
-                    let key = format!("{field_name}={value_str}");
-                    let _ = enrich_raw.entry(key).or_default().insert(global_row);
+            for (field_name, value_ids) in reader.enrichment_columns() {
+                if posting_field_set.contains(field_name) || pruned_fields.contains(field_name) {
+                    continue;
                 }
+                by_value.clear();
+                order.clear();
+                for local_row in canonical_bm {
+                    let Some(&value_id) = value_ids.get(local_row as usize) else {
+                        continue;
+                    };
+                    if value_id == u32::MAX {
+                        continue;
+                    }
+                    let rows = by_value.entry(value_id).or_insert_with(|| {
+                        order.push(value_id);
+                        RoaringBitmap::new()
+                    });
+                    let _ = rows.insert(local_row + row_offset);
+                }
+                Self::merge_segment_column(
+                    reader,
+                    field_name,
+                    &order,
+                    &by_value,
+                    enrich_raw,
+                    field_seen,
+                    pruned_fields,
+                );
+            }
+        }
+    }
+
+    /// Merge one segment's column into `enrich_raw`, resolving each distinct
+    /// value id to text exactly once.
+    ///
+    /// `order` lists the ids in the order the rows first produced them, so the
+    /// budget is spent on the same values, in the same order, that a row-by-row
+    /// walk would have spent it on.  A field that runs past `overlay_budget`
+    /// distinct values is pruned here exactly as the posting pass prunes it:
+    /// recorded in `pruned_fields`, its already-collected keys dropped, and the
+    /// rest of its values abandoned.
+    fn merge_segment_column(
+        reader: &SegmentReader,
+        field_name: &str,
+        order: &[u32],
+        by_value: &HashMap<u32, RoaringBitmap>,
+        enrich_raw: &mut HashMap<String, RoaringBitmap>,
+        field_seen: &mut HashMap<String, HashSet<String>>,
+        pruned_fields: &mut HashSet<String>,
+    ) {
+        let budget = overlay_budget(field_name);
+        let seen = field_seen.entry(field_name.to_owned()).or_default();
+        for &value_id in order {
+            let value_str = reader.string_of_id(value_id);
+            if value_str.is_empty() {
+                continue;
+            }
+            if !seen.contains(value_str) {
+                if seen.len() >= budget {
+                    let _ = pruned_fields.insert(field_name.to_owned());
+                    let pfx = format!("{field_name}=");
+                    enrich_raw.retain(|k, _| !k.starts_with(&pfx));
+                    return;
+                }
+                let _ = seen.insert(value_str.to_owned());
+            }
+            if let Some(rows) = by_value.get(&value_id) {
+                *enrich_raw
+                    .entry(format!("{field_name}={value_str}"))
+                    .or_default() |= rows;
             }
         }
     }
@@ -959,3 +1028,7 @@ fn hex_to_bytes(hex: &str) -> Vec<u8> {
         .filter_map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
         .collect()
 }
+
+#[cfg(test)]
+#[expect(clippy::expect_used, reason = "test code")]
+mod tests;

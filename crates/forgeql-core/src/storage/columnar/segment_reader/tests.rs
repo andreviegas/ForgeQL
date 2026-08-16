@@ -945,3 +945,59 @@ fn a_column_named_after_any_declared_field_answers_as_the_built_row_or_not_at_al
         "no declared field was actually answered early, so this proved nothing"
     );
 }
+
+/// `enrichment_columns` is `enrichment_for_row` turned inside out: the overlay
+/// build reads enrichment through the first, every query reads it through the
+/// second.  If the two ever disagree about which slots count — the `u32::MAX`
+/// NULL, the empty string, a column absent from this segment — the overlay
+/// quietly stops describing what a query sees, and no query result changes to
+/// say so.  This is the only place that disagreement is visible.
+#[test]
+fn enrichment_columns_agrees_with_enrichment_for_row() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let seg = tmp.path().join("seg.fqsf");
+    let content_id = [0x3C_u8; 20];
+    let mut b = SegmentBuilder::new("test", &content_id);
+
+    for (i, name) in ["alpha", "beta", "gamma"].iter().enumerate() {
+        let row = b.emit_row(SymbolRow {
+            name,
+            fql_kind: "function",
+            language: "rust",
+            line: u32::try_from(i + 1).expect("small fixture"),
+            byte_start: 0,
+            byte_end: 10,
+            usages_count: 0,
+        });
+        // Row 1 leaves `param_count` unset and carries an empty `naming` — the
+        // two slot kinds the two views have to agree to skip.
+        if i != 1 {
+            b.set_field(row, "param_count", "2");
+        }
+        b.set_field(row, "naming", if i == 1 { "" } else { "snake_case" });
+    }
+    b.flush(&seg).expect("flush");
+
+    let reader = SegmentReader::open(&seg).expect("open");
+    for row in 0..reader.row_count {
+        let mut from_columns: HashMap<String, String> = HashMap::new();
+        for (name, value_ids) in reader.enrichment_columns() {
+            let Some(&id) = value_ids.get(row as usize) else {
+                continue;
+            };
+            if id == u32::MAX {
+                continue;
+            }
+            let value = reader.string_of_id(id);
+            if value.is_empty() {
+                continue;
+            }
+            let _ = from_columns.insert(name.to_owned(), value.to_owned());
+        }
+        assert_eq!(
+            from_columns,
+            reader.enrichment_for_row(row),
+            "the column view and the row view disagree at row {row}"
+        );
+    }
+}

@@ -375,7 +375,21 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        budget is now per field. A v63 segment carries no postings blob for
 ///        any of the five, so on one every query on them is a full scan —
 ///        which is why this is a version bump and not a query-side change.
-pub const ENRICH_VER: u32 = 64;
+///   65–67 — not used by this repository. 65 and 66 were consumed by the
+///        before/after measurement protocol for the v68 rewrite below — the
+///        overlay path carries the version, so comparing two builds like for
+///        like costs a version each — and 67 by an unrelated change in flight
+///        at the same time. No segment-format change is implied by any of the
+///        three, and no `-v65`…`-v67` segment directory is ever created here.
+///   68 — step 5.5 of the overlay build walks each segment's enrichment
+///        columns as the `u32` value ids they already are, resolving each
+///        distinct id to text once per segment instead of rebuilding a
+///        `String` per field per row. Nothing stored changes shape: the
+///        overlay is BYTE-IDENTICAL either way, verified by checksum on two
+///        corpora, so a v64 segment is not wrong, only keyed under the older
+///        version. The bump exists so the rewrite can never be measured, or
+///        served, from a cache built by the code it replaced.
+pub const ENRICH_VER: u32 = 68;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

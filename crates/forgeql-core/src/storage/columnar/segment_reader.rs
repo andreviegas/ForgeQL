@@ -1014,6 +1014,33 @@ impl SegmentReader {
         map
     }
 
+    /// Iterate the segment's enrichment columns as `(name, value ids)`.
+    ///
+    /// This is [`Self::enrichment_for_row`] turned inside out, and it is the
+    /// form to reach for when reading many rows: the value ids are handed over
+    /// as the `&[u32]` column they already are on disk, indexed by row, so a
+    /// caller can walk rows without materialising a single `String`.
+    ///
+    /// A value id indexes THIS segment's string table.  Two segments can spell
+    /// the same text with different ids, so a `(column, id)` pair identifies a
+    /// value only within one segment — resolve ids with
+    /// [`Self::string_of_id`] before comparing anything across segments.
+    ///
+    /// `u32::MAX` is the NULL slot, and a row past the end of a column has no
+    /// value for it.  An absent column yields an empty slice rather than being
+    /// skipped, so every segment reports the same column list its header does.
+    pub(crate) fn enrichment_columns(&self) -> impl Iterator<Item = (&str, &[u32])> {
+        self.extra_cols.iter().map(|(name, range)| {
+            let blob = self.col_bytes(*range);
+            let ids: &[u32] = if blob.is_empty() {
+                &[]
+            } else {
+                cast_slice(blob)
+            };
+            (name.as_str(), ids)
+        })
+    }
+
     // ─────────────────────────────────────────────────────────────────────
     // Private helpers
     // ─────────────────────────────────────────────────────────────────────
