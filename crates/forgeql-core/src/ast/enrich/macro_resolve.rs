@@ -4,7 +4,7 @@
 //! selects the best matching definition (respecting guard context), and
 //! performs parameter substitution via a language-supplied [`MacroExpander`].
 
-use crate::ast::enrich::macro_table::{MacroDef, MacroTable};
+use crate::ast::enrich::macro_table::{MacroDef, MacroTable, StoredDef};
 use crate::ast::lang::MacroExpander;
 
 // -----------------------------------------------------------------------
@@ -109,12 +109,12 @@ pub fn resolve_macro(
     // Preference: matching arity first, then any object-like def.
     let def = select_def(defs, args.len())?;
 
-    let params: &[String] = def.params.as_deref().unwrap_or(&[]);
-    let substituted = expander.substitute(&def.body, params, args);
+    let params: &[String] = def.params().unwrap_or(&[]);
+    let substituted = expander.substitute(def.body(), params, args);
 
     Some(MacroResolveResult {
         expanded: substituted,
-        resolved_def: def.clone(),
+        resolved_def: table.hydrate(def),
         depth,
     })
 }
@@ -122,17 +122,17 @@ pub fn resolve_macro(
 /// Select the best macro definition from a slice for the given argument count.
 ///
 /// Returns `None` when no definition can accept the given number of arguments.
-fn select_def(defs: &[MacroDef], arg_count: usize) -> Option<&MacroDef> {
+fn select_def(defs: &[StoredDef], arg_count: usize) -> Option<&StoredDef> {
     // Prefer a function-like def whose arity matches exactly.
     if let Some(def) = defs
         .iter()
-        .find(|d| d.params.as_ref().is_some_and(|p| p.len() == arg_count))
+        .find(|d| d.params().is_some_and(|p| p.len() == arg_count))
     {
         return Some(def);
     }
     // Fall back to an object-like def only when no args were provided.
     if arg_count == 0
-        && let Some(def) = defs.iter().find(|d| d.params.is_none())
+        && let Some(def) = defs.iter().find(|d| d.params().is_none())
     {
         return Some(def);
     }
