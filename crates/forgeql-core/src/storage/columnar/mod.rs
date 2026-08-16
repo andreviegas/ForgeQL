@@ -389,7 +389,16 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        corpora, so a v64 segment is not wrong, only keyed under the older
 ///        version. The bump exists so the rewrite can never be measured, or
 ///        served, from a cache built by the code it replaced.
-pub const ENRICH_VER: u32 = 68;
+///   69 — `dense_extra_columns` walks the enrichment columns sorted by name
+///        rather than in `HashMap` order. A `Str` column's values are
+///        interned as the column is walked, so the old order assigned
+///        different string ids on every run and one source file produced
+///        byte-different segments each time — 3,237 of 3,240 segments on a
+///        C corpus. It is now 34. A v68 segment holds correct data; it
+///        simply cannot be compared, byte for byte, against a v69 build of
+///        the same file. Answers do not change: the overlay checksum is
+///        identical across the bump.
+pub const ENRICH_VER: u32 = 69;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

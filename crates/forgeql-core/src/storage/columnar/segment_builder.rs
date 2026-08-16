@@ -669,7 +669,14 @@ impl SegmentBuilder {
     /// (`u32::MAX` = absent), interning string values into the shared pool.
     /// Must run before `encode_string_table` so every value is in the pool.
     fn dense_extra_columns(&mut self, row_count: usize) -> Vec<(String, Vec<u32>)> {
-        let extra = std::mem::take(&mut self.extra_cols);
+        // Sorted by column name, like the postings encoders below. This one
+        // also settles the STRING POOL: a Str column's values are interned as
+        // the column is walked, so an unordered walk assigns different ids to
+        // the same strings on every run, and every column and the string table
+        // with them come out byte-different from an identical file.
+        let mut extra: Vec<(String, ColumnDraft)> =
+            std::mem::take(&mut self.extra_cols).into_iter().collect();
+        extra.sort_by(|(a, _), (b, _)| a.cmp(b));
         extra
             .into_iter()
             .map(|(name, draft)| {
