@@ -784,6 +784,32 @@ int outerOneReturn(void) {
     return 42;
 }
 
+/* outerBoundedCounts: every count the one bounded body scan gathers must
+   exclude the lambda's. Outer has 1 goto, 1 string, 1 throw; the lambda
+   inside has 2 gotos, 3 strings and 2 throws that must not be counted. */
+int outerBoundedCounts(int n) {
+    auto f = [](int y) {
+        const char *a = "lambda_one";
+        const char *b = "lambda_two";
+        const char *c = "lambda_three";
+        (void)a; (void)b; (void)c;
+        if (y < 0) goto lam_a;
+        if (y > 9) goto lam_b;
+        throw 1;
+    lam_a:
+        throw 2;
+    lam_b:
+        return y;
+    };
+    (void)f;
+    const char *outer = "outer_only";
+    (void)outer;
+    if (n < 0) goto out_a;
+    throw 3;
+out_a:
+    return n;
+}
+
 /* ------------------------------------------------------------------ */
 /* BUG-06 — is_magic false-positives in named constant contexts       */
 /* ------------------------------------------------------------------ */

@@ -1414,6 +1414,40 @@ fn metrics_return_count_no_lambda_inflation() {
         "outerOneReturn has 1 outer return (lambda return must not inflate count): got {rc}"
     );
 }
+
+#[test]
+fn metrics_bounded_counts_share_one_scan_without_lambda_inflation() {
+    // goto_count, string_count and throw_count are gathered by the same
+    // bounded body scan as return_count. Each must still stop at the lambda:
+    // outerBoundedCounts has 1 goto / 1 string / 1 throw of its own, and the
+    // lambda inside it has 2 / 3 / 2 that must not be counted.
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE name = 'outerBoundedCounts'",
+    );
+    let qr = common::as_query(&r);
+    let m = find_by_name(&qr.results, "outerBoundedCounts");
+
+    let gc: usize = field(m, "goto_count").parse().unwrap();
+    assert_eq!(
+        gc, 1,
+        "outerBoundedCounts has 1 outer goto (lambda has 2): got {gc}"
+    );
+
+    let sc: usize = field(m, "string_count").parse().unwrap();
+    assert_eq!(
+        sc, 1,
+        "outerBoundedCounts has 1 outer string (lambda has 3): got {sc}"
+    );
+
+    let tc: usize = field(m, "throw_count").parse().unwrap();
+    assert_eq!(
+        tc, 1,
+        "outerBoundedCounts has 1 outer throw (lambda has 2): got {tc}"
+    );
+}
 #[test]
 fn metrics_return_count() {
     let (mut e, sid, _d) = engine_enrichment_only();

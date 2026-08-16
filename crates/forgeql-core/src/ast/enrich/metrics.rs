@@ -51,36 +51,25 @@ impl NodeEnricher for MetricsEnricher {
         if config.is_function_kind(kind) {
             let param_count = count_params(ctx.node, config);
             drop(fields.insert("param_count".to_string(), param_count.to_string()));
-            // Aggregate counts that require subtree walk.
-            // Use bounded DFS to avoid counting inside lambdas/closures.
-            let stop_kinds = config.nested_function_body_kinds();
-            let return_count = count_descendants_by_kind_bounded(
-                ctx.node,
-                config.return_statement_kind(),
-                stop_kinds,
-            );
-            drop(fields.insert("return_count".to_string(), return_count.to_string()));
 
-            let goto_count = count_descendants_by_kind_bounded(
+            // Aggregate counts that require a subtree walk, gathered in ONE
+            // bounded DFS. Bounded to avoid counting inside lambdas/closures;
+            // all four counters share that same bound, which is why they can
+            // share the traversal.
+            let counts = count_body_metrics(
                 ctx.node,
-                config.goto_statement_kind(),
-                stop_kinds,
+                &BodyMetricKinds {
+                    return_kind: config.return_statement_kind(),
+                    goto_kind: config.goto_statement_kind(),
+                    string_kinds: config.string_literal_kinds(),
+                    throw_kind: config.throw_statement_kind(),
+                },
+                config.nested_function_body_kinds(),
             );
-            drop(fields.insert("goto_count".to_string(), goto_count.to_string()));
-
-            let string_count = count_descendants_by_kinds_bounded(
-                ctx.node,
-                config.string_literal_kinds(),
-                stop_kinds,
-            );
-            drop(fields.insert("string_count".to_string(), string_count.to_string()));
-
-            let throw_count = count_descendants_by_kind_bounded(
-                ctx.node,
-                config.throw_statement_kind(),
-                stop_kinds,
-            );
-            drop(fields.insert("throw_count".to_string(), throw_count.to_string()));
+            drop(fields.insert("return_count".to_string(), counts.returns.to_string()));
+            drop(fields.insert("goto_count".to_string(), counts.gotos.to_string()));
+            drop(fields.insert("string_count".to_string(), counts.strings.to_string()));
+            drop(fields.insert("throw_count".to_string(), counts.throws.to_string()));
         }
 
         // Member count for type definitions (struct/class/enum)
@@ -330,69 +319,65 @@ fn count_descendants_by_kind(node: tree_sitter::Node<'_>, target_kind: &str) -> 
     count_descendants_where(node, |k| k == target_kind)
 }
 
-/// Count all descendants of a specific kind, stopping recursion into `stop_kinds`.
-///
-/// Used for `return_count`, `goto_count`, `string_count`, and `throw_count`
-/// so that lambdas (or other nested function-like bodies) do not inflate
-/// the count for the enclosing function.
-fn count_descendants_by_kind_bounded(
-    node: tree_sitter::Node<'_>,
-    target_kind: &str,
-    stop_kinds: &[String],
-) -> usize {
-    let mut count = 0;
-    let mut cursor = node.walk();
-    let mut visit = true;
-
-    loop {
-        let current = cursor.node();
-        if visit && current != node {
-            if current.kind() == target_kind {
-                count += 1;
-            }
-            // Don't descend into nested function-like bodies (e.g. lambdas).
-            if stop_kinds.iter().any(|k| k == current.kind()) {
-                visit = false;
-            }
-        }
-
-        if visit && cursor.goto_first_child() {
-            visit = true;
-            continue;
-        }
-        if cursor.goto_next_sibling() {
-            visit = true;
-            continue;
-        }
-        loop {
-            if !cursor.goto_parent() {
-                return count;
-            }
-            if cursor.goto_next_sibling() {
-                visit = true;
-                break;
-            }
-        }
-    }
+/// The node kinds one bounded body scan looks for, one per counter.
+struct BodyMetricKinds<'a> {
+    return_kind: &'a str,
+    goto_kind: &'a str,
+    string_kinds: &'a [String],
+    throw_kind: &'a str,
 }
 
-/// Count all descendants matching any of the given kinds, stopping at `stop_kinds`.
-fn count_descendants_by_kinds_bounded(
+/// Counts gathered from a single bounded DFS of a function body.
+struct BodyCounts {
+    returns: usize,
+    gotos: usize,
+    strings: usize,
+    throws: usize,
+}
+
+/// Count returns, gotos, string literals and throws in ONE bounded DFS,
+/// stopping recursion into `stop_kinds`.
+///
+/// This replaces four separate traversals of the same body. It is safe to
+/// share one walk because all four counters used the identical bound
+/// (`nested_function_body_kinds`) and the identical traversal — root
+/// excluded, a `stop_kinds` node counted before recursion into it stops — so
+/// each counter still sees exactly the nodes it saw when it had its own walk.
+///
+/// The bound exists so that lambdas (or other nested function-like bodies) do
+/// not inflate the count for the enclosing function.
+fn count_body_metrics(
     node: tree_sitter::Node<'_>,
-    target_kinds: &[String],
+    kinds: &BodyMetricKinds<'_>,
     stop_kinds: &[String],
-) -> usize {
-    let mut count = 0;
+) -> BodyCounts {
+    let mut counts = BodyCounts {
+        returns: 0,
+        gotos: 0,
+        strings: 0,
+        throws: 0,
+    };
     let mut cursor = node.walk();
     let mut visit = true;
 
     loop {
         let current = cursor.node();
         if visit && current != node {
-            if target_kinds.iter().any(|s| s == current.kind()) {
-                count += 1;
+            let kind = current.kind();
+            if kind == kinds.return_kind {
+                counts.returns += 1;
             }
-            if stop_kinds.iter().any(|k| k == current.kind()) {
+            if kind == kinds.goto_kind {
+                counts.gotos += 1;
+            }
+            if kinds.string_kinds.iter().any(|s| s == kind) {
+                counts.strings += 1;
+            }
+            if kind == kinds.throw_kind {
+                counts.throws += 1;
+            }
+            // Don't descend into nested function-like bodies (e.g. lambdas).
+            if stop_kinds.iter().any(|k| k == kind) {
                 visit = false;
             }
         }
@@ -407,7 +392,7 @@ fn count_descendants_by_kinds_bounded(
         }
         loop {
             if !cursor.goto_parent() {
-                return count;
+                return counts;
             }
             if cursor.goto_next_sibling() {
                 visit = true;

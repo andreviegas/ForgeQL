@@ -19,7 +19,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::data_flow_utils::{
-    collect_local_declarations, contains_kind, is_in_declaration, is_inside_parameter_list,
+    LocalDecl, contains_kind, for_each_local_declaration, is_in_declaration, local_decl_from,
 };
 use super::{EnrichContext, NodeEnricher};
 use crate::ast::index::node_text;
@@ -49,16 +49,27 @@ impl NodeEnricher for EscapeEnricher {
             return;
         }
 
-        // Phase 1: Collect local variable declarations.
-        let locals = collect_local_declarations(ctx);
-        if locals.is_empty() {
+        // Phases 1-3 in ONE declaration walk: the locals, the array-typed
+        // locals and the static locals were three traversals with the same
+        // node filter, so they are now gathered together.
+        let scan = scan_declarations(ctx);
+        if scan.locals.is_empty() {
             return;
         }
+        let locals = scan.locals;
         let local_names: HashSet<&str> = locals.iter().map(|d| d.name.as_str()).collect();
+        let static_locals = scan.statics;
+        // An array candidate is by construction also a local, but keeping the
+        // restriction preserves the original set exactly.
+        let array_locals: HashSet<String> = scan
+            .array_candidates
+            .into_iter()
+            .filter(|n| local_names.contains(n.as_str()))
+            .collect();
 
-        // Phases 2-4: classify locals (arrays, statics) and build the alias map.
-        let array_locals = collect_array_locals(ctx, &local_names);
-        let static_locals = collect_static_locals(ctx);
+        // Phase 4: the alias map needs the complete local and static sets, and
+        // a later assignment removes an alias an earlier one added, so this
+        // stays a separate ordered pass.
         let alias_map = build_alias_map(ctx, &local_names, &static_locals);
 
         // Phase 5: scan return statements; Phase 5b: scan macro expansions.
@@ -317,111 +328,57 @@ fn extract_address_of_target(
     resolve_identifier(operand, source, config)
 }
 
-/// Collect the names of local variables declared with array declarators.
-#[allow(clippy::collapsible_if)]
-fn collect_array_locals(ctx: &EnrichContext<'_>, local_names: &HashSet<&str>) -> HashSet<String> {
-    let config = ctx.language_config;
-    if !config.has_array_declarator() {
-        return HashSet::new();
-    }
-
-    let mut arrays = HashSet::new();
-    let mut cursor = ctx.node.walk();
-    let mut visit = true;
-
-    loop {
-        if visit {
-            let node = cursor.node();
-            let kind = node.kind();
-
-            if node != ctx.node
-                && config.is_declaration_kind(kind)
-                && !is_inside_parameter_list(node, config)
-            {
-                // Check if the declarator subtree contains an array_declarator.
-                if let Some(decl) = node.child_by_field_name(config.declarator_field()) {
-                    if contains_kind(decl, config.array_declarator_kind()) {
-                        // Extract the name of this declaration.
-                        if let Some(name) = super::data_flow_utils::extract_declarator_name(
-                            node, ctx.source, config,
-                        ) {
-                            if local_names.contains(name.as_str()) {
-                                let _ = arrays.insert(name);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if visit && cursor.goto_first_child() {
-            visit = true;
-            continue;
-        }
-        if cursor.goto_next_sibling() {
-            visit = true;
-            continue;
-        }
-        loop {
-            if !cursor.goto_parent() {
-                return arrays;
-            }
-            if cursor.goto_next_sibling() {
-                visit = true;
-                break;
-            }
-        }
-    }
+/// Everything one declaration walk of a function body yields.
+struct DeclScan {
+    /// Local declarations, first-seen per name, in DFS order.
+    locals: Vec<LocalDecl>,
+    /// Names whose declarator subtree contains an array declarator.
+    array_candidates: HashSet<String>,
+    /// Names declared with a static storage specifier.
+    statics: HashSet<String>,
 }
 
-/// Collect the names of local variables declared with `static` storage class.
-#[allow(clippy::collapsible_if)]
-fn collect_static_locals(ctx: &EnrichContext<'_>) -> HashSet<String> {
+/// Collect the locals, the array-typed locals and the static locals in ONE
+/// traversal of the function body.
+///
+/// These were three separate walks — `collect_local_declarations`,
+/// `collect_array_locals` and `collect_static_locals` — over the same subtree
+/// with the same node filter (`is_declaration_kind`, not the function node
+/// itself, not inside a parameter list). Merging them is behaviour-preserving:
+/// every per-node test below is the one its own walk applied, and the two
+/// language gates that used to skip a whole walk now skip that walk's per-node
+/// work instead, yielding the same empty set.
+fn scan_declarations(ctx: &EnrichContext<'_>) -> DeclScan {
     let config = ctx.language_config;
-    if !config.has_static_storage() {
-        return HashSet::new();
-    }
+    let want_arrays = config.has_array_declarator();
+    let want_statics = config.has_static_storage();
 
+    let mut locals = Vec::new();
+    let mut seen = HashSet::new();
+    let mut array_candidates = HashSet::new();
     let mut statics = HashSet::new();
-    let mut cursor = ctx.node.walk();
-    let mut visit = true;
 
-    loop {
-        if visit {
-            let node = cursor.node();
-            let kind = node.kind();
-
-            if node != ctx.node
-                && config.is_declaration_kind(kind)
-                && !is_inside_parameter_list(node, config)
-            {
-                if has_static_specifier(node, ctx.source, config) {
-                    if let Some(name) =
-                        super::data_flow_utils::extract_declarator_name(node, ctx.source, config)
-                    {
-                        let _ = statics.insert(name);
-                    }
-                }
-            }
+    for_each_local_declaration(ctx, |node, name| {
+        if seen.insert(name.to_string()) {
+            locals.push(local_decl_from(ctx, node, name));
         }
 
-        if visit && cursor.goto_first_child() {
-            visit = true;
-            continue;
+        if want_arrays
+            && let Some(decl) = node.child_by_field_name(config.declarator_field())
+            && contains_kind(decl, config.array_declarator_kind())
+        {
+            let _ = array_candidates.insert(name.to_string());
         }
-        if cursor.goto_next_sibling() {
-            visit = true;
-            continue;
+
+        if want_statics && has_static_specifier(node, ctx.source, config) {
+            let _ = statics.insert(name.to_string());
         }
-        loop {
-            if !cursor.goto_parent() {
-                return statics;
-            }
-            if cursor.goto_next_sibling() {
-                visit = true;
-                break;
-            }
-        }
+    });
+
+    DeclScan {
+        locals,
+        array_candidates,
+        statics,
     }
 }
 

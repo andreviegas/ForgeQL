@@ -398,7 +398,7 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        simply cannot be compared, byte for byte, against a v69 build of
 ///        the same file. Answers do not change: the overlay checksum is
 ///        identical across the bump.
-pub const ENRICH_VER: u32 = 69;
+pub const ENRICH_VER: u32 = 70;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";
