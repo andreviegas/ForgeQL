@@ -6,6 +6,40 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.171.0] — 2026-08-16 — one traversal where there were four, and a field that stops reshuffling itself
+
+**Re-indexes once on upgrade:** the enrichment version moves to 70.
+
+### Performance
+
+- The C/C++ body walk makes one bounded traversal where it made several. Metrics
+  counted return, goto, string and throw in four separate passes over the same
+  function body; the escape enricher collected local, array and static
+  declarations in three. Measured on a 3.06M-row corpus, normalised against
+  parsing (untouched by the change): metrics −41.9%, escape −21.2%, at 2,095,758
+  calls each and no memory cost. `decl_distance` was deliberately left alone —
+  its two passes use different bounds and one seeds the other.
+- The overlay's name-index merge no longer allocates per posting. Strictly less
+  work for identical output; it does not move wall clock, and is not claimed to.
+
+### Fixed
+
+- `escape_vars` no longer spells the same variables in a different order on
+  every run. The macro-escape scan iterated a hash set while the field is
+  emitted in discovery order, so one source file produced a different value each
+  time it was indexed — enough to move an overlay checksum on a macro-heavy
+  corpus about one run in four, which made a single before/after comparison an
+  unreliable check. It now iterates a sorted view, as the sibling
+  `escape_kinds` already did.
+
+### Notes
+
+The name-FST step now reports where its time goes. On a 29,864,281-row corpus:
+preparing per-segment inputs 19,252 ms, merging 5,117 ms (17,368 ms of CPU, so
+3.4x parallel), and the serial FST build 24,222 ms of a 48,597 ms step. Half the
+step is a serial build whose cost tracks output size — 253 MB here — and is
+reachable only by shrinking that output, not by more parallelism.
+
 ## [0.170.0] — 2026-08-16 — the name index merges in parallel, and a file indexes the same way twice
 
 **Re-indexes once on upgrade:** the enrichment version moves to 69, so cached
