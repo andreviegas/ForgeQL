@@ -6,6 +6,45 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.172.0] — 2026-08-17 — a commit pulled from upstream stops re-merging the whole corpus
+
+### Added
+
+- Attaching to a commit that arrived from `REFRESH SOURCE` no longer merges the
+  whole corpus. Such a commit never had a chain manifest — only a ForgeQL
+  `COMMIT` wrote one — so the attach now derives it: the nearest ancestor with
+  an overlay on disk becomes the master, and the change set is read off the two
+  indexes rather than from git history, so a stale or distant base costs extra
+  entries and never wrong rows. The manifest is written beside the missing
+  overlay, so later sessions on that commit skip the derivation.
+
+  Ancestry is checked on the commit graph: a sibling branch's overlay is never
+  a base. With no ancestor overlay within reach, or a change set at or past
+  `FORGEQL_CHAIN_COMPACT_PATHS`, the full build runs as before — so attaching
+  to a commit *older* than anything indexed is unchanged, since every overlay
+  on disk is then a descendant rather than an ancestor.
+
+  Measured on a 3,062,139-row corpus. Attaching is always cheaper than the full
+  build — 38% faster at one changed file, still 13% at eight thousand.
+  Answering queries afterwards is not: +34% at one changed file, +51% at the
+  512-path default, +112% at eight thousand, because rows come through the
+  seeded overlay for the life of the session. The default of 512 predates that
+  measurement and has not been chosen against it.
+
+### Fixed
+
+- `usages` on a session with dirty rows — an uncommitted edit or a chained
+  attach — is the commit's own count. It was the master overlay's aggregate,
+  which still counted a replaced file's old sites and none of its new ones.
+- A chain attach no longer adopts a delta file it finds in the worktree when
+  that delta cannot describe this commit — an older chain's seed after a
+  fast-forward, or a checkpoint tree's delta without its staging. Either left
+  the attach unseeded and the commit's changed files unserved; both are now
+  dropped and their paths queued for re-index.
+- On reconnect, a queued re-index path was workspace-relative while the git
+  diff paths beside it were absolute, so it was looked for in the wrong
+  directory, taken for a deletion, and its rows hidden instead of restored.
+
 ## [0.171.0] — 2026-08-16 — one traversal where there were four, and a field that stops reshuffling itself
 
 **Re-indexes once on upgrade:** the enrichment version moves to 70.
