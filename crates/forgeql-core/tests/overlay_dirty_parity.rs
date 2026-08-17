@@ -827,3 +827,149 @@ fn reindex_updates_dirty_overlay() {
         "SymbolC (file2) must still be present; got: {names:?}"
     );
 }
+
+/// `usages` on a session with dirty rows is the commit's own count, not the
+/// master aggregate: sites in a shadowed segment are subtracted, sites in a
+/// dirty segment are added, and the correction follows every later change
+/// to the dirty overlay rather than the first one it saw.
+///
+/// Setup: `defs.cpp` holds the `Widget` definition and no sites; `file1.cpp`
+/// holds two `Widget` sites and `file2.cpp` one, so the aggregate is 3.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn usages_follows_the_dirty_overlay_through_every_change() {
+    use forgeql_core::storage::StorageEngine;
+    use forgeql_core::storage::columnar::ColumnarStorage;
+    use forgeql_core::storage::columnar::overlay::Overlay;
+    use forgeql_core::storage::columnar::segment_rel_path;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let seg_dir = tmp.path().join("segments").join(vp());
+    let overlay_dir = tmp.path().join("overlays");
+    std::fs::create_dir_all(&seg_dir).unwrap();
+    std::fs::create_dir_all(&overlay_dir).unwrap();
+    let hex_of = |cid: &[u8]| {
+        cid.iter().fold(String::new(), |mut acc, b| {
+            use std::fmt::Write as _;
+            let _ = write!(acc, "{b:02x}");
+            acc
+        })
+    };
+    let persistent = |name: &str, rows: &[(&str, &str, u32)], cid: &[u8]| {
+        let path = seg_dir.join(segment_rel_path(std::path::Path::new(name), &hex_of(cid)));
+        drop(build_dirty_segment_with_usages(rows, cid, &path));
+    };
+    let defs_cid = vec![0x01u8; 8];
+    let file1_cid = vec![0x11u8; 8];
+    let file2_cid = vec![0x22u8; 8];
+    // build_dirty_segment (no usages) for the definition; with_usages for the sites.
+    drop(build_dirty_segment(
+        &[("Widget", "class", 1)],
+        &defs_cid,
+        &seg_dir.join(segment_rel_path(
+            std::path::Path::new("defs.cpp"),
+            &hex_of(&defs_cid),
+        )),
+    ));
+    persistent(
+        "file1.cpp",
+        &[("Widget", "call", 3), ("Widget", "call", 7)],
+        &file1_cid,
+    );
+    persistent("file2.cpp", &[("Widget", "call", 5)], &file2_cid);
+
+    let root = tmp.path().to_path_buf();
+    let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(root.join("defs.cpp"), defs_cid);
+    let _ = segment_map.insert(root.join("file1.cpp"), file1_cid);
+    let _ = segment_map.insert(root.join("file2.cpp"), file2_cid);
+    let overlay_path = overlay_dir.join("usages_dirty.bin");
+    OverlayBuilder::new(
+        "test",
+        seg_dir.parent().unwrap().to_path_buf(),
+        root.clone(),
+        segment_map,
+    )
+    .build_and_persist(&overlay_path)
+    .expect("overlay build");
+    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+    let segments: Vec<Arc<SegmentReader>> = overlay
+        .segments()
+        .iter()
+        .map(|meta| {
+            Arc::new(
+                SegmentReader::open(
+                    &seg_dir.join(segment_rel_path(&meta.source_path, &meta.hex_content_id)),
+                )
+                .expect("open persistent segment"),
+            )
+        })
+        .collect();
+    let mut storage = ColumnarStorage::new_unshared(
+        root.clone(),
+        segments,
+        overlay,
+        Arc::new(LanguageRegistry::new(vec![])),
+    );
+
+    let widget_usages = |s: &ColumnarStorage| {
+        let clauses = Clauses {
+            where_predicates: vec![forgeql_core::ir::Predicate {
+                field: "name".to_owned(),
+                op: forgeql_core::ir::CompareOp::Eq,
+                value: forgeql_core::ir::PredicateValue::String("Widget".to_owned()),
+            }],
+            ..Clauses::default()
+        };
+        s.find_symbols(&clauses, &root)
+            .expect("find")
+            .iter()
+            .find(|r| r.fql_kind.as_deref() == Some("class"))
+            .and_then(|r| r.usages_count)
+            .expect("Widget definition row")
+    };
+    assert_eq!(widget_usages(&storage), 3, "clean aggregate");
+
+    // Replace file1.cpp: its two sites go, five come.
+    let staging = tmp.path().join("staging");
+    let r1 = build_dirty_segment_with_usages(
+        &[
+            ("Widget", "call", 2),
+            ("Widget", "call", 4),
+            ("Widget", "call", 6),
+            ("Widget", "call", 8),
+            ("Widget", "call", 9),
+        ],
+        &[0x33u8; 8],
+        &staging.join("file1_v2"),
+    );
+    storage.dirty_mut().add_segment(
+        Arc::new(r1),
+        std::path::PathBuf::from("file1.cpp"),
+        hex_of(&[0x11u8; 8]),
+    );
+    assert_eq!(
+        widget_usages(&storage),
+        6,
+        "3 - 2 + 5 after replacing file1.cpp"
+    );
+
+    // A new file with one more site: the correction is rebuilt, not reused.
+    let r3 = build_dirty_segment_with_usages(
+        &[("Widget", "call", 1)],
+        &[0x44u8; 8],
+        &staging.join("file3"),
+    );
+    storage.dirty_mut().add_segment(
+        Arc::new(r3),
+        std::path::PathBuf::from("file3.cpp"),
+        String::new(),
+    );
+    assert_eq!(widget_usages(&storage), 7, "+1 after adding file3.cpp");
+
+    // Deleting file2.cpp takes its one site away.
+    storage
+        .dirty_mut()
+        .remove_path(std::path::PathBuf::from("file2.cpp"));
+    assert_eq!(widget_usages(&storage), 6, "-1 after deleting file2.cpp");
+}

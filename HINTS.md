@@ -74,3 +74,9 @@ Short, durable facts discovered while working in this codebase.
   on a non-empty dirty overlay, duplicated source paths, and `need > find_max_rows()`.
 - `order_cmp` tie-break is `(name, line, path, fql_kind)` — total on distinct rows;
   the legacy dedupe key is the matching `(name_id, path_id, fql_kind_id, line)`.
+
+## Chain attach (crates/forgeql-core/src/storage/columnar)
+- `warm_or_open` tries: overlay on disk → chain (`columnar_storage/upstream_chain.rs::chain_or_fall_through`: a written `<sha>.chain` manifest first, then one *derived* from the nearest ancestor overlay via `git/ancestry.rs::nearest_ancestor` + `chain_derive.rs`) → full build. Overlay candidates come from `ColumnarBuildContext::overlay_commits()` (the `.bin` files of the versioned overlays dir).
+- The derived change set is content-keyed (segment table vs the inline `prebuilt_segment_map`; file-only entries vs `overlay_builder::collect_file_only`), so ancestry only decides *nearness*; the threshold is the existing `FORGEQL_CHAIN_COMPACT_PATHS` (at/past it → full build, no manifest written).
+- `usages` on any dirty session is the master aggregate + `columnar_storage/usage_adjust.rs` correction (per-segment `usages_fst` counts, cached by a fingerprint of the dirty overlay, fetched once per query via `usage_stamper()`).
+- Test fixtures: `overlay_harness::build_segment` writes rows only; `build_segment_with_id` also writes usage/mention postings and takes an explicit `(rel_path, content_id)` — use it whenever one path holds different bytes at two commits.

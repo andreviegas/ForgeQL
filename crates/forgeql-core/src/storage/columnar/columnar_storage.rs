@@ -34,6 +34,8 @@ pub(in crate::storage) use fast_paths::{
     find_max_rows, row_budget_exceeded, usages_budget_exceeded,
 };
 mod query;
+mod upstream_chain;
+mod usage_adjust;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ColumnarStorage
@@ -97,6 +99,12 @@ pub struct ColumnarStorage {
     /// overlay is scanned per query, because it changes as files are edited
     /// and a cached copy of it would go stale.
     substring_index: std::sync::OnceLock<SubstringIndex>,
+
+    /// The correction that makes `usages` the commit's own count on a session
+    /// with dirty rows — see the `usage_adjust` module. Built on
+    /// first use, rebuilt when the dirty overlay it was built from changes;
+    /// `None` until a dirty session first stamps a row.
+    usage_adjust: std::sync::Mutex<Option<Arc<usage_adjust::UsageAdjust>>>,
 }
 
 /// The dictionary a substring `FIND usages` searches, with its trigram tier.
@@ -144,6 +152,7 @@ impl ColumnarStorage {
             stats,
             pending_reindex: Vec::new(),
             substring_index: std::sync::OnceLock::new(),
+            usage_adjust: std::sync::Mutex::new(None),
         }
     }
 

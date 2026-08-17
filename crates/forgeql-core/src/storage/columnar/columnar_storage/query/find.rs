@@ -280,10 +280,38 @@ impl ColumnarStorage {
     /// The per-segment `usages_count` column is a legacy always-zero field;
     /// the overlay FST is the source of truth. One O(log n) FST lookup per
     /// materialised row, before LIMIT — bounded by the candidate set size.
+    /// On a session with dirty rows the aggregate is the master's count, and
+    /// each row's value is corrected for the sites the session shadowed and
+    /// added — one hash lookup per row on top, over a table built once per
+    /// dirty state (see the `usage_adjust` module).
     pub(in super::super) fn stamp_usage_counts(&self, results: &mut [SymbolMatch]) {
+        let adjust = self.usage_stamper();
+        self.stamp_usage_counts_with(adjust.as_deref(), results);
+    }
+
+    /// The correction `stamp_usage_counts_with` needs on this session: `None`
+    /// on a clean one, whose aggregate is already the answer. Fetched once
+    /// per query rather than once per segment — the check that the cached
+    /// table still matches the dirty overlay walks that overlay, and a scan
+    /// stamps thousands of segments.
+    pub(in super::super) fn usage_stamper(
+        &self,
+    ) -> Option<std::sync::Arc<super::super::usage_adjust::UsageAdjust>> {
+        (!self.dirty.is_empty()).then(|| self.usage_adjust())
+    }
+
+    /// Stamp with a correction fetched by [`Self::usage_stamper`].
+    pub(in super::super) fn stamp_usage_counts_with(
+        &self,
+        adjust: Option<&super::super::usage_adjust::UsageAdjust>,
+        results: &mut [SymbolMatch],
+    ) {
         for row in results.iter_mut() {
-            let count = self.overlay().usage_count(&row.name);
-            row.usages_count = Some(usize::try_from(count).unwrap_or(usize::MAX));
+            let aggregate = self.overlay().usage_count(&row.name);
+            row.usages_count = Some(adjust.map_or_else(
+                || usize::try_from(aggregate).unwrap_or(usize::MAX),
+                |a| a.corrected(&row.name, aggregate),
+            ));
         }
     }
 

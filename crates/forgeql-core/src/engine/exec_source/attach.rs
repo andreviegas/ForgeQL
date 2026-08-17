@@ -194,8 +194,17 @@ impl ForgeQLEngine {
                     Vec::new()
                 }
             };
+            // The queue holds workspace-relative paths (a delta names its
+            // files that way) while the diff above is absolute, and the
+            // re-index reads each path as given: a relative one would be
+            // looked for against the process's working directory, found
+            // absent, and treated as a deletion — hiding the file's rows
+            // instead of restoring them. Anchor them to the worktree first,
+            // which is also what lets the two lists deduplicate.
+            let worktree = session.worktree_path.clone();
             if let Some(columnar) = session.columnar_storage_mut() {
                 for p in columnar.take_pending_reindex_paths() {
+                    let p = if p.is_absolute() { p } else { worktree.join(p) };
                     if !paths.contains(&p) {
                         paths.push(p);
                     }

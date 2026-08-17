@@ -275,6 +275,78 @@ fn reconnect_after_begin_does_not_double_index() {
     drop((wt_path, data_dir));
 }
 
+/// A staged edit whose staging segment is gone by reconnect is queued for
+/// re-index by the delta loader — as a workspace-relative path. The reconnect
+/// must anchor that path to the worktree before re-indexing: read as given it
+/// would be looked for against the process's working directory, found absent,
+/// and treated as a deletion, hiding the file's rows instead of restoring them.
+#[test]
+fn a_queued_reindex_path_is_anchored_to_the_worktree_on_reconnect() {
+    let (mut engine, sess, branch, wt_path, data_dir, _src_dir) = engine_with_source_session();
+
+    exec(
+        &mut engine,
+        Some(&sess),
+        "CHANGE FILE 'motor_control.cpp' WITH 'void queuedFn(){}'",
+    );
+    assert_symbol_found(&mut engine, &sess, "queuedFn");
+
+    // --- Simulate a crash that also loses the staging directory: the delta
+    // survives and names the edit, but its segment is gone. ---
+    drop(engine);
+    let staging = wt_path.join(".forgeql-staging");
+    assert!(staging.is_dir(), "the edit staged no segment — vacuous");
+    std::fs::remove_dir_all(&staging).expect("remove staging");
+
+    let mut new_engine = ForgeQLEngine::new(data_dir.path().to_path_buf(), common::make_registry())
+        .expect("new engine");
+    let use_fql = format!("USE mysrc.{branch} AS 'sess'");
+    exec(&mut new_engine, None, &use_fql);
+    let new_sess =
+        SessionCoords::new(auth(AuthContext::Tester), "mysrc", &branch, "sess").to_session_id();
+
+    // The file is dirty against HEAD and queued by the loader; both routes
+    // must lead to a re-index from disk, never to a deletion.
+    assert_symbol_found(&mut new_engine, &new_sess, "queuedFn");
+
+    drop((wt_path, data_dir));
+}
+
+/// The same queue is drained by ROLLBACK: the checkpoint's delta names the
+/// edit made before BEGIN, its staging is gone by the time the rollback
+/// reloads it, and the file must be re-indexed from the restored worktree —
+/// found, not taken for a deletion because its queued path was relative.
+#[test]
+fn a_queued_reindex_path_is_anchored_to_the_worktree_on_rollback() {
+    let (mut engine, sess, _branch, wt_path, data_dir, _src_dir) = engine_with_source_session();
+
+    // An edit before BEGIN, so the checkpoint's delta names its segment.
+    exec(
+        &mut engine,
+        Some(&sess),
+        "CHANGE FILE 'motor_control.cpp' WITH 'void beforeBeginFn(){}'",
+    );
+    exec(&mut engine, Some(&sess), "BEGIN TRANSACTION 'txn-anchor'");
+    exec(
+        &mut engine,
+        Some(&sess),
+        "CHANGE FILE 'motor_control.cpp' WITH 'void afterBeginFn(){}'",
+    );
+    assert_symbol_found(&mut engine, &sess, "afterBeginFn");
+
+    // Lose the staging directory, then roll back: the reload finds the
+    // checkpoint's delta with every segment missing and queues the file.
+    let staging = wt_path.join(".forgeql-staging");
+    assert!(staging.is_dir(), "the edits staged no segment — vacuous");
+    std::fs::remove_dir_all(&staging).expect("remove staging");
+    exec(&mut engine, Some(&sess), "ROLLBACK");
+
+    assert_symbol_found(&mut engine, &sess, "beforeBeginFn");
+    assert_symbol_not_found(&mut engine, &sess, "afterBeginFn");
+
+    drop((wt_path, data_dir));
+}
+
 /// A columnar open that refuses must say so in the USE response, not only in
 /// the server log. The session still answers — the in-memory index is the
 /// complete fallback — but the refusal names its own repair, and an agent that

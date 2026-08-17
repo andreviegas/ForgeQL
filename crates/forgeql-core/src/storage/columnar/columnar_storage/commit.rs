@@ -137,30 +137,23 @@ impl ColumnarStorage {
 
         // Chain path: no overlay for this commit, but a manifest names the
         // master overlay it grew from and the per-file segments its changes
-        // promoted. Seeding the session dirty overlay from those serves the
-        // same rows the full build would, through the read path every
-        // editing session already exercises — at the cost of the dirty-side
-        // fast-path declines, never of correctness. Any failure here falls
-        // through to the full build below: a bad manifest can cost time,
-        // never rows.
-        let manifest_path = ctx.chain_manifest_path_for(commit_sha);
-        if manifest_path.exists() {
-            match Self::open_via_chain(
-                ctx,
-                &manifest_path,
-                worktree_path.clone(),
-                commit_sha,
-                Arc::clone(&lang_registry),
-            ) {
-                Ok(storage) => return Ok(storage),
-                Err(e) => {
-                    tracing::warn!(
-                        %commit_sha,
-                        "columnar warm_or_open: chain attach failed — falling back \
-                         to a full build: {e}"
-                    );
-                }
-            }
+        // promoted — written by the COMMIT that made it, or derived here for
+        // an upstream commit no session made, from the nearest ancestor
+        // overlay and this parse's segment map. Seeding the session dirty
+        // overlay from those serves the same rows the full build would,
+        // through the read path every editing session already exercises — at
+        // the cost of the dirty-side fast-path declines, never of correctness.
+        // Any failure here falls through to the full build below: a bad
+        // manifest can cost time, never rows.
+        if let Some(storage) = Self::chain_or_fall_through(
+            ctx,
+            &input,
+            &overlay_path,
+            worktree_path.clone(),
+            commit_sha,
+            Arc::clone(&lang_registry),
+        ) {
+            return Ok(storage);
         }
         // Slow path: build under lock.
         match OverlayLock::acquire(&overlay_path) {
@@ -313,12 +306,33 @@ impl ColumnarStorage {
     /// that shadows a master path without recording the replacement.
     /// Nothing on this path may produce a smaller index silently — refusal
     /// and fallback are the only exits besides a complete one.
-    fn open_via_chain(
+    ///
+    /// `derived` says the manifest was constructed by this attach rather
+    /// than written by a COMMIT. That decides what a delta file already in
+    /// the worktree means. For a written manifest it is this session's own
+    /// state — the seed and the edits on top of it, restored on reconnect,
+    /// and seeding again would duplicate rows. For a derived one it cannot
+    /// be: the commit had no manifest until a moment ago, so no session ever
+    /// held its chain state, and whatever the file describes belongs to
+    /// another index — a chain seeded on an older base before the worktree
+    /// was fast-forwarded, or a delta committed into a checkpoint tree. That
+    /// state is dropped and the chain seeded, and every path it named is
+    /// queued for re-index: the rows it held were the older base's, a live
+    /// worktree's reconnect re-indexes the queue from disk — which is what
+    /// gives a file created in-session and never committed its rows back,
+    /// since such a file is untracked and absent from the reconnect's diff
+    /// against HEAD — and a fresh worktree has nothing on disk the seed does
+    /// not already serve. The same happens under either kind of manifest to a
+    /// delta that restored no segment at all (every staged entry already
+    /// queued): that is a delta without its worktree — a checkpoint tree
+    /// checked out fresh — and seeding costs nothing it held.
+    pub(super) fn open_via_chain(
         ctx: &ColumnarBuildContext,
         manifest_path: &Path,
         worktree_path: PathBuf,
         commit_sha: &str,
         lang_registry: Arc<LanguageRegistry>,
+        derived: bool,
     ) -> Result<Self> {
         use super::super::chain_manifest::ChainManifest;
 
@@ -365,7 +379,26 @@ impl ColumnarStorage {
         storage.master_commit.clone_from(&manifest.master_commit);
         // A restored session delta already holds the seeded chain state plus
         // any edits made on top of it; seeding again would duplicate rows.
-        if storage.dirty.is_empty() && storage.pending_reindex.is_empty() {
+        // Two restored states are not that. Under a derived manifest the
+        // delta holds another index's state (see above). Under either, a
+        // delta that restored no segment at all — every staged entry's
+        // staging file missing, so all of them are queued for re-index — is
+        // a delta without its worktree: a checkpoint tree checked out fresh
+        // carries the committing session's delta and none of its staging.
+        // Both are dropped and the chain seeded; every path they named stays
+        // on the re-index queue, so a live worktree's reconnect re-indexes
+        // it from disk — the one route by which a file this session created
+        // and never committed (untracked, so absent from the reconnect's
+        // diff against HEAD) gets its rows back — and a fresh worktree,
+        // which never reconnects, is served the commit's rows by the seed.
+        let restored = !(storage.dirty.is_empty() && storage.pending_reindex.is_empty());
+        let restored_nothing_usable =
+            storage.dirty.added.is_empty() && !storage.pending_reindex.is_empty();
+        let dropped = (derived && restored) || restored_nothing_usable;
+        if dropped {
+            storage.requeue_and_drop_restored_delta(commit_sha, derived);
+        }
+        if dropped || (storage.dirty.is_empty() && storage.pending_reindex.is_empty()) {
             storage.seed_dirty_from_chain(&manifest, ctx)?;
         }
         info!(
@@ -439,6 +472,41 @@ impl ColumnarStorage {
         Ok(())
     }
 
+    /// Drops a restored delta that is not this commit's chain state, so the
+    /// chain can be seeded in its place — see [`Self::open_via_chain`] for
+    /// which restored states those are. Every path the delta named (staged,
+    /// shadowed, or non-indexed) is queued for re-index rather than
+    /// forgotten: a live worktree's reconnect drains that queue from disk,
+    /// which is how a file this session created and never committed gets its
+    /// rows back, and the staging segments the delta pointed at are
+    /// collected as orphans.
+    fn requeue_and_drop_restored_delta(&mut self, commit_sha: &str, derived: bool) {
+        tracing::warn!(
+            %commit_sha,
+            derived,
+            staged = self.dirty.added.len(),
+            shadowed = self.dirty.removed_paths.len(),
+            pending = self.pending_reindex.len(),
+            "columnar warm_or_open: chain attach — the delta restored in this \
+             worktree is not this commit's chain state; dropped before seeding, \
+             its paths queued for re-index on reconnect"
+        );
+        let dropped = std::mem::take(&mut self.dirty);
+        let named = dropped
+            .added
+            .iter()
+            .map(|ds| ds.source_path.clone())
+            .chain(dropped.removed_paths.iter().cloned())
+            .chain(dropped.added_paths.iter().cloned());
+        for path in named {
+            if !self.pending_reindex.contains(&path) {
+                self.pending_reindex.push(path);
+            }
+        }
+        let valid: &[String] = &[];
+        DeltaFile::gc_orphaned_staging(valid, &self.staging_dir);
+    }
+
     /// Compacts a chained commit into a full overlay: the master's
     /// unshadowed segments plus the manifest entries, assembled once and
     /// written where every later attach finds it. Runs under the overlay
@@ -485,7 +553,7 @@ impl ColumnarStorage {
     /// cumulative churn while a compaction is a full corpus merge, so the
     /// right value differs per machine; the environment variable overrides
     /// the default.
-    fn chain_compact_threshold() -> usize {
+    pub(super) fn chain_compact_threshold() -> usize {
         std::env::var("FORGEQL_CHAIN_COMPACT_PATHS")
             .ok()
             .and_then(|v| v.parse().ok())

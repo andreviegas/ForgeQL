@@ -2,6 +2,7 @@
 //! plumbing behind commits, diffs and patch export.
 //!
 //! Submodules:
+//! - `ancestry` — the nearest ancestor a commit can be served from
 //! - `commit`   — the staging-and-commit shapes (checkpoint, clean, squash)
 //! - `diff`     — change lists, dirty paths, and the `SHOW DIFF` surface
 //! - `excludes` — which files never reach a commit, and the runtime-exclude block
@@ -12,6 +13,7 @@
 //! What stays here is the repository basics every submodule builds on: opening
 //! a repo, resolving and creating branches, resetting, and running a single git
 //! subcommand.
+pub mod ancestry;
 mod commit;
 mod diff;
 mod excludes;

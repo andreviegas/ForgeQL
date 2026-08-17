@@ -1066,6 +1066,10 @@ impl ColumnarStorage {
             .cloned()
             .collect();
         let max_rows = find_max_rows();
+        // One correction for the whole scan: on a session with dirty rows the
+        // usage counts are stamped per segment, and fetching the table per
+        // segment would re-check the dirty overlay as many times.
+        let adjust = self.usage_stamper();
 
         let mut results = Vec::new();
         // Rows that matched, were distinct, and were shed on rank rather than
@@ -1080,7 +1084,8 @@ impl ColumnarStorage {
             else {
                 continue;
             };
-            let (mut seg_results, seg_shed) = self.materialize_one_segment(&narrowed, clauses);
+            let (mut seg_results, seg_shed) =
+                self.materialize_one_segment(&narrowed, clauses, adjust.as_deref());
             shed = shed.saturating_add(seg_shed);
 
             // Collapse this segment's own duplicates before anything sheds
@@ -1403,6 +1408,7 @@ impl ColumnarStorage {
         &self,
         narrowed: &NarrowedSegment<'_>,
         clauses: &Clauses,
+        adjust: Option<&super::usage_adjust::UsageAdjust>,
     ) -> (Vec<SymbolMatch>, usize) {
         // Choose the rows worth building before building any of them, where
         // the query lets that be decided from the columns. The budget comes
@@ -1424,7 +1430,7 @@ impl ColumnarStorage {
         // field, so WHERE usages / ORDER BY usages must see the overlay value.
         // That staleness is also why an ordering by `usages` never takes the
         // pre-materialisation path above — there is nothing there to rank by.
-        self.stamp_usage_counts(&mut seg_results);
+        self.stamp_usage_counts_with(adjust, &mut seg_results);
 
         // Apply the residual WHERE per-segment so that non-matching rows are
         // dropped before they can pile up across segments — and so that what

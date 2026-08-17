@@ -127,6 +127,7 @@ pub fn build_segment(
     // Deterministic content ID based on source path hash (for test only).
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
+
     let mut h = DefaultHasher::new();
     abs_source_path.hash(&mut h);
     let hash_u64 = h.finish();
@@ -134,6 +135,7 @@ pub fn build_segment(
 
     let hex = content_id.iter().fold(String::new(), |mut acc, b| {
         use std::fmt::Write as _;
+
         let _ = write!(acc, "{b:02x}");
         acc
     });
@@ -147,7 +149,55 @@ pub fn build_segment(
     );
     let seg_path = seg_path(segments_dir, rel_source_path, &hex);
 
+    // Rows only, as this helper has always written; `build_segment_with_id`
+    // also writes the usage and mention postings.
     let mut builder = SegmentBuilder::new("test", &content_id);
+    emit_table_rows(&mut builder, table);
+    builder.flush(&seg_path).expect("segment flush");
+
+    content_id
+}
+
+/// Build a segment for `table` under an explicit `(rel_source_path,
+/// content_id)` key — the form a fixture needs when the same path holds
+/// different bytes at two commits, which `build_segment`'s path-derived id
+/// cannot tell apart.
+pub fn build_segment_with_id(
+    table: &SymbolTable,
+    rel_source_path: &std::path::Path,
+    content_id: &[u8],
+    segments_dir: &std::path::Path,
+) {
+    let hex = content_id.iter().fold(String::new(), |mut acc, b| {
+        use std::fmt::Write as _;
+
+        let _ = write!(acc, "{b:02x}");
+        acc
+    });
+    let seg_path = seg_path(segments_dir, rel_source_path, &hex);
+
+    let mut builder = SegmentBuilder::new("test", content_id);
+    emit_table_rows(&mut builder, table);
+    // The table was indexed from this one file, so every usage and mention
+    // site it holds is this file's — the same postings the inline parse
+    // writes, and what makes the segment's `usages` count real.
+    for (name, sites) in &table.usages {
+        for site in sites {
+            builder.add_usage(name, u32::try_from(site.line).unwrap_or(u32::MAX));
+        }
+    }
+    for (role, by_name) in &table.mentions {
+        for (name, sites) in by_name {
+            for site in sites {
+                builder.add_mention(role, name, u32::try_from(site.line).unwrap_or(u32::MAX));
+            }
+        }
+    }
+    builder.flush(&seg_path).expect("segment flush");
+}
+
+/// Emit every row of `table` into `builder`, with its ordinal and fields.
+fn emit_table_rows(builder: &mut SegmentBuilder, table: &SymbolTable) {
     for row in &table.rows {
         let row_id = builder.emit_row(SymbolRow {
             name: table.name_of(row),
@@ -165,9 +215,6 @@ pub fn build_segment(
             builder.set_field(row_id, &key, val.as_str());
         }
     }
-    builder.flush(&seg_path).expect("segment flush");
-
-    content_id
 }
 
 /// Flatten a legacy `SymbolTable` to canonical key tuples.

@@ -1,7 +1,7 @@
 //! Per-session file reindexing for [`ColumnarStorage`] (the `reindex_files` staging build).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -44,6 +44,18 @@ impl ColumnarStorage {
         for path in paths {
             let rel_path = crate::storage::columnar::segment_source_rel(path, &self.worktree_root)
                 .to_path_buf();
+            // Callers hand paths both ways: absolute from a git diff, relative
+            // from the delta loader's re-index queue. Every filesystem read
+            // below is against the worktree, so a relative one is anchored
+            // there — read as given it would be resolved against the process's
+            // working directory, found absent, and recorded as a deletion.
+            let anchored;
+            let path: &Path = if path.is_absolute() {
+                path
+            } else {
+                anchored = self.worktree_root.join(path);
+                &anchored
+            };
 
             // Build ordinal hints from the most-recent version of this segment:
             // prefer an existing dirty entry (re-edit within a transaction) over

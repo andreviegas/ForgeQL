@@ -113,6 +113,38 @@ impl ColumnarBuildContext {
             .join(format!("{}.chain", &snapshot_hex[2..]))
     }
 
+    /// Every commit that has an overlay on disk for this index generation:
+    /// the candidates an attach without an overlay of its own can chain
+    /// from. Read from the directory, not from a registry — an overlay is
+    /// present exactly when its file is, and nothing else records that.
+    /// A `.chain` manifest beside a missing `.bin` is not a candidate: a
+    /// chained commit has no overlay to open, only a pointer to another's.
+    #[must_use]
+    pub fn overlay_commits(&self) -> Vec<String> {
+        let root = self.overlays_dir.join(self.versioned_provider());
+        let Ok(fanout) = std::fs::read_dir(&root) else {
+            return Vec::new();
+        };
+        let mut commits = Vec::new();
+        for dir in fanout.flatten() {
+            let Some(prefix) = dir.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            let Ok(files) = std::fs::read_dir(dir.path()) else {
+                continue;
+            };
+            for file in files.flatten() {
+                let name = file.file_name();
+                let Some(rest) = name.to_str().and_then(|n| n.strip_suffix(".bin")) else {
+                    continue;
+                };
+                commits.push(format!("{prefix}{rest}"));
+            }
+        }
+        commits.sort_unstable();
+        commits
+    }
+
     /// The context for a bare repository's own segment and overlay stores.
     ///
     /// The store layout, the provider id and the content-hash function are one

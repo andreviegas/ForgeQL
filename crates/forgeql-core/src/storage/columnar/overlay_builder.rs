@@ -1072,8 +1072,13 @@ impl OverlayBuilder {
 ///
 /// Uses the same [`WalkBuilder`] configuration as [`Workspace::files`] so the
 /// set of tracked files is consistent with what `FIND files` returns via the
-/// filesystem-walk fallback.
-fn collect_file_only(worktree_root: &Path, indexed: &HashSet<PathBuf>) -> Vec<(PathBuf, String)> {
+/// filesystem-walk fallback. A derived chain manifest walks with this same
+/// function, so the non-indexed files it lists for a commit are the ones a
+/// full build of that commit would have listed.
+pub(crate) fn collect_file_only(
+    worktree_root: &Path,
+    indexed: &HashSet<PathBuf>,
+) -> Vec<(PathBuf, String)> {
     use std::hash::{Hash as _, Hasher as _};
     let mut entries: Vec<(PathBuf, String)> = WalkBuilder::new(worktree_root)
         .add_custom_ignore_filename(".forgeql-ignore")
