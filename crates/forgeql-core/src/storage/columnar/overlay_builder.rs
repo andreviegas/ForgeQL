@@ -454,7 +454,10 @@ impl OverlayBuilder {
         for (seg_idx, (_, _, reader)) in segs.iter().enumerate() {
             let row_offset = row_offsets[seg_idx];
             let canonical_bm = &seg_dedup[seg_idx].0;
-            for (&kind_id, local_bm) in &reader.kind_postings {
+            for entry in reader.kind_postings() {
+                let (kind_id, local_bm) = entry.with_context(|| {
+                    format!("reading kind postings of {}", reader.path.display())
+                })?;
                 let kind_str = reader.string_of_id(kind_id);
                 if kind_str.is_empty() {
                     continue;
@@ -502,7 +505,7 @@ impl OverlayBuilder {
             &mut enrich_raw,
             &mut field_seen,
             &mut pruned_fields,
-        );
+        )?;
         // Category 2: numeric fields not in POSTING_ENRICHMENT_FIELDS.
         Self::collect_numeric_enrichment(
             segs,
@@ -535,30 +538,36 @@ impl OverlayBuilder {
         enrich_raw: &mut HashMap<String, RoaringBitmap>,
         field_seen: &mut HashMap<String, HashSet<String>>,
         pruned_fields: &mut HashSet<String>,
-    ) {
+    ) -> Result<()> {
         for (seg_idx, (_, _, reader)) in segs.iter().enumerate() {
             let row_offset = row_offsets[seg_idx];
             let canonical_bm = &seg_dedup[seg_idx].0;
-            for (field_name, value_map) in &reader.field_postings {
-                if pruned_fields.contains(field_name.as_str()) {
+            for field_name in reader.posted_fields() {
+                if pruned_fields.contains(field_name) {
                     continue;
                 }
-                for (&value_id, local_bm) in value_map {
+                // Decoded from the segment's mmap one bitmap at a time; the
+                // walk never holds a segment's postings whole.
+                for entry in reader.field_postings(field_name) {
+                    let (value_id, local_bm) = entry.with_context(|| {
+                        format!("reading {field_name} postings of {}", reader.path.display())
+                    })?;
                     let value_str = reader.string_of_id(value_id);
                     if value_str.is_empty() {
                         continue;
                     }
-                    let seen = field_seen.entry(field_name.clone()).or_default();
+                    let seen = field_seen.entry(field_name.to_owned()).or_default();
                     if !seen.contains(value_str) {
                         if seen.len() >= overlay_budget(field_name) {
-                            let _ = pruned_fields.insert(field_name.clone());
+                            let _ = pruned_fields.insert(field_name.to_owned());
+                            // Erase everything collected so far for this field.
                             let pfx = format!("{field_name}=");
                             enrich_raw.retain(|k, _| !k.starts_with(&pfx));
                             break;
                         }
                         let _ = seen.insert(value_str.to_owned());
                     }
-                    if pruned_fields.contains(field_name.as_str()) {
+                    if pruned_fields.contains(field_name) {
                         continue;
                     }
                     let key = format!("{field_name}={value_str}");
@@ -572,6 +581,7 @@ impl OverlayBuilder {
                 }
             }
         }
+        Ok(())
     }
 
     /// Category 2 of step 5.5: enrichment fields not covered by the posting

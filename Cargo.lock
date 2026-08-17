@@ -811,6 +811,7 @@ dependencies = [
  "forgeql-lang-rust",
  "forgeql-lang-text",
  "serde_json",
+ "tikv-jemallocator",
  "tokio",
  "tracing",
  "tracing-subscriber",

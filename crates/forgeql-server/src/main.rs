@@ -9,6 +9,16 @@
 // visibility; clippy's redundant_pub_crate would otherwise fight unreachable_pub.
 #![allow(clippy::redundant_pub_crate)]
 
+// Replace glibc malloc with jemalloc, as the `forgeql` binary does. This is
+// the long-lived process: a cold index build allocates gigabytes across every
+// rayon worker, and glibc parks the freed memory in per-thread arenas that are
+// never trimmed back to the OS. jemalloc's background decay thread returns
+// those pages, so the daemon's resident size follows what it actually holds.
+// Not enabled on Windows: jemalloc does not support MinGW cross-compilation.
+#[cfg(not(windows))]
+#[global_allocator]
+static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 mod http;
 
 mod auth;

@@ -1,7 +1,8 @@
 //! Open-time loader helpers for `SegmentReader`.
 //!
-//! Free functions that parse the FQSF table-of-contents and decode the column,
-//! posting, zone-map, and name-prefix blobs, split out of `segment_reader.rs`.
+//! Free functions that parse the FQSF table-of-contents and decode the column
+//! metadata, zone-map, and name-posting blobs, split out of `segment_reader.rs`.
+//! The Roaring posting blobs are not decoded here — see `postings.rs`.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -9,9 +10,8 @@ use std::path::Path;
 use anyhow::{Context, Result, ensure};
 use bytemuck::cast_slice;
 use memmap2::Mmap;
-use roaring::RoaringBitmap;
 
-use super::{ENTRY_NAME_LEN, POSTING_ENRICHMENT_FIELDS, TOC_ENTRY_SIZE, ZONEMAP_NUMERIC_FIELDS};
+use super::{ENTRY_NAME_LEN, TOC_ENTRY_SIZE, ZONEMAP_NUMERIC_FIELDS};
 /// Parse the FQSF table-of-contents into one `(start, end)` byte range per
 /// named blob. `mmap` must already be validated as a well-formed FQSF file
 /// (magic, version, and at least a 12-byte header checked by the caller).
@@ -64,11 +64,7 @@ pub(super) fn parse_toc(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Return a blob byte slice from the blobs map; `&[]` when absent.
-pub(super) fn blob_slice<'m>(
-    blobs: &HashMap<String, (usize, usize)>,
-    mmap: &'m Mmap,
-    name: &str,
-) -> &'m [u8] {
+fn blob_slice<'m>(blobs: &HashMap<String, (usize, usize)>, mmap: &'m Mmap, name: &str) -> &'m [u8] {
     let Some(&(start, end)) = blobs.get(name) else {
         return &[];
     };
@@ -110,96 +106,6 @@ pub(super) fn parse_column_entries(
     Ok(cols)
 }
 
-/// Deserialise the `postings_fql_kind` blob into `HashMap<kind_id, RoaringBitmap>`.
-///
-/// Format: `[kind_count: u32] (kind_id: u32, bitmap_len: u32, bitmap_bytes)*`
-pub(super) fn load_kind_postings(data: &[u8]) -> Result<HashMap<u32, RoaringBitmap>> {
-    if data.len() < 4 {
-        return Ok(HashMap::new());
-    }
-
-    let kind_count = u32::from_le_bytes(data[..4].try_into().context("kind_count bytes")?) as usize;
-    let mut map = HashMap::with_capacity(kind_count);
-    let mut pos = 4usize;
-
-    for entry in 0..kind_count {
-        ensure!(
-            pos + 8 <= data.len(),
-            "postings_fql_kind blob truncated at entry {entry}"
-        );
-        let kind_id = u32::from_le_bytes(data[pos..pos + 4].try_into().context("kind_id bytes")?);
-        let bitmap_len = u32::from_le_bytes(
-            data[pos + 4..pos + 8]
-                .try_into()
-                .context("bitmap_len bytes")?,
-        ) as usize;
-        pos += 8;
-        ensure!(
-            pos + bitmap_len <= data.len(),
-            "postings_fql_kind bitmap truncated at entry {entry}"
-        );
-        let bitmap = RoaringBitmap::deserialize_from(&data[pos..pos + bitmap_len])
-            .with_context(|| format!("deserialising bitmap for kind_id {kind_id}"))?;
-        pos += bitmap_len;
-        let _ = map.insert(kind_id, bitmap);
-    }
-
-    Ok(map)
-}
-
-/// Load per-field enrichment posting blobs for fields in [`POSTING_ENRICHMENT_FIELDS`].
-///
-/// For each field, looks up blob `postings_<field>` in `blobs`.
-/// Missing blobs are silently skipped (callers fall back to linear scan).
-pub(super) fn load_enrichment_postings(
-    blobs: &HashMap<String, (usize, usize)>,
-    mmap: &Mmap,
-) -> Result<HashMap<String, HashMap<u32, RoaringBitmap>>> {
-    let mut result: HashMap<String, HashMap<u32, RoaringBitmap>> = HashMap::new();
-
-    for &field in POSTING_ENRICHMENT_FIELDS {
-        let blob_name = format!("postings_{field}");
-        let data = blob_slice(blobs, mmap, &blob_name);
-        if data.len() < 4 {
-            continue;
-        }
-
-        let value_count =
-            u32::from_le_bytes(data[..4].try_into().context("value_count bytes")?) as usize;
-        let mut bitmap_map: HashMap<u32, RoaringBitmap> = HashMap::with_capacity(value_count);
-        let mut pos = 4usize;
-
-        for entry in 0..value_count {
-            ensure!(
-                pos + 8 <= data.len(),
-                "postings_{field} blob truncated at entry {entry}"
-            );
-            let value_id =
-                u32::from_le_bytes(data[pos..pos + 4].try_into().context("value_id bytes")?);
-            let bitmap_len = u32::from_le_bytes(
-                data[pos + 4..pos + 8]
-                    .try_into()
-                    .context("bitmap_len bytes")?,
-            ) as usize;
-            pos += 8;
-            ensure!(
-                pos + bitmap_len <= data.len(),
-                "postings_{field} bitmap truncated at entry {entry}"
-            );
-            let bitmap = RoaringBitmap::deserialize_from(&data[pos..pos + bitmap_len])
-                .with_context(|| {
-                    format!("deserialising enrichment bitmap for {field} value_id {value_id}")
-                })?;
-            pos += bitmap_len;
-            let _ = bitmap_map.insert(value_id, bitmap);
-        }
-
-        let _ = result.insert(field.to_owned(), bitmap_map);
-    }
-
-    Ok(result)
-}
-
 /// Load zone maps from `zonemap_<col>` blobs.
 pub(super) fn load_zone_maps(
     blobs: &HashMap<String, (usize, usize)>,
@@ -234,58 +140,4 @@ pub(super) fn decode_name_postings(encoded: u64, name_postings: &[u8]) -> Vec<u3
     }
     #[expect(clippy::indexing_slicing, reason = "bounds checked above")]
     cast_slice::<u8, u32>(&name_postings[byte_offset..end]).to_vec()
-}
-
-/// Load the name prefix index from the `name_prefix` blob.
-///
-/// Returns an empty map when the blob is absent or empty.
-///
-/// Wire format:
-/// ```text
-/// [entry_count: u32 LE]
-/// ( [prefix_len: u8] [prefix_bytes: u8 × prefix_len]
-///   [bitmap_len: u32 LE] [bitmap_bytes: roaring] )*
-/// ```
-pub(super) fn load_name_prefix(data: &[u8]) -> Result<HashMap<Vec<u8>, RoaringBitmap>> {
-    if data.len() < 4 {
-        return Ok(HashMap::new());
-    }
-    let entry_count = u32::from_le_bytes(
-        data[..4]
-            .try_into()
-            .context("name_prefix entry_count bytes")?,
-    ) as usize;
-    let mut result: HashMap<Vec<u8>, RoaringBitmap> = HashMap::with_capacity(entry_count);
-    let mut pos = 4usize;
-
-    for entry in 0..entry_count {
-        ensure!(
-            pos < data.len(),
-            "name_prefix blob truncated at entry {entry}"
-        );
-        let prefix_len = data[pos] as usize;
-        pos += 1;
-        ensure!(
-            pos + prefix_len + 4 <= data.len(),
-            "name_prefix blob truncated at prefix bytes for entry {entry}"
-        );
-        let prefix = data[pos..pos + prefix_len].to_vec();
-        pos += prefix_len;
-        let bitmap_len = u32::from_le_bytes(
-            data[pos..pos + 4]
-                .try_into()
-                .context("name_prefix bitmap_len bytes")?,
-        ) as usize;
-        pos += 4;
-        ensure!(
-            pos + bitmap_len <= data.len(),
-            "name_prefix blob bitmap truncated at entry {entry}"
-        );
-        let bitmap = RoaringBitmap::deserialize_from(&data[pos..pos + bitmap_len])
-            .with_context(|| format!("deserialising name_prefix bitmap for entry {entry}"))?;
-        pos += bitmap_len;
-        let _ = result.insert(prefix, bitmap);
-    }
-
-    Ok(result)
 }

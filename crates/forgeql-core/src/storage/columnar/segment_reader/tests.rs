@@ -1001,3 +1001,213 @@ fn enrichment_columns_agrees_with_enrichment_for_row() {
         );
     }
 }
+
+// ── posting blobs read in place ──────────────────────────────────────────
+
+/// `(offset, len)` of the TOC entry named `name`, or a panic naming it.
+fn toc_range(bytes: &[u8], name: &[u8]) -> (usize, usize) {
+    let entry_count = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    for i in 0..entry_count {
+        let es = 12 + i * TOC_ENTRY_SIZE;
+        let name_end = bytes[es..es + ENTRY_NAME_LEN]
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(ENTRY_NAME_LEN);
+        if &bytes[es..es + name_end] == name {
+            let offset = u32::from_le_bytes(
+                bytes[es + ENTRY_NAME_LEN..es + ENTRY_NAME_LEN + 4]
+                    .try_into()
+                    .unwrap(),
+            ) as usize;
+            let len = u32::from_le_bytes(
+                bytes[es + ENTRY_NAME_LEN + 4..es + ENTRY_NAME_LEN + 8]
+                    .try_into()
+                    .unwrap(),
+            ) as usize;
+            return (offset, len);
+        }
+    }
+    panic!("no TOC entry named {}", String::from_utf8_lossy(name));
+}
+
+/// A segment with two kinds, one posted flag, and names sharing a prefix.
+fn segment_with_postings() -> (tempfile::TempDir, PathBuf) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let seg = tmp.path().join("seg.fqsf");
+    let mut b = SegmentBuilder::new("test", &[0xCDu8; 20]);
+    let mut row = |name: &'static str, kind: &'static str, line: u32| {
+        b.emit_row(SymbolRow {
+            name,
+            fql_kind: kind,
+            language: "rust",
+            line,
+            byte_start: 0,
+            byte_end: 10,
+            usages_count: 0,
+        })
+    };
+    let alpha = row("alpha", "function", 1);
+    let _also = row("also", "function", 2);
+    let _beta = row("beta", "struct", 3);
+    b.set_field(alpha, "is_const", "true");
+    b.flush(&seg).expect("flush");
+    (tmp, seg)
+}
+
+/// Every posting lookup answers from the mmap what the builder wrote: the
+/// kind walk partitions the rows by their stored kind, a posted flag names
+/// exactly the row it was set on, and the prefix index finds the names.
+#[test]
+fn posting_lookups_answer_what_the_builder_wrote() {
+    let (_tmp, seg) = segment_with_postings();
+    let reader = SegmentReader::open(&seg).expect("open");
+
+    let mut covered = RoaringBitmap::new();
+    for entry in reader.kind_postings() {
+        let (kind_id, rows) = entry.expect("kind entry");
+        assert!(!rows.is_empty(), "a posted kind has rows");
+        for row in &rows {
+            assert_eq!(
+                reader.fql_kind_id_of(row),
+                kind_id,
+                "row {row} posted under another kind"
+            );
+        }
+        assert_eq!(
+            reader.kind_rows(kind_id).expect("kind_rows").as_ref(),
+            Some(&rows),
+            "the walk and the keyed lookup disagree for kind {kind_id}"
+        );
+        covered |= rows;
+    }
+    assert_eq!(
+        covered.len(),
+        u64::from(reader.row_count),
+        "every row is posted under its kind"
+    );
+    let unknown_kind = u32::MAX;
+    assert_eq!(reader.kind_rows(unknown_kind).expect("kind_rows"), None);
+
+    assert!(reader.posts_field("is_const"));
+    assert!(
+        !reader.posts_field("has_doc"),
+        "a flag never set on any row is not posted"
+    );
+    let true_id = reader.strings.id_of("true").expect("'true' is in the pool");
+    let const_rows = reader
+        .field_rows("is_const", true_id)
+        .expect("field_rows")
+        .expect("is_const=true is posted");
+    assert_eq!(
+        const_rows.iter().collect::<Vec<_>>(),
+        vec![0],
+        "only alpha is const"
+    );
+    let walked: Vec<(u32, RoaringBitmap)> = reader
+        .field_postings("is_const")
+        .collect::<Result<_>>()
+        .expect("field walk");
+    assert_eq!(walked, vec![(true_id, const_rows)]);
+    assert_eq!(
+        reader.field_postings("has_doc").count(),
+        0,
+        "an unposted field walks empty"
+    );
+    assert!(reader.proves_enrichment_value_absent("is_const", "false"));
+    assert!(!reader.proves_enrichment_value_absent("is_const", "true"));
+
+    assert!(reader.has_name_prefix_index());
+    let al = reader
+        .name_prefix_rows(b"al")
+        .expect("name_prefix_rows")
+        .expect("two names start with 'al'");
+    assert_eq!(al.iter().collect::<Vec<_>>(), vec![0, 1]);
+    assert_eq!(
+        reader.name_prefix_rows(b"zz").expect("name_prefix_rows"),
+        None
+    );
+}
+
+/// A bitmap whose bytes will not decode is reported by the lookup that
+/// reaches it — never at open, and never as "no rows": the kind prefilter and
+/// the enrichment prefilter both stop narrowing and the residual filter still
+/// produces the right answer, and the absence proof declines to prove.
+#[test]
+fn a_corrupt_posting_bitmap_is_reported_at_lookup_and_never_narrows() {
+    let (_tmp, seg) = segment_with_postings();
+    let mut bytes = std::fs::read(&seg).expect("read segment");
+    for blob in [&b"postings_fql_kind"[..], &b"postings_is_const"[..]] {
+        let (offset, len) = toc_range(&bytes, blob);
+        assert!(
+            len > 12,
+            "{} blob has an entry to corrupt",
+            String::from_utf8_lossy(blob)
+        );
+        // [entry_count][id][bitmap_len][bitmap…]* — clobber every bitmap's
+        // header (its serial cookie) so `deserialize_from` refuses each one.
+        let entry_count =
+            u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+        let mut pos = offset + 4;
+        for _ in 0..entry_count {
+            let bitmap_len =
+                u32::from_le_bytes(bytes[pos + 4..pos + 8].try_into().unwrap()) as usize;
+            let bitmap_start = pos + 8;
+            bytes[bitmap_start..bitmap_start + 4].copy_from_slice(&[0xFF; 4]);
+            pos = bitmap_start + bitmap_len;
+        }
+    }
+    std::fs::write(&seg, &bytes).expect("write segment");
+
+    let reader = SegmentReader::open(&seg).expect("a corrupt bitmap does not refuse the open");
+
+    let function_id = reader.strings.id_of("function").expect("kind in pool");
+    assert!(
+        reader.kind_rows(function_id).is_err(),
+        "the lookup reports the corruption"
+    );
+    // The prefilter cannot narrow, so every row is a candidate and the
+    // residual filter decides — the answer is still exactly the functions.
+    let found = reader
+        .find_symbols(&clauses_where_kind("function"), None)
+        .expect("find");
+    assert_eq!(names(&found), vec!["alpha", "also"]);
+
+    let true_id = reader.strings.id_of("true").expect("'true' in pool");
+    assert!(reader.field_rows("is_const", true_id).is_err());
+    let all: RoaringBitmap = (0..reader.row_count).collect();
+    let clauses = Clauses {
+        where_predicates: vec![Predicate {
+            field: "is_const".to_owned(),
+            op: CompareOp::Eq,
+            value: PredicateValue::String("true".to_owned()),
+        }],
+        ..Clauses::default()
+    };
+    assert_eq!(
+        reader.prefilter_enrichment_postings(all.clone(), &clauses),
+        all,
+        "an unreadable bitmap leaves the predicate to the residual filter"
+    );
+    assert!(
+        !reader.proves_enrichment_value_absent("is_const", "true"),
+        "an unreadable bitmap proves nothing"
+    );
+}
+
+/// An entry table that runs past its blob is a layout error, and `open`
+/// still refuses it — that check did not move with the decode.
+#[test]
+fn a_truncated_posting_table_is_refused_at_open() {
+    let (_tmp, seg) = segment_with_postings();
+    let mut bytes = std::fs::read(&seg).expect("read segment");
+    let (offset, _) = toc_range(&bytes, b"postings_fql_kind");
+    bytes[offset..offset + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+    std::fs::write(&seg, &bytes).expect("write segment");
+    let Err(err) = SegmentReader::open(&seg) else {
+        panic!("an entry count past the blob is refused");
+    };
+    assert!(
+        format!("{err:#}").contains("postings_fql_kind"),
+        "the refusal names the blob: {err:#}"
+    );
+}

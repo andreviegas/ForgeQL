@@ -2,8 +2,9 @@
 //!
 //! Opens a segment file written by [`SegmentBuilder`], validates the outer
 //! `FQSF` magic and the inner `FQSG` header blob, mmaps the whole file with
-//! a single `Mmap`, parses the TOC to locate every named blob, and
-//! deserialises Roaring bitmap posting lists and the FST from their blobs.
+//! a single `Mmap`, parses the TOC to locate every named blob, opens the FSTs
+//! over the mapping, and addresses the Roaring posting blobs in place — a
+//! bitmap is decoded only when a lookup asks for it (see `postings.rs`).
 //!
 //! One `Mmap` per segment → 1 VMA instead of 25.
 
@@ -41,10 +42,9 @@ use super::segment_builder::{
 };
 
 mod load;
-use load::{
-    blob_slice, decode_name_postings, load_enrichment_postings, load_kind_postings,
-    load_name_prefix, load_zone_maps, parse_column_entries, parse_toc,
-};
+use load::{decode_name_postings, load_zone_maps, parse_column_entries, parse_toc};
+mod postings;
+use postings::{Key, KeyKind, PostingBlob, decode};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Format constants (must match segment_builder.rs)
@@ -123,10 +123,12 @@ struct StringPool {
     /// byte-identical, which is the property to preserve if this is ever made
     /// eager again for some other reason.
     ///
-    /// It is not, however, where that phase's memory goes: dropping the eager
-    /// build left the phase's 7.5 GiB growth unchanged, so the allocation
-    /// belongs to something else opened alongside it — the deserialised
-    /// posting bitmaps are the open suspect, and are not yet measured.
+    /// It is not, however, where that phase's memory went: dropping the eager
+    /// build left the phase's 7.5 GiB growth unchanged. Of what remained,
+    /// about 40% (~210 of ~550 MiB, measured on a 3.06M-row corpus) was the
+    /// posting bitmaps `open` deserialised for every segment; those are now
+    /// read in place (see `postings.rs`). The rest is the readers' own tables
+    /// — TOC, column names, string-pool bounds — and is still heap.
     reverse: OnceLock<HashMap<String, u32>>,
 }
 
@@ -404,6 +406,20 @@ const fn non_empty(s: &str) -> Option<&str> {
     if s.is_empty() { None } else { Some(s) }
 }
 
+/// Decode an id-keyed posting walk into `(id, bitmap)` pairs, one bitmap at a
+/// time. A bytes-keyed entry in an id-keyed blob is a layout error, not a row.
+fn id_entries(
+    entries: postings::Entries<'_>,
+) -> impl Iterator<Item = Result<(u32, RoaringBitmap)>> + '_ {
+    entries.map(|entry| {
+        let (key, bytes) = entry?;
+        let Key::Id(id) = key else {
+            anyhow::bail!("posting blob keyed by bytes where an id was expected");
+        };
+        Ok((id, decode(bytes)?))
+    })
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SegmentReader
 // ─────────────────────────────────────────────────────────────────────────────
@@ -440,10 +456,16 @@ pub struct SegmentReader {
     /// with the byte range its `col_<name>` blob occupies in `mmap`.
     extra_cols: Vec<(String, ColRange)>,
     strings: StringPool,
-    pub(crate) kind_postings: HashMap<u32, RoaringBitmap>,
-    pub(crate) field_postings: HashMap<String, HashMap<u32, RoaringBitmap>>,
+    /// `postings_fql_kind`, addressed in place — see `postings.rs`. Nothing
+    /// is decoded until a lookup asks for one kind's rows.
+    kind_blob: PostingBlob,
+    /// One `postings_<field>` per enrichment field this segment posts, in
+    /// `POSTING_ENRICHMENT_FIELDS` order, addressed in place.
+    field_blobs: Vec<(&'static str, PostingBlob)>,
     pub(crate) zone_maps: HashMap<String, (u32, u32)>,
-    pub(crate) name_prefix: HashMap<Vec<u8>, RoaringBitmap>,
+    /// `name_prefix`, addressed in place; keyed by lower-cased 1–2 character
+    /// name prefixes.
+    name_prefix_blob: PostingBlob,
     pub(crate) name_fst: FstMap<MmapSlice>,
     /// Usage postings FST (BUG-006): identifier text → 1-based source lines.
     /// `None` when the file produced no usage sites (blob omitted at flush).
@@ -458,12 +480,17 @@ impl SegmentReader {
     /// Open and validate a `.fqsf` segment file.
     ///
     /// Mmaps the whole file, parses the outer FQSF TOC, validates the inner
-    /// `FQSG` header blob, builds the string pool, and deserialises Roaring
-    /// bitmap postings and the FST.
+    /// `FQSG` header blob, builds the string pool, opens the FSTs over the
+    /// mapping, and checks the layout of the Roaring posting blobs without
+    /// decoding them — a bitmap is deserialised only when a lookup asks for
+    /// it (see `postings.rs`), so an open segment holds no posting bitmap on
+    /// the heap.
     ///
     /// # Errors
     /// Returns `Err` on I/O failure, missing file, format mismatch, schema
-    /// version mismatch, or corrupt string pool.
+    /// version mismatch, corrupt string pool, or a posting blob whose entry
+    /// table runs past its end. Corrupt bitmap *bytes* inside a well-formed
+    /// entry table are not detected here; a lookup reports them.
     pub fn open(path: &Path) -> Result<Self> {
         // ── 1-2. Mmap + validate the outer FQSF header ────────────────────
         let (mmap, file_len) = Self::map_and_validate(path)?;
@@ -480,12 +507,26 @@ impl SegmentReader {
         let strings =
             StringPool::from_blobs(Arc::clone(&mmap), off_range, dat_range, hdr.string_count)?;
 
-        // ── 7. Roaring postings ───────────────────────────────────────────
-        let kind_postings = {
-            let data = blob_slice(&blobs, &mmap, "postings_fql_kind");
-            load_kind_postings(data)?
-        };
-        let field_postings = load_enrichment_postings(&blobs, &mmap)?;
+        // ── 7. Roaring postings — addressed in place, layout checked, not
+        //       decoded (see `postings.rs`) ──────────────────────────────────
+        let kind_blob = PostingBlob::new(
+            blobs.get("postings_fql_kind").copied().unwrap_or((0, 0)),
+            KeyKind::Id,
+        );
+        kind_blob.validate(&mmap, "postings_fql_kind")?;
+        let mut field_blobs: Vec<(&'static str, PostingBlob)> = Vec::new();
+        for &field in POSTING_ENRICHMENT_FIELDS {
+            let blob_name = format!("postings_{field}");
+            let Some(&range) = blobs.get(&blob_name) else {
+                continue;
+            };
+            let blob = PostingBlob::new(range, KeyKind::Id);
+            if !blob.is_present() {
+                continue;
+            }
+            blob.validate(&mmap, &blob_name)?;
+            field_blobs.push((field, blob));
+        }
         let zone_maps = load_zone_maps(&blobs, &mmap)?;
 
         // ── 8. FST + name prefix ──────────────────────────────────────────
@@ -496,10 +537,11 @@ impl SegmentReader {
             end: fst_end,
         })
         .context("parsing name_fst blob")?;
-        let name_prefix = {
-            let data = blob_slice(&blobs, &mmap, "name_prefix");
-            load_name_prefix(data)?
-        };
+        let name_prefix_blob = PostingBlob::new(
+            blobs.get("name_prefix").copied().unwrap_or((0, 0)),
+            KeyKind::Bytes,
+        );
+        name_prefix_blob.validate(&mmap, "name_prefix")?;
 
         // ── 8b. Usage postings FST (BUG-006; blob absent = no usages) ─────
         let usages_fst = match blobs.get("usages_fst").copied() {
@@ -560,10 +602,10 @@ impl SegmentReader {
             content_id: hdr.content_id,
             extra_cols,
             strings,
-            kind_postings,
-            field_postings,
+            kind_blob,
+            field_blobs,
             zone_maps,
-            name_prefix,
+            name_prefix_blob,
             name_fst,
             usages_fst,
             mention_fsts,
@@ -812,7 +854,88 @@ impl SegmentReader {
     /// so this segment's rows are invisible to any bitmap built from postings.
     #[must_use]
     pub fn posts_field(&self, field: &str) -> bool {
-        self.field_postings.contains_key(field)
+        self.field_blob(field).is_some()
+    }
+
+    /// The posting blob of `field`, when this segment posts it.
+    fn field_blob(&self, field: &str) -> Option<PostingBlob> {
+        self.field_blobs
+            .iter()
+            .find(|(name, _)| *name == field)
+            .map(|(_, blob)| *blob)
+    }
+
+    /// The enrichment fields this segment posts, in
+    /// `POSTING_ENRICHMENT_FIELDS` order.
+    pub(crate) fn posted_fields(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.field_blobs.iter().map(|(name, _)| *name)
+    }
+
+    /// Every `(value_id, rows)` pair `field` posts, in file order; empty when
+    /// the segment does not post `field`. Each bitmap is decoded from the
+    /// mmap as the iterator reaches it, so a walk holds one at a time.
+    pub(crate) fn field_postings(
+        &self,
+        field: &str,
+    ) -> impl Iterator<Item = Result<(u32, RoaringBitmap)>> + '_ {
+        id_entries(
+            self.field_blob(field)
+                .unwrap_or_default()
+                .entries(&self.mmap),
+        )
+    }
+
+    /// The rows of `field = <value_id>`, decoded from the mmap on each call.
+    /// `None` when the segment posts no such value for the field — callers
+    /// that must tell "field not posted" from "value absent" ask
+    /// [`Self::posts_field`] first.
+    ///
+    /// # Errors
+    /// Corrupt bitmap bytes, or an entry table that runs past its blob.
+    pub(crate) fn field_rows(&self, field: &str, value_id: u32) -> Result<Option<RoaringBitmap>> {
+        let Some(blob) = self.field_blob(field) else {
+            return Ok(None);
+        };
+        blob.find_id(&self.mmap, value_id)?.map(decode).transpose()
+    }
+
+    /// The rows whose `fql_kind` has string-pool id `kind_id`, decoded from
+    /// the mmap on each call; `None` when the segment posts no such kind.
+    ///
+    /// # Errors
+    /// Corrupt bitmap bytes, or an entry table that runs past its blob.
+    pub(crate) fn kind_rows(&self, kind_id: u32) -> Result<Option<RoaringBitmap>> {
+        self.kind_blob
+            .find_id(&self.mmap, kind_id)?
+            .map(decode)
+            .transpose()
+    }
+
+    /// Every `(kind_id, rows)` pair this segment posts, in file order, each
+    /// bitmap decoded as the iterator reaches it.
+    pub(crate) fn kind_postings(&self) -> impl Iterator<Item = Result<(u32, RoaringBitmap)>> + '_ {
+        id_entries(self.kind_blob.entries(&self.mmap))
+    }
+
+    /// Whether this segment carries a name-prefix index with at least one
+    /// entry. A segment written before the index existed, or holding no
+    /// names, has none — its rows cannot be pruned by prefix.
+    #[must_use]
+    pub(crate) fn has_name_prefix_index(&self) -> bool {
+        self.name_prefix_blob.entry_count(&self.mmap) > 0
+    }
+
+    /// The rows whose lower-cased name starts with `prefix` (one or two
+    /// characters, as the index is keyed), decoded from the mmap on each
+    /// call; `None` when no name here does.
+    ///
+    /// # Errors
+    /// Corrupt bitmap bytes, or an entry table that runs past its blob.
+    pub(crate) fn name_prefix_rows(&self, prefix: &[u8]) -> Result<Option<RoaringBitmap>> {
+        self.name_prefix_blob
+            .find_bytes(&self.mmap, prefix)?
+            .map(decode)
+            .transpose()
     }
 
     /// Return the hex-encoded content ID of this segment.
@@ -1218,14 +1341,23 @@ impl SegmentReader {
         for pred in &clauses.where_predicates {
             if pred.field == "fql_kind" && pred.op == CompareOp::Eq {
                 if let PredicateValue::String(ref kind_val) = pred.value {
-                    let bm = if let Some(kind_id) = self.strings.id_of(kind_val.as_str()) {
-                        self.kind_postings
-                            .get(&kind_id)
-                            .cloned()
-                            .unwrap_or_default()
-                    } else {
+                    let Some(kind_id) = self.strings.id_of(kind_val.as_str()) else {
                         // Kind not present in this segment → no candidates.
                         return RoaringBitmap::new();
+                    };
+                    let bm = match self.kind_rows(kind_id) {
+                        Ok(rows) => rows.unwrap_or_default(),
+                        Err(e) => {
+                            // A bitmap that will not decode cannot narrow: every
+                            // row stays a candidate and the residual filter
+                            // decides — complete, slower, never a false negative.
+                            tracing::warn!(
+                                path = %self.path.display(),
+                                kind = %kind_val,
+                                "postings_fql_kind unreadable, not narrowing: {e:#}"
+                            );
+                            (0..self.row_count).collect()
+                        }
                     };
                     result = Some(match result {
                         Some(prev) => prev & bm,
@@ -1253,14 +1385,19 @@ impl SegmentReader {
     /// field's per-segment cardinality exceeds its cap. Those rows are
     /// invisible here, so the caller must keep the complete scan.
     pub(crate) fn proves_enrichment_value_absent(&self, field: &str, value: &str) -> bool {
-        let Some(by_value) = self.field_postings.get(field) else {
+        if !self.posts_field(field) {
             return !self.has_extra_col(field);
-        };
+        }
         let Some(value_id) = self.strings.id_of(value) else {
             // The value is not even in this segment's string pool.
             return true;
         };
-        by_value.get(&value_id).is_none_or(RoaringBitmap::is_empty)
+        match self.field_rows(field, value_id) {
+            Ok(None) => true,
+            Ok(Some(bm)) => bm.is_empty(),
+            // An unreadable bitmap proves nothing.
+            Err(_) => false,
+        }
     }
 
     /// Narrow `local_rows` using per-segment enrichment posting bitmaps.
@@ -1284,16 +1421,30 @@ impl SegmentReader {
             let PredicateValue::String(ref val) = pred.value else {
                 continue;
             };
-            let Some(field_map) = self.field_postings.get(&pred.field) else {
+            if !self.posts_field(&pred.field) {
                 continue;
-            };
+            }
             let Some(value_id) = self.strings.id_of(val.as_str()) else {
                 // Value not in this segment's pool → no rows can match.
                 return RoaringBitmap::new();
             };
-            let Some(bm) = field_map.get(&value_id) else {
-                // Value is in the pool but has no rows with this field value.
-                return RoaringBitmap::new();
+            let bm = match self.field_rows(&pred.field, value_id) {
+                Ok(Some(bm)) => bm,
+                Ok(None) => {
+                    // Value is in the pool but has no rows with this field value.
+                    return RoaringBitmap::new();
+                }
+                Err(e) => {
+                    // A bitmap that will not decode cannot narrow; the
+                    // predicate is left to the residual filter, like a field
+                    // with no posting file at all.
+                    tracing::warn!(
+                        path = %self.path.display(),
+                        field = %pred.field,
+                        "posting bitmap unreadable, not narrowing: {e:#}"
+                    );
+                    continue;
+                }
             };
             rows &= bm;
             if rows.is_empty() {

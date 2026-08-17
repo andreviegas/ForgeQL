@@ -48,3 +48,10 @@ tracing-subscriber = { workspace = true }
 
 # CLI args
 clap = { workspace = true }
+
+[target.'cfg(not(windows))'.dependencies]
+# allocator — the same jemalloc the `forgeql` binary uses, so the long-lived
+# daemon returns freed index-build memory to the OS instead of holding it in
+# glibc's per-thread arenas.
+# Not used on Windows: jemalloc does not support MinGW cross-compilation.
+tikv-jemallocator = { workspace = true }
