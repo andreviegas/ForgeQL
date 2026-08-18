@@ -6,6 +6,38 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.173.0] — 2026-08-18 — an opened segment stops copying its postings onto the heap
+
+### Performance
+
+- Opening a segment no longer decodes its Roaring posting lists into the heap;
+  they are read in place over the mmap and one bitmap is decoded per lookup.
+  On a 3.06M-row, 32,748-segment corpus: the open phase adds ~340 MiB of
+  anonymous memory instead of ~550, a session after `USE` holds 938 MiB instead
+  of ~1.1 GiB, peak RSS 3,127 MB instead of 3,399, shared open 4.3 s instead of
+  5.4. The overlay is byte-identical. A `name LIKE 'xy%'` — the one shape that
+  reaches the per-segment name-prefix index — is 1.25x slower (73.7 → 92.2
+  ms/query); a whole-corpus `fql_kind` scan is unchanged at 1.03x. Accepted:
+  the per-segment heap copy is what stops many sessions querying one commit at
+  once.
+
+- A `FIND symbols` with no `LIMIT` written is handed its default page as the
+  engine's `LIMIT`, so it takes the same routes an explicit `LIMIT 20` does and
+  holds only the page. A bare `FIND symbols` on a 3M-symbol corpus went from
+  2,365 MB and a refusal to 380 MB and a completed page; `WHERE fql_kind = 'if'`
+  with no `LIMIT` from 852 MB / 634 ms to 384 MB / 298 ms. Rows and `total` are
+  unchanged; `GROUP BY` and `HAVING` keep the clauses as written.
+
+- `forgeql-server` now runs on jemalloc, as the `forgeql` binary already did, so
+  memory freed after an index build returns to the operating system. Not on
+  Windows, where jemalloc does not build under MinGW.
+
+### Notes
+
+- A posting bitmap that will not decode is reported by the lookup that reaches
+  it instead of refusing the segment at open: prefilters stop narrowing, the
+  residual filter still decides, and no row is dropped.
+
 ## [0.172.0] — 2026-08-17 — a commit pulled from upstream stops re-merging the whole corpus
 
 ### Added
