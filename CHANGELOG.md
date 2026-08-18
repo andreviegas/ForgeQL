@@ -6,6 +6,19 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.174.0] — 2026-08-18 — a name with a multi-byte character stops crashing the page it is on
+
+### Fixed
+
+- A query whose page held a name longer than 120 bytes ending in a multi-byte
+  character crashed the process: the display truncation measured the name in
+  bytes and cut it at byte 120, which is not a legal place to split a string
+  when that byte sits inside a character. Indexing this repository was enough
+  to hit it — `FIND symbols ORDER BY line DESC` paged in a documentation line
+  ending in an em dash. The cut is now made in characters, as the documented
+  behaviour always said. Reachable from the server as well as the CLI, though
+  it cost one request rather than the daemon. Present since 2026-03-21.
+
 ## [0.173.0] — 2026-08-18 — an opened segment stops copying its postings onto the heap
 
 ### Performance
