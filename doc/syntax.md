@@ -1058,24 +1058,30 @@ built, never what is searched.
 The row budget is roughly 3.7x lower than the five million rows it replaced, so a
 scan that used to complete can now be refused — a reachability change, not a
 restatement. The case to watch is a `GROUP BY` no fast path accepts: its answer
-is a handful of rows, but it materialises every matching row to get there.
-`GROUP BY fql_kind` and `GROUP BY file` are counted from the index, and so is a
-`GROUP BY` on an enrichment field the segments post per value — that one only
-where the field survived the overlay's per-field value budget, no segment stores
-its column without posting it, the session holds no uncommitted rows, no two
-segments were built from one source path, and any `HAVING` or `ORDER BY` reads
-`count` or the grouped field, since a group row counted this way carries those
-two and nothing else. Counted or scanned, the groups and their sizes are the
-same — the stored cardinalities are drawn from the same collapsed rows the scan
-dedupes to, and the rows the field says nothing about are the one group keyed by
-the empty string either way. What differs is the order, wherever the clause does
-not decide it: a counted group is named by its own value and a scanned one by
-the first row of the group, so with no `ORDER BY`, or where an `ORDER BY count`
-ties, the two routes sort the same groups differently — and under the 20-row
+is a handful of rows, but it materialises every matching row to get there. Three
+groupings are counted from the index instead — `GROUP BY fql_kind`, `GROUP BY
+file`, and a `GROUP BY` on an enrichment field the segments post per value — and
+all three want the same thing of the query: **no `WHERE`**, no uncommitted rows
+in the session, and no two segments of the index built from one source path. A
+stored cardinality counts a value over whole segments and cannot be narrowed to
+the subset a predicate selects, so `WHERE fql_kind = 'function' GROUP BY naming`
+is scanned like any other grouping, and on a large enough corpus refused. The
+enrichment one asks for two more: the field must have survived the overlay's
+per-field value budget with no segment storing its column without posting it,
+and any `HAVING` or `ORDER BY` must read `count` or the grouped field, since a
+group row counted this way carries those two and nothing else. `IN` and
+`EXCLUDE` are welcome — a segment is one source path, so the globs select whole
+segments — and they narrow the reading as well as the answer.
+
+Counted or scanned, the groups and their sizes are the same: the stored
+cardinalities are drawn from the same collapsed rows the scan dedupes to, and
+the rows the field says nothing about are the one group keyed by the empty
+string either way. What differs is the order, wherever the clause does not
+decide it — a counted group is named by its own value and a scanned one by the
+first row of the group, so with no `ORDER BY`, or where an `ORDER BY count`
+ties, the two routes sort the same groups differently, and under the 20-row
 default that changes which of a wide field's groups the page holds, though never
 `total`. Write `ORDER BY count DESC` and the field, not the page, decides.
-Outside that gate the grouping is scanned, and on a multi-million-symbol corpus
-that is what the budget refuses.
 
 The row budget is enforced wherever result rows accumulate without a bound of
 their own: the `FIND symbols` scan over the on-disk index, the union of a

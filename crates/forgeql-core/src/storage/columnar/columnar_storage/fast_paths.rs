@@ -49,11 +49,13 @@ const FIND_BYTES_PER_ROW: usize = 1_600;
 /// watch is a `GROUP BY` no fast path accepts: its answer is a handful of rows
 /// but it materialises every matching row to get there. `fql_kind`, the path,
 /// and an enrichment field the segments post per value are counted from the
-/// index instead — the last of those only where the field survived the
-/// overlay's value budget, no segment stores the column without posting it,
-/// the session holds no uncommitted rows, no two segments were built from one
-/// source path, and any `HAVING`/`ORDER BY` reads `count` or the grouped field;
-/// outside those gates the scan is still what answers.
+/// index instead. All three want no `WHERE` — a stored cardinality counts a
+/// value over whole segments and cannot be narrowed to what a predicate
+/// selects — no uncommitted rows in the session, and no two segments built
+/// from one source path; the enrichment one also wants the field to have
+/// survived the overlay's value budget with no segment storing the column
+/// without posting it, and any `HAVING`/`ORDER BY` to read `count` or the
+/// grouped field. Outside those gates the scan is still what answers.
 ///
 /// **What this bound covers.** Every path that builds a `FIND` result row set
 /// reads it: the on-disk `FIND symbols` scan in
@@ -486,14 +488,15 @@ impl ColumnarStorage {
     /// The counts are the pipeline's collapsed counts, not an approximation of
     /// them: `Overlay::enrichment_value_counts` reads bitmaps drawn from each
     /// segment's canonical row set, which is the same collapse the scan's
-    /// dedupe pass performs. The caller has already refused the two shapes
-    /// where that equivalence breaks on the session's side — a session with
-    /// uncommitted rows the table cannot know about, and an index holding two
-    /// segments built from one source path, where a segment collapsing its own
-    /// duplicates is not the whole collapse — and this function refuses the two
-    /// on the index's side: a field the overlay pruned for carrying more
-    /// distinct values than its budget allows, and a selected segment that
-    /// stores the column without posting it.
+    /// dedupe pass performs. The caller has already refused the three shapes
+    /// where that equivalence breaks on the query's side — a `WHERE`, whose
+    /// subset a cardinality counted over whole segments cannot be narrowed to;
+    /// a session with uncommitted rows the table cannot know about; and an
+    /// index holding two segments built from one source path, where a segment
+    /// collapsing its own duplicates is not the whole collapse — and this
+    /// function refuses the two on the index's side: a field the overlay pruned
+    /// for carrying more distinct values than its budget allows, and a selected
+    /// segment that stores the column without posting it.
     ///
     /// What is NOT identical is the order of a page no clause decides. A group
     /// row built here is named by its own value, where the scan's is the first

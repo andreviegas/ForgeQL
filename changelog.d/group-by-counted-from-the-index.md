@@ -33,10 +33,17 @@
 
   The counted path hands the query back to the scan wherever the stored counts
   would not be the collapsed ones, and each of these is a refusal rather than an
-  approximation: a field the overlay pruned for carrying more distinct values
-  than its budget allows; a selected segment that stores the column and posted
-  none of its values, which happens past the per-field posting budget and leaves
-  its rows carrying values no key counts; a session holding uncommitted edits;
+  approximation. The first is the one you will meet: a `WHERE`. A stored
+  cardinality counts a value over whole segments and cannot be narrowed to the
+  subset a predicate selects, so `WHERE fql_kind = 'function' GROUP BY naming`
+  scans exactly as it did — as `GROUP BY fql_kind` and `GROUP BY file` do beside
+  a `WHERE` too. `IN` and `EXCLUDE` are not in that company: a segment is one
+  source path, so a glob selects whole segments and the counts narrow with it.
+  The rest are index-side: a field the overlay pruned for carrying more distinct
+  values than its budget allows; a selected segment that stores the column and
+  posted none of its values, which happens past the per-field posting budget and
+  leaves its rows carrying values no key counts; a session holding uncommitted
+  edits;
   an index with two segments built from one source path; and a `HAVING` or
   `ORDER BY` naming anything but `count` or the grouped field, since a counted
   group row carries those two and nothing else. `IN`/`EXCLUDE` are applied by

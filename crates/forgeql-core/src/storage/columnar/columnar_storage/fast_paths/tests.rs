@@ -811,6 +811,15 @@ fn bare_group_by(field: &str) -> Clauses {
 /// column-only enrichment field such as `param_count` has no `field=value`
 /// bitmap to count, and a field admitted here that the key table cannot answer
 /// would be answered as one empty group holding every row.
+///
+/// The gate canonicalises the written field before any of this, as every other
+/// eligibility test here does. That is not asserted, and deliberately: no entry
+/// of `POSTING_ENRICHMENT_FIELDS` carries an alias in `field_tiers` today, so a
+/// case written to prove it would compare `canonical("naming")` against
+/// `"naming"` and pass with the call deleted. Give one of these fields an alias
+/// and the case becomes writable — and needed, because the value is keyed into
+/// the group row's field map under the canonical name and read back out under
+/// it by the renderer.
 #[test]
 fn only_a_posted_enrichment_field_arms_the_count_path() {
     assert_eq!(
@@ -910,14 +919,4 @@ fn count_and_the_grouped_field_are_the_only_two_the_group_row_answers() {
         None,
         "HAVING on a field the group row does not carry"
     );
-}
-
-/// A field spelled with an alias groups the same rows, so it must reach the
-/// same path: the gate reports the canonical name, which is what the count
-/// lookup and the group row's own field map are keyed by.
-#[test]
-fn the_gate_reports_the_canonical_field() {
-    let clauses = bare_group_by("naming");
-    let field = group_by_enrichment_fast_path_field(&clauses, true);
-    assert_eq!(field, Some(crate::field_tiers::canonical("naming")));
 }

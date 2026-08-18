@@ -190,5 +190,102 @@
     ]
    }
   }
+,
+  {
+   "name": "a_path_glob_narrows_the_counted_groups",
+   "description": "IN selects whole segments, because a segment is one source path, so the counted route intersects each stored bitmap with the rows of the segments whose path passes and takes the canonical total from those same segments. Nothing else in this suite reaches that branch: without a glob no mask is built at all. The counts here are the subtree's, not the corpus's -- 10,088 flatcase against 17,479 -- and the case below is the same query through the scan.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols IN 'crates/forgeql-core/**' GROUP BY naming ORDER BY count DESC",
+   "assert": {
+    "row_count": 8,
+    "total": 8,
+    "rows": [
+     { "name": "flatcase", "count": 10088, "path": "", "line": 0 },
+     { "name": "snake_case", "count": 9986, "path": "", "line": 0 },
+     { "name": "", "count": 8269, "path": "", "line": 0 },
+     { "name": "mixed", "count": 6048, "path": "", "line": 0 },
+     { "name": "kebab-case", "count": 2876, "path": "", "line": 0 },
+     { "name": "PascalCase", "count": 2002, "path": "", "line": 0 },
+     { "name": "camelCase", "count": 614, "path": "", "line": 0 },
+     { "name": "UPPER_SNAKE", "count": 114, "path": "", "line": 0 }
+    ]
+   }
+  },
+  {
+   "name": "the_scan_narrows_to_the_same_groups",
+   "description": "The control for the glob. One WHERE every row satisfies sends the same query to the scan, where the glob filters rows rather than selecting segments. Identical groups and counts is what says the two ways of applying a path filter describe the same row set -- the assumption the counted route rests on, since a mask that disagreed with the row filter would not error, it would move rows into the no-value group.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE line >= 0 IN 'crates/forgeql-core/**' GROUP BY naming ORDER BY count DESC",
+   "assert": {
+    "row_count": 8,
+    "total": 8,
+    "rows": [
+     { "count": 10088, "group_key": "flatcase", "name": "name", "path": "crates/forgeql-core/Cargo.toml", "line": 2 },
+     { "count": 9986, "group_key": "snake_case" },
+     { "count": 8269, "group_key": null },
+     { "count": 6048, "group_key": "mixed" },
+     { "count": 2876, "group_key": "kebab-case" },
+     { "count": 2002, "group_key": "PascalCase" },
+     { "count": 614, "group_key": "camelCase" },
+     { "count": 114, "group_key": "UPPER_SNAKE" }
+    ]
+   }
+  },
+  {
+   "name": "an_exclude_glob_narrows_them_the_other_way",
+   "description": "EXCLUDE reaches the same branch by the other door, and drops the bulk of this corpus. The empty group falls from 9,492 to 616 here, which is the arithmetic being redone against the surviving segments rather than reused.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols EXCLUDE 'crates/**' GROUP BY naming ORDER BY count DESC",
+   "assert": {
+    "row_count": 8,
+    "total": 8,
+    "rows": [
+     { "name": "snake_case", "count": 3224, "path": "", "line": 0 },
+     { "name": "flatcase", "count": 3011, "path": "", "line": 0 },
+     { "name": "kebab-case", "count": 1486, "path": "", "line": 0 },
+     { "name": "PascalCase", "count": 1372, "path": "", "line": 0 },
+     { "name": "", "count": 616, "path": "", "line": 0 },
+     { "name": "mixed", "count": 417, "path": "", "line": 0 },
+     { "name": "camelCase", "count": 125, "path": "", "line": 0 },
+     { "name": "UPPER_SNAKE", "count": 28, "path": "", "line": 0 }
+    ]
+   }
+  },
+  {
+   "name": "the_scan_excludes_the_same_groups",
+   "description": "The control for EXCLUDE, through the scan.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE line >= 0 EXCLUDE 'crates/**' GROUP BY naming ORDER BY count DESC",
+   "assert": {
+    "row_count": 8,
+    "total": 8,
+    "rows": [
+     { "count": 3224, "group_key": "snake_case", "name": "pull_request,push", "path": ".github/workflows/ci.yml", "line": 8 },
+     { "count": 3011, "group_key": "flatcase" },
+     { "count": 1486, "group_key": "kebab-case" },
+     { "count": 1372, "group_key": "PascalCase" },
+     { "count": 616, "group_key": null },
+     { "count": 417, "group_key": "mixed" },
+     { "count": 125, "group_key": "camelCase" },
+     { "count": 28, "group_key": "UPPER_SNAKE" }
+    ]
+   }
+  },
+  {
+   "name": "a_where_predicate_sends_the_grouping_to_the_scan",
+   "description": "The counted route takes no WHERE: a stored cardinality counts a value over whole segments and cannot be narrowed to the subset a predicate selects, so a WHERE hands the grouping back. The answer is the scan's and is unchanged -- the 3,269 functions of this corpus in four naming groups -- and the rows carry a real path, which is what says this went the long way round. It is the gate an agent meets most often, since WHERE fql_kind = 'function' GROUP BY naming is the natural thing to write, and it is why the gate lists in doc/syntax.md and doc/architecture.md name the absent WHERE alongside the index-side ones.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' GROUP BY naming ORDER BY count DESC",
+   "assert": {
+    "row_count": 4,
+    "total": 4,
+    "rows": [
+     { "count": 2892, "group_key": "snake_case", "name": "detect_mode", "path": "crates/forgeql/src/cli.rs", "line": 96 },
+     { "count": 284, "group_key": "flatcase" },
+     { "count": 91, "group_key": "camelCase" },
+     { "count": 2, "group_key": "PascalCase" }
+    ]
+   }
+  }
  ]
 }
