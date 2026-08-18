@@ -668,6 +668,28 @@ fn compact_name_121_chars_truncated_with_ellipsis() {
     assert_eq!(result.as_ref(), expected.as_str());
 }
 
+/// The three tests above truncate pure ASCII, where a character index and a
+/// byte index are the same number — so they pass whether the cut is made in
+/// characters or in bytes, and cannot see the difference. This one can: the
+/// em dash straddles byte 120, so a byte slice there is not on a character
+/// boundary and panics. `ForgeQL` indexes prose as well as code, and this
+/// exact name — a line of its own documentation — took the process down.
+#[test]
+fn compact_name_cuts_on_a_character_not_a_byte() {
+    let name = format!("{}—tail", "x".repeat(118));
+    assert!(
+        !name.is_char_boundary(120),
+        "the em dash must straddle byte 120 for this test to mean anything"
+    );
+    let result = compact_name(&name);
+    assert_eq!(
+        result.chars().count(),
+        121,
+        "120 characters plus the ellipsis"
+    );
+    assert!(result.ends_with(char::from_u32(0x2026).expect("ellipsis")));
+}
+
 #[test]
 fn compact_name_with_newline_returns_first_line_snippet() {
     let name = "line1\nline2";

@@ -105,21 +105,26 @@ const fn default_summary_lines() -> usize {
 // Display helpers
 // -----------------------------------------------------------------------
 
-/// Compact a symbol name for display.  Multi-line names (e.g. block comments)
-/// are replaced with `len:<bytes>` so they don't flood the output.
-/// Single-line names longer than 120 chars are truncated with `…`.
+/// Names are truncated to this many **characters**, never bytes: slicing a
+/// `&str` at a byte index that is not a character boundary panics, and a name
+/// here is arbitrary source text — a documentation line ending in an em dash
+/// put byte 120 inside that dash and took the process down.
+///
+/// Not purely a display bound: [`comment_snippet`] is also called while
+/// indexing, to label a block row, so a value below the 40 characters that
+/// label is re-cut to would change stored index output and would need an
+/// `ENRICH_VER` bump. At 120 it is invisible there.
+pub(crate) const NAME_DISPLAY_CHARS: usize = 120;
+
 /// A single-line orientation snippet of a (possibly multi-line) name: the first
-/// line, trimmed, truncated to 120 chars, with a trailing `…` when any content
-/// was dropped. Used so a comment name never spills raw multi-line text into the
-/// name column while still hinting what the comment says.
-/// A single-line orientation snippet of a (possibly multi-line) name: the first
-/// line that carries real (alphanumeric) content, trimmed, truncated to 120
-/// chars, with a trailing `…` when any content was dropped. Bare comment openers
-/// like `/**`, `/*`, `//` are skipped so block comments surface their text, not a
-/// delimiter. Used so a comment name never spills raw multi-line text into the
-/// name column while still hinting what the comment says.
+/// line that carries real (alphanumeric) content, trimmed, truncated to
+/// `NAME_DISPLAY_CHARS` characters, with a trailing `…` when any content was
+/// dropped. Bare comment openers like `/**`, `/*`, `//` are skipped so block
+/// comments surface their text, not a delimiter. Used so a comment name never
+/// spills raw multi-line text into the name column while still hinting what the
+/// comment says.
 pub(crate) fn comment_snippet(name: &str) -> String {
-    let max = 120usize;
+    let max = NAME_DISPLAY_CHARS;
     let full = name.trim();
     let chosen = name
         .lines()
@@ -135,11 +140,19 @@ pub(crate) fn comment_snippet(name: &str) -> String {
     snippet
 }
 
+/// Compact a symbol name for display. A multi-line name (e.g. a block comment)
+/// is rendered as the single-line snippet [`comment_snippet`] builds from it;
+/// a single-line name longer than `NAME_DISPLAY_CHARS` characters is truncated
+/// with `…`. This is a display bound only — the untruncated name is what
+/// filtering, ordering, dedup and every count are computed from.
 pub(crate) fn compact_name(name: &str) -> std::borrow::Cow<'_, str> {
     if name.contains('\n') {
         std::borrow::Cow::Owned(comment_snippet(name))
-    } else if name.len() > 120 {
-        std::borrow::Cow::Owned(format!("{}…", &name[..120]))
+    } else if name.chars().count() > NAME_DISPLAY_CHARS {
+        std::borrow::Cow::Owned(format!(
+            "{}…",
+            name.chars().take(NAME_DISPLAY_CHARS).collect::<String>()
+        ))
     } else {
         std::borrow::Cow::Borrowed(name)
     }
