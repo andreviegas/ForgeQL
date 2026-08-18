@@ -756,6 +756,65 @@ impl Overlay {
         out
     }
 
+    /// Per-value canonical row counts for one posted enrichment field, read
+    /// from the key table on the mapping.
+    ///
+    /// This is what lets `GROUP BY <field>` be an index read rather than a
+    /// scan: the answer is a handful of counts, and the counts are already
+    /// stored. Each `field=value` bitmap was written by intersecting a
+    /// segment's postings for that value with the segment's canonical row set
+    /// — the same set `SegmentMeta::dedup_row_count` counts — so a bitmap's
+    /// cardinality is the group's *collapsed* size; and a row appears under at
+    /// most one value of a field, because the segment posted the field from a
+    /// column holding one value id per row. Those two facts together make the
+    /// per-key cardinalities a partition of the rows the field describes,
+    /// which is what lets a caller derive the no-value group by subtracting
+    /// their sum from the canonical total.
+    ///
+    /// `path_mask` is a whole-segment row mask for `IN`/`EXCLUDE`: a group row
+    /// carries no path of its own, so the globs have to narrow the counts here
+    /// rather than filter rows afterwards.
+    ///
+    /// `None` where the table cannot be read whole — an entry whose key or
+    /// bitmap the mapping does not hold, or a key that is not UTF-8. Skipping
+    /// such an entry would drop its rows from every count derived from this
+    /// table and, worse, move them into the no-value group, so the caller is
+    /// told to scan instead of being handed a plausible number.
+    #[must_use]
+    pub(super) fn enrichment_value_counts(
+        &self,
+        field: &str,
+        path_mask: Option<&RoaringBitmap>,
+    ) -> Option<Vec<(String, usize)>> {
+        let (entries, keys) = self.enrich_entries();
+        let prefix = format!("{field}=");
+        let prefix_bytes = prefix.as_bytes();
+        let start = entries.partition_point(|e| Self::enrich_key(keys, e) < prefix_bytes);
+
+        let mut out = Vec::new();
+        for e in &entries[start..] {
+            let key = Self::enrich_key(keys, e);
+            let Some(value_bytes) = key.strip_prefix(prefix_bytes) else {
+                break;
+            };
+            let value = std::str::from_utf8(value_bytes).ok()?;
+            let bm_start = self.enrich_bitmap_base + e.bitmap_offset as usize;
+            let bm_end = bm_start + e.bitmap_len as usize;
+            let bm = RoaringBitmap::deserialize_from(self.mmap.get(bm_start..bm_end)?).ok()?;
+            // Saturating rather than zero on the impossible conversion: a count
+            // read as zero would be handed to the caller's subtraction as
+            // "these rows have no value", which is the one wrong answer here.
+            let count = match path_mask {
+                Some(mask) => usize::try_from((bm & mask).len()).unwrap_or(usize::MAX),
+                None => usize::try_from(bm.len()).unwrap_or(usize::MAX),
+            };
+            if count > 0 {
+                out.push((value.to_owned(), count));
+            }
+        }
+        Some(out)
+    }
+
     /// Look up all global row IDs for a given symbol name (exact match).
     #[must_use]
     pub fn lookup_name_bitmap(&self, name: &str) -> RoaringBitmap {

@@ -45,19 +45,26 @@ const FIND_BYTES_PER_ROW: usize = 1_600;
 /// that used to complete can now be refused. That is the intended direction —
 /// the old number was never measured against the row it was bounding — but it
 /// is a reachability change, not a restatement, and where the new line falls on
-/// a multi-million-symbol corpus has not been measured either. A `GROUP BY`
-/// that no fast path accepts is the case to watch: its answer is a handful of
-/// rows but it materialises every matching row to get there.
+/// a multi-million-symbol corpus has not been measured either. The case to
+/// watch is a `GROUP BY` no fast path accepts: its answer is a handful of rows
+/// but it materialises every matching row to get there. `fql_kind`, the path,
+/// and an enrichment field the segments post per value are counted from the
+/// index instead — the last of those only where the field survived the
+/// overlay's value budget, no segment stores the column without posting it,
+/// the session holds no uncommitted rows, no two segments were built from one
+/// source path, and any `HAVING`/`ORDER BY` reads `count` or the grouped field;
+/// outside those gates the scan is still what answers.
 ///
-/// **What this does not cover.** It is enforced in [`ColumnarStorage::materialize_all`]
-/// only, which is the `FIND symbols` scan over the on-disk index — and there it
-/// is tested after each segment is appended, so the real peak is the budget plus
-/// the one segment being materialised. `FIND usages` builds its rows by `collect`
-/// on both backends, `FIND files` pushes one entry per file with no bound at all,
-/// the legacy in-memory backend materialises its whole result before any clause
-/// applies, and the dirty overlay's rows are unioned in after the check (bounded
-/// in practice by one session's edits). None of those is bounded here; a query
-/// answered by one of them can still exhaust host memory.
+/// **What this bound covers.** Every path that builds a `FIND` result row set
+/// reads it: the on-disk `FIND symbols` scan in
+/// [`ColumnarStorage::materialize_all`] — tested there after each segment is
+/// appended, so the real peak is the budget plus the one segment being
+/// materialised — the name-ordered stream, which declines to the scan rather
+/// than stream past it, the union of a session's uncommitted rows into that
+/// scan, the `FIND usages` site list on both backends, and the legacy
+/// in-memory backend's own scan. `FIND files` is outside it and needs no bound
+/// of its own: it pages at the standard 20-row `FIND` default with an honest
+/// `total`, so its response is bounded by the page rather than by the workspace.
 const DEFAULT_FIND_MAX_ROWS: usize = FIND_ROW_BUDGET_BYTES / FIND_BYTES_PER_ROW;
 
 /// Row budget for [`ColumnarStorage::materialize_all`], read per query.
@@ -472,6 +479,119 @@ impl ColumnarStorage {
         FindPage::of(results, total)
     }
 
+    /// `GROUP BY <posted enrichment field>` answered from the overlay's
+    /// `field=value` key table: one stored bitmap cardinality per value, and
+    /// not one result row built for any of the rows counted.
+    ///
+    /// The counts are the pipeline's collapsed counts, not an approximation of
+    /// them: `Overlay::enrichment_value_counts` reads bitmaps drawn from each
+    /// segment's canonical row set, which is the same collapse the scan's
+    /// dedupe pass performs. The caller has already refused the two shapes
+    /// where that equivalence breaks on the session's side — a session with
+    /// uncommitted rows the table cannot know about, and an index holding two
+    /// segments built from one source path, where a segment collapsing its own
+    /// duplicates is not the whole collapse — and this function refuses the two
+    /// on the index's side: a field the overlay pruned for carrying more
+    /// distinct values than its budget allows, and a selected segment that
+    /// stores the column without posting it.
+    ///
+    /// What is NOT identical is the order of a page no clause decides. A group
+    /// row built here is named by its own value, where the scan's is the first
+    /// row of the group and is named by that row, so with no `ORDER BY` — or on
+    /// a tie under `ORDER BY count` — the same groups with the same counts come
+    /// back in a different sequence, and a `LIMIT` then cuts a different page
+    /// out of them. `total` and every count are the same either way.
+    ///
+    /// `None` for either index-side refusal, for a key table that could not be
+    /// read whole, and for counts that do not fit inside the canonical rows
+    /// they are drawn from. Every one of them falls through to the scan, which
+    /// is slower and still right.
+    pub(super) fn fast_group_by_enrichment(
+        &self,
+        field: &str,
+        clauses: &Clauses,
+    ) -> Option<FindPage> {
+        // Pruned at build: past its value budget the overlay drops every
+        // `field=` key it had collected and writes no more, so the table would
+        // report no groups at all rather than fewer.
+        if !self.overlay().has_enrichment_field(field) {
+            return None;
+        }
+
+        // `passes_resolve_glob` decides per source path and a segment is one
+        // source path, so IN/EXCLUDE select whole segments: the canonical total
+        // under them is the sum of the stored per-segment counts, and the mask
+        // that narrows the bitmaps is a union of whole segment row ranges.
+        let path_filtered = clauses.in_glob.is_some() || !clauses.exclude_globs.is_empty();
+        let mut mask = RoaringBitmap::new();
+        let mut canonical_rows: usize = 0;
+        for (idx, meta) in self.overlay().segments().iter().enumerate() {
+            if path_filtered && !passes_resolve_glob(&meta.source_path, clauses) {
+                continue;
+            }
+            // A selected segment that stores the column and posted none of its
+            // values holds rows no key of the table counts, and counting from
+            // the keys would report every one of them as carrying no value at
+            // all. Only the SELECTED segments are asked: the rows of the rest
+            // are in neither the mask nor the total, so what they store cannot
+            // change this answer. A segment whose reader is missing is asked
+            // too, and answers by declining — an unread segment is exactly the
+            // one whose rows nothing here can account for.
+            let seg = self.segments().get(idx)?;
+            if segment_posts_partially(seg, field) {
+                return None;
+            }
+            canonical_rows = canonical_rows.saturating_add(meta.dedup_row_count as usize);
+            if path_filtered {
+                let _ = mask.insert_range(self.overlay().segment_row_range(idx));
+            }
+        }
+
+        let counts = self
+            .overlay()
+            .enrichment_value_counts(field, path_filtered.then_some(&mask))?;
+        let described: usize = counts.iter().map(|(_, n)| *n).sum();
+
+        let mut results: Vec<SymbolMatch> = counts
+            .into_iter()
+            .map(|(value, count)| {
+                let mut fields = HashMap::new();
+                let _ = fields.insert(field.to_owned(), value.clone());
+                SymbolMatch {
+                    name: value,
+                    fields,
+                    count: Some(count),
+                    ..SymbolMatch::default()
+                }
+            })
+            .collect();
+
+        // The rows the field says nothing about are one group keyed by the
+        // empty string — what the grouping pass makes of a row whose field
+        // resolves to nothing, and a group the key table has no key for. The
+        // bitmaps partition the rows that DO carry a value out of the same
+        // canonical rows `dedup_row_count` counts, so the remainder is exactly
+        // that group's size. A remainder that cannot exist means the two sides
+        // disagree about which rows they are describing, and a count is not
+        // worth guessing: hand the query to the scan.
+        let unaccounted = canonical_rows.checked_sub(described)?;
+        if unaccounted > 0 {
+            results.push(SymbolMatch {
+                count: Some(unaccounted),
+                ..SymbolMatch::default()
+            });
+        }
+
+        // IN/EXCLUDE were applied to the segments above; left on, they would
+        // re-filter rows that carry no path and drop every group.
+        let mut no_group = clauses.clone();
+        no_group.group_by = None;
+        no_group.in_glob = None;
+        no_group.exclude_globs.clear();
+        let total = apply_clauses_counted(&mut results, &no_group);
+        Some(FindPage::of(results, total))
+    }
+
     // ─────────────────────────────────────────────────────────────────────
     // Query helpers
     // ─────────────────────────────────────────────────────────────────────
@@ -655,7 +775,7 @@ impl ColumnarStorage {
             return rows;
         }
         for (idx, seg) in self.segments().iter().enumerate() {
-            if !seg.posts_field(field) && seg.has_extra_col(field) {
+            if segment_posts_partially(seg, field) {
                 let _ = rows.insert_range(self.overlay().segment_row_range(idx));
             }
         }
@@ -1570,6 +1690,74 @@ pub(super) fn group_by_kind_fast_path_eligible(clauses: &Clauses, dirty_empty: b
         && clauses.where_predicates.is_empty()
         && matches!(&clauses.group_by, Some(GroupBy::Field(f))
             if crate::field_tiers::canonical(f) == "fql_kind")
+}
+
+/// A segment that stores the column for `field` but posted no values for it —
+/// its rows carry values no key of the overlay's table counts.
+///
+/// A segment past its per-field posting budget writes the column and skips the
+/// postings, so the two questions "does this segment know the field" and "does
+/// the index hold its values" have different answers there. Reading such a
+/// segment as "no value here" is a wrong count, not a slow one, so both readers
+/// of this condition treat its rows as unaccounted for: the `=` tier keeps them
+/// as candidates, and the `GROUP BY` count path declines outright.
+///
+/// Only meaningful for a field the builder posts. Ask it about any other name —
+/// a column-only enrichment field, or one no segment stores — and it answers a
+/// trivial yes that says nothing, which is why both callers test membership of
+/// `POSTING_ENRICHMENT_FIELDS` before they get here.
+fn segment_posts_partially(seg: &SegmentReader, field: &str) -> bool {
+    !seg.posts_field(field) && seg.has_extra_col(field)
+}
+
+/// The `GROUP BY` shape [`ColumnarStorage::fast_group_by_enrichment`] answers,
+/// and the canonical field it groups on.
+///
+/// Canonical on both sides, here as in every other eligibility test: a spelling
+/// that misses the fast path is answered by the slow pipeline, so the failure is
+/// silent and shows up only as a latency number.
+pub(super) fn group_by_enrichment_fast_path_field(
+    clauses: &Clauses,
+    dirty_empty: bool,
+) -> Option<&str> {
+    if !dirty_empty || !clauses.where_predicates.is_empty() {
+        return None;
+    }
+    let Some(GroupBy::Field(field)) = &clauses.group_by else {
+        return None;
+    };
+    let field = crate::field_tiers::canonical(field);
+    // Only the fields a segment posts per value: those are the ones the overlay
+    // holds a `field=value` bitmap for, and the ones `segment_posts_partially`
+    // can report incomplete coverage of. A field stored only as a column is
+    // reached the same way it always was.
+    if !super::super::segment_builder::POSTING_ENRICHMENT_FIELDS.contains(&field) {
+        return None;
+    }
+    // A group row from this path carries the grouped value and its count and
+    // nothing else. Those two read on it exactly as they read on the
+    // representative row the scan would have returned; any other name reads the
+    // first matching row's value there and nothing here, so a HAVING or an
+    // ORDER BY naming one is handed back rather than answered differently.
+    let reads_a_group_field = |name: &str| {
+        let named = crate::field_tiers::canonical(name);
+        named == "count" || named == field
+    };
+    if clauses
+        .having_predicates
+        .iter()
+        .any(|p| !reads_a_group_field(&p.field))
+    {
+        return None;
+    }
+    if clauses
+        .order_by
+        .as_ref()
+        .is_some_and(|o| !reads_a_group_field(&o.field))
+    {
+        return None;
+    }
+    Some(field)
 }
 
 /// Returns `(kind_str, true)` when `ORDER BY name ASC LIMIT N` with a single

@@ -797,3 +797,127 @@ fn the_column_key_and_the_built_row_key_agree_on_every_pair() {
         }
     }
 }
+
+/// `GROUP BY <field>` with nothing else written.
+fn bare_group_by(field: &str) -> Clauses {
+    Clauses {
+        group_by: Some(GroupBy::Field(field.to_owned())),
+        ..Clauses::default()
+    }
+}
+
+/// The clause shape the count path accepts is a posted enrichment field and
+/// nothing else. `fql_kind` and the path have count paths of their own; a
+/// column-only enrichment field such as `param_count` has no `field=value`
+/// bitmap to count, and a field admitted here that the key table cannot answer
+/// would be answered as one empty group holding every row.
+#[test]
+fn only_a_posted_enrichment_field_arms_the_count_path() {
+    assert_eq!(
+        group_by_enrichment_fast_path_field(&bare_group_by("naming"), true),
+        Some("naming")
+    );
+    for field in [
+        "param_count",
+        "fql_kind",
+        "kind",
+        "file",
+        "language",
+        "name",
+    ] {
+        assert_eq!(
+            group_by_enrichment_fast_path_field(&bare_group_by(field), true),
+            None,
+            "GROUP BY {field}"
+        );
+    }
+    assert_eq!(
+        group_by_enrichment_fast_path_field(&Clauses::default(), true),
+        None,
+        "no GROUP BY at all"
+    );
+}
+
+/// The two shapes whose rows the key table does not describe: a session holding
+/// uncommitted rows, which are in no segment's postings, and a `WHERE`, which
+/// selects a subset of rows the stored cardinalities cannot be narrowed to.
+#[test]
+fn uncommitted_rows_or_a_where_hand_the_group_back() {
+    assert_eq!(
+        group_by_enrichment_fast_path_field(&bare_group_by("naming"), false),
+        None,
+        "a dirty overlay"
+    );
+
+    let filtered = Clauses {
+        where_predicates: vec![Predicate {
+            field: "fql_kind".to_owned(),
+            op: CompareOp::Eq,
+            value: PredicateValue::String("function".to_owned()),
+        }],
+        ..bare_group_by("naming")
+    };
+    assert_eq!(
+        group_by_enrichment_fast_path_field(&filtered, true),
+        None,
+        "a WHERE predicate"
+    );
+}
+
+/// A group row from this path carries the grouped value and its count. Shaping
+/// on either is the same question it was over the scan's representative rows;
+/// shaping on anything else is a different one, and is handed back rather than
+/// answered from a row that never held the field.
+#[test]
+fn count_and_the_grouped_field_are_the_only_two_the_group_row_answers() {
+    let order_by = |field: &str| Clauses {
+        order_by: Some(OrderBy {
+            field: field.to_owned(),
+            direction: SortDirection::Desc,
+        }),
+        ..bare_group_by("naming")
+    };
+    assert_eq!(
+        group_by_enrichment_fast_path_field(&order_by("count"), true),
+        Some("naming")
+    );
+    assert_eq!(
+        group_by_enrichment_fast_path_field(&order_by("naming"), true),
+        Some("naming")
+    );
+    for field in ["name", "line", "usages", "path"] {
+        assert_eq!(
+            group_by_enrichment_fast_path_field(&order_by(field), true),
+            None,
+            "ORDER BY {field}"
+        );
+    }
+
+    let having = |field: &str| Clauses {
+        having_predicates: vec![Predicate {
+            field: field.to_owned(),
+            op: CompareOp::Gte,
+            value: PredicateValue::Number(2),
+        }],
+        ..bare_group_by("naming")
+    };
+    assert_eq!(
+        group_by_enrichment_fast_path_field(&having("count"), true),
+        Some("naming")
+    );
+    assert_eq!(
+        group_by_enrichment_fast_path_field(&having("lines"), true),
+        None,
+        "HAVING on a field the group row does not carry"
+    );
+}
+
+/// A field spelled with an alias groups the same rows, so it must reach the
+/// same path: the gate reports the canonical name, which is what the count
+/// lookup and the group row's own field map are keyed by.
+#[test]
+fn the_gate_reports_the_canonical_field() {
+    let clauses = bare_group_by("naming");
+    let field = group_by_enrichment_fast_path_field(&clauses, true);
+    assert_eq!(field, Some(crate::field_tiers::canonical("naming")));
+}

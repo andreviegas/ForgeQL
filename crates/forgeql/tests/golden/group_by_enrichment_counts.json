@@ -1,0 +1,194 @@
+{
+ "suite": "group_by_enrichment_counts",
+ "description": "A GROUP BY on an enrichment field the segments post per value is answered from the overlay's field=value key table -- one stored bitmap cardinality per value -- instead of building every matching row to count it. The claim that has to hold is an equality, not a speed: the same groups, the same sizes, and the same one group for the rows the field says nothing about. Each counted case is paired with the same query carrying `WHERE line >= 0`, a predicate every row satisfies and the one thing that disarms the count path, so the pair differs in nothing but the route. The counted rows are pinned as rows with no path and no line, because that is what an aggregate built from stored counts looks like from outside the engine; the scan's are pinned by the real path and line of the first row of the first group. Without those two pins a pair like this passes just as happily when both halves took the same route.",
+ "cases": [
+  {
+   "name": "counted_from_the_index",
+   "description": "Eight groups over 59,636 collapsed rows, answered without building one of them. Every row carries the grouped value as its name and its group key, and no path or line at all -- nothing was opened.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols GROUP BY naming ORDER BY count DESC",
+   "assert": {
+    "row_count": 8,
+    "total": 8,
+    "rows": [
+     { "name": "flatcase", "group_key": "flatcase", "count": 17479, "path": "", "line": 0 },
+     { "name": "snake_case", "group_key": "snake_case", "count": 16289, "path": "", "line": 0 },
+     { "name": "", "group_key": null, "count": 9492, "path": "", "line": 0 },
+     { "name": "mixed", "group_key": "mixed", "count": 7070, "path": "", "line": 0 },
+     { "name": "kebab-case", "group_key": "kebab-case", "count": 4713, "path": "", "line": 0 },
+     { "name": "PascalCase", "group_key": "PascalCase", "count": 3611, "path": "", "line": 0 },
+     { "name": "camelCase", "group_key": "camelCase", "count": 813, "path": "", "line": 0 },
+     { "name": "UPPER_SNAKE", "group_key": "UPPER_SNAKE", "count": 169, "path": "", "line": 0 }
+    ]
+   }
+  },
+  {
+   "name": "the_scan_answers_the_same_counts",
+   "description": "The control that isolates the route. Identical to the case above but for a WHERE every row satisfies, which removes no row and no group and hands the query to the scan. Its first row is a real symbol row with a path and a line, which is what says the two cases really did take two routes; the counts are the eight above, in the same order.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE line >= 0 GROUP BY naming ORDER BY count DESC",
+   "assert": {
+    "row_count": 8,
+    "total": 8,
+    "rows": [
+     { "count": 17479, "group_key": "flatcase", "name": "alias", "path": ".cargo/config.toml", "line": 9 },
+     { "count": 16289, "group_key": "snake_case" },
+     { "count": 9492, "group_key": null },
+     { "count": 7070, "group_key": "mixed" },
+     { "count": 4713, "group_key": "kebab-case" },
+     { "count": 3611, "group_key": "PascalCase" },
+     { "count": 813, "group_key": "camelCase" },
+     { "count": 169, "group_key": "UPPER_SNAKE" }
+    ]
+   }
+  },
+  {
+   "name": "a_counted_group_is_its_own_values_whole_answer",
+   "description": "The counted group is checked against the query that asks for that value alone, which takes the ordinary predicate path and reports how many rows matched everywhere. 169 there and 169 in the group above is the group size being the collapsed row count rather than a bitmap's raw population.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE naming = 'UPPER_SNAKE'",
+   "assert": {
+    "total": 169
+   }
+  },
+  {
+   "name": "the_smallest_named_group_agrees_too",
+   "description": "The same cross-check on a second value, so a single coincidence cannot carry the suite.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE naming = 'camelCase'",
+   "assert": {
+    "total": 813
+   }
+  },
+  {
+   "name": "ordering_by_count_ascending",
+   "description": "ORDER BY reads `count`, which a counted group row carries, so the path stays armed and the smallest group leads. The rows still have no path: the ordering did not send this to the scan.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols GROUP BY naming ORDER BY count ASC",
+   "assert": {
+    "row_count": 8,
+    "total": 8,
+    "ordered": { "by": "count", "dir": "asc" },
+    "rows": [
+     { "name": "UPPER_SNAKE", "count": 169, "path": "" },
+     { "name": "camelCase", "count": 813, "path": "" }
+    ]
+   }
+  },
+  {
+   "name": "a_having_cuts_the_counted_groups",
+   "description": "HAVING reads `count` too, and runs on the counted groups: four of the eight survive, and `total` is the number of groups the predicate admitted, not the number it was given.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols GROUP BY naming HAVING count >= 5000 ORDER BY count DESC",
+   "assert": {
+    "row_count": 4,
+    "total": 4,
+    "rows": [
+     { "name": "flatcase", "count": 17479, "path": "" },
+     { "name": "snake_case", "count": 16289, "path": "" },
+     { "name": "", "count": 9492, "path": "" },
+     { "name": "mixed", "count": 7070, "path": "" }
+    ]
+   }
+  },
+  {
+   "name": "the_rows_the_field_says_nothing_about_are_one_group",
+   "description": "`scope` describes variables and nothing else, so most of the corpus falls outside every value of it. The key table holds no key for that group; its size is what is left of the stored canonical total once the values are subtracted, and it must equal what the scan's grouping pass produces for rows whose field resolves to nothing. 50,730 + 8,753 + 153 is the whole corpus.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols GROUP BY scope ORDER BY count DESC",
+   "assert": {
+    "row_count": 3,
+    "total": 3,
+    "rows": [
+     { "name": "", "group_key": null, "count": 50730, "path": "", "line": 0 },
+     { "name": "local", "group_key": "local", "count": 8753, "path": "", "line": 0 },
+     { "name": "file", "group_key": "file", "count": 153, "path": "", "line": 0 }
+    ]
+   }
+  },
+  {
+   "name": "the_no_value_group_matches_the_scans",
+   "description": "The same grouping through the scan, where the empty group is counted by walking rows rather than by subtraction. Same three groups, same three sizes, and a real row at the head.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE line >= 0 GROUP BY scope ORDER BY count DESC",
+   "assert": {
+    "row_count": 3,
+    "total": 3,
+    "rows": [
+     { "count": 50730, "group_key": null, "name": "alias", "path": ".cargo/config.toml" },
+     { "count": 8753, "group_key": "local" },
+     { "count": 153, "group_key": "file" }
+    ]
+   }
+  },
+  {
+   "name": "the_second_named_scope_agrees_with_its_own_query",
+   "description": "153 file-scope rows counted from the key table, and 153 reported by the predicate that asks for them.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE scope = 'file'",
+   "assert": {
+    "total": 153
+   }
+  },
+  {
+   "name": "a_field_the_index_does_not_post_is_still_grouped_by_the_scan",
+   "description": "`num_format` is stored as a column and never posted per value, so no key of the table describes it and the grouping is scanned exactly as before -- a real row at the head, seven groups, and the same 59,636 rows accounted for. This is the decline, and it has to keep answering.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols GROUP BY num_format ORDER BY count DESC",
+   "assert": {
+    "row_count": 7,
+    "total": 7,
+    "rows": [
+     { "count": 56016, "name": "alias", "path": ".cargo/config.toml", "line": 9 },
+     { "count": 3570 },
+     { "count": 35 },
+     { "count": 10 },
+     { "count": 3 },
+     { "count": 1 },
+     { "count": 1 }
+    ]
+   }
+  }
+,
+  {
+   "name": "an_unordered_page_is_ordered_by_the_value",
+   "description": "The one thing the two routes do not share. With no ORDER BY written, a counted group is named by its own value and the default (name, line, path, fql_kind) sort therefore orders the groups by value: the empty group first, then PascalCase, UPPER_SNAKE, camelCase, flatcase, kebab-case, mixed, snake_case. The case below is the same query through the scan, where each group is named by the first row that fell into it and the eight come back in a different sequence. Same groups, same counts, same total, different page if a LIMIT cuts one -- that is the documented difference, and these two hold it where it is.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols GROUP BY naming",
+   "assert": {
+    "row_count": 8,
+    "total": 8,
+    "rows": [
+     { "name": "", "count": 9492, "path": "" },
+     { "name": "PascalCase", "count": 3611, "path": "" },
+     { "name": "UPPER_SNAKE", "count": 169, "path": "" },
+     { "name": "camelCase", "count": 813, "path": "" },
+     { "name": "flatcase", "count": 17479, "path": "" },
+     { "name": "kebab-case", "count": 4713, "path": "" },
+     { "name": "mixed", "count": 7070, "path": "" },
+     { "name": "snake_case", "count": 16289, "path": "" }
+    ]
+   }
+  },
+  {
+   "name": "the_scans_unordered_page_is_ordered_by_the_first_row",
+   "description": "The control for the case above: one WHERE every row satisfies, so the same eight groups are collapsed by the scan and ordered by the representative row each group kept. Pin it and a change that quietly makes one route adopt the other's order fails here rather than in an agent's page.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE line >= 0 GROUP BY naming",
+   "assert": {
+    "row_count": 8,
+    "total": 8,
+    "rows": [
+     { "count": 169, "group_key": "UPPER_SNAKE", "path": ".github/workflows/ci.yml" },
+     { "count": 7070, "group_key": "mixed" },
+     { "count": 3611, "group_key": "PascalCase" },
+     { "count": 17479, "group_key": "flatcase" },
+     { "count": 9492, "group_key": null },
+     { "count": 4713, "group_key": "kebab-case" },
+     { "count": 16289, "group_key": "snake_case" },
+     { "count": 813, "group_key": "camelCase" }
+    ]
+   }
+  }
+ ]
+}

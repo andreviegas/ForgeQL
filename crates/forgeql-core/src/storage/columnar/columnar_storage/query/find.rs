@@ -12,9 +12,10 @@ use crate::result::SymbolMatch;
 use crate::storage::FindPage;
 use crate::storage::columnar::columnar_storage::fast_paths::{
     bare_limit_name_fast_path, find_max_rows, glob_to_path_prefix,
-    group_by_file_fast_path_eligible, group_by_kind_fast_path_eligible, has_any_indexed_predicate,
-    order_by_name_desc_fast_path, order_by_name_fast_path, order_by_name_kind_desc_fast_path,
-    order_by_name_kind_fast_path, passes_resolve_glob,
+    group_by_enrichment_fast_path_field, group_by_file_fast_path_eligible,
+    group_by_kind_fast_path_eligible, has_any_indexed_predicate, order_by_name_desc_fast_path,
+    order_by_name_fast_path, order_by_name_kind_desc_fast_path, order_by_name_kind_fast_path,
+    passes_resolve_glob,
 };
 use crate::storage::columnar::columnar_storage::{ColumnarStorage, SubstringIndex};
 use crate::storage::columnar::segment_builder::ZONEMAP_NUMERIC_FIELDS;
@@ -99,6 +100,18 @@ impl ColumnarStorage {
         }
         if group_by_file_fast_path_eligible(clauses, self.dirty.is_empty()) && no_dup_paths {
             return Ok(self.fast_group_by_file(clauses));
+        }
+        // A `GROUP BY` over an enrichment field the segments post per value is
+        // a handful of stored cardinalities; without this it built every
+        // matching row to count them, which on a multi-million-symbol corpus
+        // spends the whole result budget to answer eight rows. The count path
+        // hands the query back — to the pipeline below, unchanged — wherever
+        // the stored counts would not be the collapsed ones.
+        if let Some(page) = group_by_enrichment_fast_path_field(clauses, self.dirty.is_empty())
+            .filter(|_| no_dup_paths)
+            .and_then(|field| self.fast_group_by_enrichment(field, clauses))
+        {
+            return Ok(page);
         }
         if let Some(mut page) = self.try_order_by_name_fast_paths(clauses) {
             self.stamp_usage_counts(&mut page.rows);

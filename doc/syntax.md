@@ -1011,8 +1011,11 @@ row is materialised — unless the ascending name stream claims the clause-free
 shape (no `WHERE`, no `IN`/`EXCLUDE`, unique source paths, the asked-for rows
 within the result budget; a session's uncommitted edits are merged into the
 stream from their own sorted name indexes rather than declining it), which
-reads `limit + offset` keys
-of the name index instead — and the scan can be refused where the old fetch cap
+reads `limit + offset` keys of the name index instead, and unless the grouping is
+one the index counts rather than scans — `GROUP BY fql_kind`, `GROUP BY file`,
+and a `GROUP BY` on an enrichment field the segments post per value, each under
+the gates named below, none of which materialises a row at all —
+and the scan can be refused where the old fetch cap
 let it complete with a wrong answer. A `HAVING` is deliberately excluded — it runs after the
 page is cut, so a query carrying one is refused here rather than answered from a
 page chosen before the predicate ran. The same is true where two segments of the
@@ -1056,6 +1059,23 @@ The row budget is roughly 3.7x lower than the five million rows it replaced, so 
 scan that used to complete can now be refused — a reachability change, not a
 restatement. The case to watch is a `GROUP BY` no fast path accepts: its answer
 is a handful of rows, but it materialises every matching row to get there.
+`GROUP BY fql_kind` and `GROUP BY file` are counted from the index, and so is a
+`GROUP BY` on an enrichment field the segments post per value — that one only
+where the field survived the overlay's per-field value budget, no segment stores
+its column without posting it, the session holds no uncommitted rows, no two
+segments were built from one source path, and any `HAVING` or `ORDER BY` reads
+`count` or the grouped field, since a group row counted this way carries those
+two and nothing else. Counted or scanned, the groups and their sizes are the
+same — the stored cardinalities are drawn from the same collapsed rows the scan
+dedupes to, and the rows the field says nothing about are the one group keyed by
+the empty string either way. What differs is the order, wherever the clause does
+not decide it: a counted group is named by its own value and a scanned one by
+the first row of the group, so with no `ORDER BY`, or where an `ORDER BY count`
+ties, the two routes sort the same groups differently — and under the 20-row
+default that changes which of a wide field's groups the page holds, though never
+`total`. Write `ORDER BY count DESC` and the field, not the page, decides.
+Outside that gate the grouping is scanned, and on a multi-million-symbol corpus
+that is what the budget refuses.
 
 The row budget is enforced wherever result rows accumulate without a bound of
 their own: the `FIND symbols` scan over the on-disk index, the union of a
