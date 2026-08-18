@@ -49,13 +49,16 @@ const FIND_BYTES_PER_ROW: usize = 1_600;
 /// watch is a `GROUP BY` no fast path accepts: its answer is a handful of rows
 /// but it materialises every matching row to get there. `fql_kind`, the path,
 /// and an enrichment field the segments post per value are counted from the
-/// index instead. All three want no `WHERE` — a stored cardinality counts a
-/// value over whole segments and cannot be narrowed to what a predicate
-/// selects — no uncommitted rows in the session, and no two segments built
-/// from one source path; the enrichment one also wants the field to have
-/// survived the overlay's value budget with no segment storing the column
-/// without posting it, and any `HAVING`/`ORDER BY` to read `count` or the
-/// grouped field. Outside those gates the scan is still what answers.
+/// index instead. All three want no uncommitted rows in the session and no two
+/// segments built from one source path. `fql_kind` and the enrichment field
+/// also want no `WHERE` — a stored cardinality counts a value over whole
+/// segments and cannot be narrowed to what a predicate selects — where
+/// `GROUP BY file` groups by segment and so admits a `WHERE` built only from
+/// the tiers that decide rather than propose (`fql_kind =`, `name =`/`LIKE`/
+/// `MATCHES`). The enrichment one also wants the field to have survived the
+/// overlay's value budget with no segment storing the column without posting
+/// it, and any `HAVING`/`ORDER BY` to read `count` or the grouped field.
+/// Outside those gates the scan is still what answers.
 ///
 /// **What this bound covers.** Every path that builds a `FIND` result row set
 /// reads it: the on-disk `FIND symbols` scan in

@@ -1061,17 +1061,23 @@ restatement. The case to watch is a `GROUP BY` no fast path accepts: its answer
 is a handful of rows, but it materialises every matching row to get there. Three
 groupings are counted from the index instead — `GROUP BY fql_kind`, `GROUP BY
 file`, and a `GROUP BY` on an enrichment field the segments post per value — and
-all three want the same thing of the query: **no `WHERE`**, no uncommitted rows
-in the session, and no two segments of the index built from one source path. A
-stored cardinality counts a value over whole segments and cannot be narrowed to
-the subset a predicate selects, so `WHERE fql_kind = 'function' GROUP BY naming`
-is scanned like any other grouping, and on a large enough corpus refused. The
-enrichment one asks for two more: the field must have survived the overlay's
-per-field value budget with no segment storing its column without posting it,
-and any `HAVING` or `ORDER BY` must read `count` or the grouped field, since a
-group row counted this way carries those two and nothing else. `IN` and
-`EXCLUDE` are welcome — a segment is one source path, so the globs select whole
-segments — and they narrow the reading as well as the answer.
+all three want no uncommitted rows in the session and no two segments of the
+index built from one source path. What they make of a `WHERE` is the gate you
+will actually meet, and it is not the same for all three. A stored cardinality
+counts a value over whole segments and cannot be narrowed to the subset a
+predicate selects, so `WHERE fql_kind = 'function' GROUP BY naming` is scanned
+like any other grouping — and on a large enough corpus refused — and `GROUP BY
+fql_kind` refuses a `WHERE` outright for the same reason. `GROUP BY file` is the
+exception: its groups are the segments themselves, so a `WHERE` built only from
+`fql_kind =` and `name =`/`LIKE`/`MATCHES` — predicates whose tiers decide
+rather than propose — is intersected against them and still rides the counted
+route. The enrichment one asks for two things beyond the `WHERE`: the field must
+have survived the overlay's per-field value budget with no segment storing its
+column without posting it, and any `HAVING` or `ORDER BY` must read `count` or
+the grouped field, since a group row counted this way carries those two and
+nothing else. `IN` and `EXCLUDE` are welcome throughout — a segment is one
+source path, so the globs select whole segments — and they narrow the reading as
+well as the answer.
 
 Counted or scanned, the groups and their sizes are the same: the stored
 cardinalities are drawn from the same collapsed rows the scan dedupes to, and

@@ -36,9 +36,14 @@
   approximation. The first is the one you will meet: a `WHERE`. A stored
   cardinality counts a value over whole segments and cannot be narrowed to the
   subset a predicate selects, so `WHERE fql_kind = 'function' GROUP BY naming`
-  scans exactly as it did — as `GROUP BY fql_kind` and `GROUP BY file` do beside
-  a `WHERE` too. `IN` and `EXCLUDE` are not in that company: a segment is one
-  source path, so a glob selects whole segments and the counts narrow with it.
+  scans exactly as it did, as `GROUP BY fql_kind` beside any `WHERE` does. Note
+  that `GROUP BY file` is not in that company — it groups by segment, so it
+  admits a `WHERE` built only from `fql_kind =` and `name =`/`LIKE`/`MATCHES`
+  and counts the intersection; extending that admission to the enrichment table
+  means establishing per predicate tier that the candidate set is exact, which
+  this change does not do. `IN` and `EXCLUDE` are welcome everywhere: a segment
+  is one source path, so a glob selects whole segments and the counts narrow
+  with it.
   The rest are index-side: a field the overlay pruned for carrying more distinct
   values than its budget allows; a selected segment that stores the column and
   posted none of its values, which happens past the per-field posting budget and

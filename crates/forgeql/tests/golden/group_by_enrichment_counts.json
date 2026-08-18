@@ -287,5 +287,21 @@
     ]
    }
   }
+,
+  {
+   "name": "the_file_grouping_keeps_its_own_where",
+   "description": "The counted routes do not all refuse a WHERE, and the docs say which. GROUP BY file groups by segment, so a predicate the exact tiers decide -- fql_kind = , or name = / LIKE / MATCHES -- is intersected against each segment's row range and the grouping is still counted: group_by_file_fast_path_eligible admits it. The rows prove the route the same way the enrichment cases do, by carrying no name and no line of their own. Pinned here because this commit's prose asserts it at six sites; without a case the assertion is only a reading of the code.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' GROUP BY file ORDER BY count DESC",
+   "assert": {
+    "row_count": 20,
+    "total": 170,
+    "rows": [
+     { "count": 212, "group_key": "crates/forgeql-core/tests/enrichment_integration.rs", "name": "", "line": 0 },
+     { "count": 185, "group_key": "crates/forgeql-core/tests/syntax_coverage.rs", "name": "", "line": 0 },
+     { "count": 142, "group_key": "crates/forgeql-core/src/ast/lang/config.rs", "name": "", "line": 0 }
+    ]
+   }
+  }
  ]
 }
