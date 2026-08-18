@@ -61,6 +61,26 @@
     "row_count": 5,
     "total": 59636
    }
+  },
+  {
+   "name": "the_default_page_is_a_bound_the_engine_is_told_about",
+   "description": "No LIMIT written. The engine used to build every matching row and the twenty-row default was cut afterwards, so this query materialised rows up to the row budget to show twenty; the default page is now handed to the engine as the LIMIT an explicit `LIMIT 20` would carry, and it takes the same name stream. Twenty rows, and the total is the whole corpus -- the same 59636 the explicit-LIMIT stream and the pipeline report above -- because the bound changes what is held, never what is counted.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols",
+   "assert": {
+    "row_count": 20,
+    "total": 59636
+   }
+  },
+  {
+   "name": "the_default_page_under_a_predicate_rides_the_running_trim",
+   "description": "The same default page through the pipeline: a WHERE declines the name streams, so the bound arms the running top-K trim at twenty. Every row is still read and counted; only twenty are held. Same total as every other case on this corpus.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE line >= 1",
+   "assert": {
+    "row_count": 20,
+    "total": 59636
+   }
   }
  ]
 }

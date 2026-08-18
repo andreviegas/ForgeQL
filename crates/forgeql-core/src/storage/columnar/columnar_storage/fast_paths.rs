@@ -163,14 +163,13 @@ pub(in crate::storage) fn row_budget_exceeded(max_rows: usize) -> anyhow::Error 
          not armed alongside one and the scan is refused here \
          instead, as it is where two segments of this index were \
          built from one source path and a segment collapsing its own \
-         duplicates is no longer the whole collapse. One shape is \
-         counted differently: ORDER BY name, with at most an fql_kind \
-         equality beside it, no IN or EXCLUDE and no uncommitted \
-         edits in the session, is what the name index streams k rows \
-         at a time, and that route reports k as its total — it hands \
-         the query back to the full scan whenever its page would be \
-         short, so the same query is sometimes counted honestly and \
-         sometimes not. FORGEQL_FIND_MAX_ROWS overrides the bound in \
+         duplicates is no longer the whole collapse. A FIND with no \
+         LIMIT written, no GROUP BY and no HAVING is handed its \
+         default page as that k under the same gates, so it takes the same route; the \
+         name streams (ORDER BY name, or the clause-free shape) count \
+         the answer from the stored per-segment deduplicated counts \
+         and decline to the scan where two segments were built from \
+         one source path. FORGEQL_FIND_MAX_ROWS overrides the bound in \
          rows; 0 disables it.",
         max_rows.saturating_mul(FIND_BYTES_PER_ROW) / (1024 * 1024 * 1024)
     )

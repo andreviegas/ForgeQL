@@ -1001,7 +1001,12 @@ for the first k the scan reaches. That tie-break ends in `fql_kind`, completing
 the duplicate-collapse key, so two rows the answer tells apart never compare
 equal: the page is fully decided by the ordering, on every run and at every `k`.
 That path needs `k` no greater than 1000, no `OFFSET`, no
-`GROUP BY` and no `HAVING`; outside that gate nothing is trimmed, every matching
+`GROUP BY` and no `HAVING`. A `FIND symbols` written with **no `LIMIT` at all**
+(and no `GROUP BY`, no `HAVING`) is handed its 20-row default page as that `k` at
+the engine boundary, so under the same gates — no `OFFSET` for the trim, the
+clause-free shape for the stream — it takes the same route with the same `total`
+instead of materialising every row and being refused. Outside
+these gates nothing is trimmed, every matching
 row is materialised — unless the ascending name stream claims the clause-free
 shape (no `WHERE`, no `IN`/`EXCLUDE`, unique source paths, the asked-for rows
 within the result budget; a session's uncommitted edits are merged into the

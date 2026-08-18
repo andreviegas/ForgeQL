@@ -21,21 +21,52 @@ impl ForgeQLEngine {
         let session = self.require_session(sid)?;
         let root = session.worktree_path.clone();
 
-        // Delegate all filtering, fast-path GROUP BY, ORDER BY, explicit LIMIT
-        // and OFFSET to the storage engine.  The engine returns the page those
-        // clauses ask for WITHOUT the implicit DEFAULT_QUERY_LIMIT cap — that is
-        // applied below — and, beside it, how many rows matched before the page
+        // Delegate all filtering, fast-path GROUP BY, ORDER BY, LIMIT and
+        // OFFSET to the storage engine.  The engine returns the page those
+        // clauses ask for and, beside it, how many rows matched before the page
         // was cut.  That count is what `total` reports: taking `results.len()`
         // here instead is what made `total` equal the page size under every
         // explicit LIMIT, so an agent could not tell a first page from a whole
         // answer.  Where an engine path stops reading early it says so at the
         // place it stops.
-        let page = session.engine_for(backend)?.find_symbols(clauses, &root)?;
+        //
+        // The default page is a delivery bound, not a filter, and the engine is
+        // told about it.  When no LIMIT is written the engine used to build
+        // every matching row and the `find_limit` cap was applied only here —
+        // so a bare `FIND symbols` on a three-million-symbol corpus materialised
+        // rows up to the 2 GiB row budget and was then refused, to show twenty.
+        // Handing the engine that same cap as a LIMIT arms the paths an explicit
+        // `LIMIT k` already takes: the running top-K trim and the name-stream
+        // fast paths, which read and count every matching row but hold only the
+        // page.  The rows are the same, because `apply_ordering` sorts by the
+        // same `(name, line, path, fql_kind)` order the trim ranks with before
+        // the page is cut; and `total` is the same, because both routes count
+        // rather than truncate.  GROUP BY and HAVING keep the clauses as written:
+        // grouped rows are aggregates already cut by their own LIMIT, and a
+        // HAVING runs after the page is cut, so a bound injected under either
+        // would change the answer rather than the memory.
+        let find_limit = session.output_config().find_limit;
+        let default_page_bound = clauses.limit.is_none()
+            && clauses.group_by.is_none()
+            && crate::filter::no_having_after_paging(clauses);
+        let bounded_clauses;
+        let engine_clauses = if default_page_bound {
+            bounded_clauses = Clauses {
+                limit: Some(find_limit),
+                ..clauses.clone()
+            };
+            &bounded_clauses
+        } else {
+            clauses
+        };
+        let page = session
+            .engine_for(backend)?
+            .find_symbols(engine_clauses, &root)?;
 
         let total = page.total;
         let mut results = page.rows;
         if clauses.limit.is_none() {
-            results.truncate(session.output_config().find_limit);
+            results.truncate(find_limit);
         }
 
         let metric_hint = detect_metric_hint(clauses);
