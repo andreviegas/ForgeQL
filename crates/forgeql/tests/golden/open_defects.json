@@ -127,5 +127,52 @@
     }
    }
   }
+,
+  {
+   "name": "control_a_long_literal_groups_by_file_correctly",
+   "description": "Anchors the two cases below, and locates the defect. GROUP BY file is counted from the index, and it admits a WHERE built from fql_kind = and name = / LIKE / MATCHES. With a literal long enough for the trigram tier to answer, the counted answer and the scan's agree exactly, so the admission is not wrong in general — it is wrong for the shapes where the tier declines."
+   ,
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE name LIKE '%segment%' GROUP BY file ORDER BY count DESC",
+   "assert": {
+    "row_count": 20,
+    "total": 57,
+    "rows": [
+     { "count": 339, "group_key": "CHANGELOG.md" },
+     { "count": 154, "group_key": "crates/forgeql-core/tests/overlay_parity.rs" }
+    ]
+   }
+  },
+  {
+   "name": "control_the_scan_counts_the_short_literal",
+   "description": "The authoritative answer the case below asserts, taken through the scan: adding a predicate the file fast path does not admit (line >= 0, which holds for every row and removes nothing) sends the same grouping to the pipeline, where each row's own name decides. 165 files hold a symbol whose name contains 'ab'; CHANGELOG.md holds 533 of them."
+   ,
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE line >= 0 WHERE name LIKE '%ab%' GROUP BY file ORDER BY count DESC",
+   "assert": {
+    "row_count": 20,
+    "total": 165,
+    "rows": [
+     { "count": 533, "group_key": "CHANGELOG.md" },
+     { "count": 97, "group_key": "crates/forgeql-core/tests/overlay_parity.rs" }
+    ]
+   }
+  },
+  {
+   "name": "a_counted_group_by_file_counts_only_matching_rows",
+   "description": "A GROUP BY file counted from the index must return the counts the scan returns — the same contract every other counted grouping is held to. It does not when the WHERE is a name pattern the trigram tier declines to answer.",
+   "use": "forgeql-pub.frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "group_by_file_fast_path_eligible admits name LIKE / MATCHES, but those tiers PROPOSE candidates rather than decide, and fast_group_by_file counts prefilter_global's candidate bitmap per segment and then clears the residual WHERE, so nothing ever tests a candidate against its own name; a literal shorter than the trigram width makes the tier return None, prefilter_global skips the predicate, and the candidate set becomes every row — so each file reports its WHOLE row count (4,344 for crates/forgeql/tests/golden.json here) and 220 files are reported where 165 hold the name. The fix is either to verify candidates against the stored names before counting, or to narrow the admission to the tiers that decide (fql_kind =, name =, and name MATCHES only where the name FST answered); the counts this asserts are the scan's, from the control above",
+   "fql": "FIND symbols WHERE name LIKE '%ab%' GROUP BY file ORDER BY count DESC",
+   "assert": {
+    "row_count": 20,
+    "total": 165,
+    "rows": [
+     { "count": 533, "group_key": "CHANGELOG.md" },
+     { "count": 97, "group_key": "crates/forgeql-core/tests/overlay_parity.rs" }
+    ]
+   }
+  }
  ]
 }

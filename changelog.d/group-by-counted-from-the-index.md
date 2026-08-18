@@ -38,18 +38,22 @@
   subset a predicate selects, so `WHERE fql_kind = 'function' GROUP BY naming`
   scans exactly as it did, as `GROUP BY fql_kind` beside any `WHERE` does. Note
   that `GROUP BY file` is not in that company — it groups by segment, so it
-  admits a `WHERE` built only from `fql_kind =` and `name =`/`LIKE`/`MATCHES`
-  and counts the intersection; extending that admission to the enrichment table
-  means establishing per predicate tier that the candidate set is exact, which
-  this change does not do. `IN` and `EXCLUDE` are welcome everywhere: a segment
-  is one source path, so a glob selects whole segments and the counts narrow
-  with it.
-  The rest are index-side: a field the overlay pruned for carrying more distinct
+  admits a `WHERE` built from `fql_kind =` and `name =`/`LIKE`/`MATCHES` and
+  counts the intersection. Writing that down turned up a defect in it, now
+  pinned as `open_defects::a_counted_group_by_file_counts_only_matching_rows`
+  and untouched here: the pattern tiers propose candidates rather than decide,
+  and a `name` literal shorter than the trigram width leaves every row a
+  candidate, so that grouping reports each file's whole row count. Extending any
+  `WHERE` admission to the enrichment table has to clear the bar that one does
+  not — per predicate tier, that the candidate set is exact — which is why this
+  change takes none. `IN` and `EXCLUDE` are welcome everywhere: a segment is one
+  source path, so a glob selects whole segments and the counts narrow with it.
+  All three counted groupings also want a session holding no uncommitted edits
+  and an index with no two segments built from one source path. The rest are the
+  enrichment table's own: a field the overlay pruned for carrying more distinct
   values than its budget allows; a selected segment that stores the column and
   posted none of its values, which happens past the per-field posting budget and
-  leaves its rows carrying values no key counts; a session holding uncommitted
-  edits;
-  an index with two segments built from one source path; and a `HAVING` or
+  leaves its rows carrying values no key counts; and a `HAVING` or
   `ORDER BY` naming anything but `count` or the grouped field, since a counted
   group row carries those two and nothing else. `IN`/`EXCLUDE` are applied by
   intersecting with the rows of the segments whose path passes, and only those

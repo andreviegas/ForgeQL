@@ -1068,10 +1068,15 @@ counts a value over whole segments and cannot be narrowed to the subset a
 predicate selects, so `WHERE fql_kind = 'function' GROUP BY naming` is scanned
 like any other grouping — and on a large enough corpus refused — and `GROUP BY
 fql_kind` refuses a `WHERE` outright for the same reason. `GROUP BY file` is the
-exception: its groups are the segments themselves, so a `WHERE` built only from
-`fql_kind =` and `name =`/`LIKE`/`MATCHES` — predicates whose tiers decide
-rather than propose — is intersected against them and still rides the counted
-route. The enrichment one asks for two things beyond the `WHERE`: the field must
+exception: its groups are the segments themselves, so a `WHERE` built from
+`fql_kind =` and `name =`/`LIKE`/`MATCHES` is intersected against them and still
+rides the counted route — with one known hole, recorded here rather than papered
+over. A `name` pattern the index tier cannot answer, which a literal shorter
+than three bytes is, leaves every row a candidate, and that grouping then
+reports each file's whole row count. The correct answer is pinned as an open
+defect; until it is fixed, read such a count against the same query carrying a
+`WHERE` the counted route does not take.
+The enrichment one asks for two things beyond the `WHERE`: the field must
 have survived the overlay's per-field value budget with no segment storing its
 column without posting it, and any `HAVING` or `ORDER BY` must read `count` or
 the grouped field, since a group row counted this way carries those two and

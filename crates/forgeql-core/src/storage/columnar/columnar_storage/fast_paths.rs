@@ -53,9 +53,14 @@ const FIND_BYTES_PER_ROW: usize = 1_600;
 /// segments built from one source path. `fql_kind` and the enrichment field
 /// also want no `WHERE` — a stored cardinality counts a value over whole
 /// segments and cannot be narrowed to what a predicate selects — where
-/// `GROUP BY file` groups by segment and so admits a `WHERE` built only from
-/// the tiers that decide rather than propose (`fql_kind =`, `name =`/`LIKE`/
-/// `MATCHES`). The enrichment one also wants the field to have survived the
+/// `GROUP BY file` groups by segment and so admits a `WHERE` built from
+/// `fql_kind =` and `name =`/`LIKE`/`MATCHES`, an admission wider than that
+/// argument supports and one whose hole is pinned as
+/// `open_defects::a_counted_group_by_file_counts_only_matching_rows`: the
+/// pattern tiers propose candidates a residual `WHERE` would still have to
+/// test, and `fast_group_by_file` clears that residual before counting. The
+/// enrichment one takes no `WHERE` at all, and also wants the field to have
+/// survived the
 /// overlay's value budget with no segment storing the column without posting
 /// it, and any `HAVING`/`ORDER BY` to read `count` or the grouped field.
 /// Outside those gates the scan is still what answers.
