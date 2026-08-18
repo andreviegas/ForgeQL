@@ -87,5 +87,23 @@ Short, durable facts discovered while working in this codebase.
 - `forgeql-server` HAD no `#[global_allocator]` (glibc malloc) until this slice gave it the same tikv-jemallocator (workspace feature `background_threads`) that `crates/forgeql/src/main.rs` already used.
 - `indexing_pool()` is a `'static` rayon pool with 256 MiB stacks; touched stack pages are never returned.
 - Overlay build holds every step's output (`global_row_table` 8 B/row, kind/trigram/enrich/name blobs) until `step8_write_overlay` writes them all at once.
-- Per-segment postings are read IN PLACE since this slice (`segment_reader/postings.rs`: `PostingBlob`/`Entries`/`decode`; reader accessors `kind_rows`, `field_rows`, `name_prefix_rows`, `kind_postings()`, `field_postings(field)`, `posted_fields()`, `has_name_prefix_index()`). `open` validates entry tables only; a corrupt bitmap surfaces at lookup as `Err` and every query caller treats it as "cannot narrow". Measured share: the eager decode was ~210 of the ~550 MiB a 32,748-segment open cost — the other ~340 MiB is reader tables (`blobs` HashMap<String>, `extra_cols` Strings, mention_fsts BTreeMap, PathBufs; ~10 KB/segment) and is the next target.
+- Per-segment postings are read IN PLACE since this slice (`segment_reader/postings.rs`: `PostingBlob`/`Entries`/`decode`; reader accessors `kind_rows`, `field_rows`, `name_prefix_rows`, `kind_postings()`, `field_postings(field)`, `posted_fields()`, `has_name_prefix_index()`). `open` validates entry tables only; a corrupt bitmap surfaces at lookup as `Err` and every query caller treats it as "cannot narrow". Measured share: the eager decode was ~210 of the ~550 MiB a 32,748-segment open cost — the other ~340 MiB is reader tables (`blobs` HashMap<String>, `extra_cols` Strings, mention_fsts BTreeMap, PathBufs; ~10 KB/segment) and was the next target — done by the table-of-contents slice below, which took a 32,748-segment open from +299 MiB to +8 MiB.
 - `RUN 'bench_ab'` on this shared box: `usages_split`, a class that touches none of the changed code, read 0.94x then 1.11x in two consecutive runs of the same binaries — ±10% is the run-to-run spread here; only repeated runs on >2 s classes mean anything.
+## Segment reader (crates/forgeql-core/src/storage/columnar/segment_reader.rs)
+
+- A reader keeps **no name table**: the FQSF table of contents is parsed into
+  `segment_reader/load.rs::Toc` (entry names borrowed from the mapping, sorted,
+  binary searched) and dropped when `open` returns. What survives are byte
+  ranges — `name_postings`, `usages_postings`, `MentionIndex.postings`,
+  `ExtraCol.data` — so a blob the reader must read has to be resolved in `open`,
+  not looked up later.
+- Names that repeat across segments (enrichment column names, occurrence role
+  names) are interned process-wide in `segment_reader/intern.rs` as `Arc<str>`
+  (capped pool, private copy past the cap). Reading a name back out of the
+  mapping instead costs a whole-corpus scan ~90 ms per query — measured — because
+  `materialize_rows` resolves every column name once per segment per query.
+- `row_field` asks "does this segment shadow a struct-backed field?" per ROW (the
+  dedupe key calls `str_value("name")`/`("fql_kind")` for every candidate). It is
+  answered from `shadowed_struct_fields: u16`, resolved at open; bit `i` is
+  `STRUCT_BACKED_FIELDS[i]`, and a `const _: () = assert!` pins the list to the
+  mask's width.

@@ -451,13 +451,12 @@ impl OverlayBuilder {
     ) -> Result<HashMap<String, Vec<u8>>> {
         let t_step = std::time::Instant::now();
         let mut kind_merged: HashMap<String, RoaringBitmap> = HashMap::new();
-        for (seg_idx, (_, _, reader)) in segs.iter().enumerate() {
+        for (seg_idx, (seg_path, _, reader)) in segs.iter().enumerate() {
             let row_offset = row_offsets[seg_idx];
             let canonical_bm = &seg_dedup[seg_idx].0;
             for entry in reader.kind_postings() {
-                let (kind_id, local_bm) = entry.with_context(|| {
-                    format!("reading kind postings of {}", reader.path.display())
-                })?;
+                let (kind_id, local_bm) = entry
+                    .with_context(|| format!("reading kind postings of {}", seg_path.display()))?;
                 let kind_str = reader.string_of_id(kind_id);
                 if kind_str.is_empty() {
                     continue;
@@ -539,7 +538,7 @@ impl OverlayBuilder {
         field_seen: &mut HashMap<String, HashSet<String>>,
         pruned_fields: &mut HashSet<String>,
     ) -> Result<()> {
-        for (seg_idx, (_, _, reader)) in segs.iter().enumerate() {
+        for (seg_idx, (seg_path, _, reader)) in segs.iter().enumerate() {
             let row_offset = row_offsets[seg_idx];
             let canonical_bm = &seg_dedup[seg_idx].0;
             for field_name in reader.posted_fields() {
@@ -550,7 +549,7 @@ impl OverlayBuilder {
                 // walk never holds a segment's postings whole.
                 for entry in reader.field_postings(field_name) {
                     let (value_id, local_bm) = entry.with_context(|| {
-                        format!("reading {field_name} postings of {}", reader.path.display())
+                        format!("reading {field_name} postings of {}", seg_path.display())
                     })?;
                     let value_str = reader.string_of_id(value_id);
                     if value_str.is_empty() {

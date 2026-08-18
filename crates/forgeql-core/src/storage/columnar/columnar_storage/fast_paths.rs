@@ -920,7 +920,7 @@ impl ColumnarStorage {
                         // every row of the segment a candidate, as for a
                         // segment with no index at all.
                         tracing::warn!(
-                            path = %seg.path.display(),
+                            segment = %seg.content_id_hex(),
                             "name_prefix index unreadable, not pruning: {e:#}"
                         );
                         for local_row in 0..row_count {

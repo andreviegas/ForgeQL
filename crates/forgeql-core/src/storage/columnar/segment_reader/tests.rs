@@ -411,7 +411,7 @@ fn open_nonmonotone_string_pool_returns_err() {
 /// downstream has to notice a missing key.
 #[test]
 fn a_column_absent_from_the_toc_resolves_to_the_empty_range() {
-    let cols = FixedColumns::resolve(&HashMap::new());
+    let cols = FixedColumns::resolve(&Toc::default());
     for (label, range) in [
         ("name_id", cols.name_id),
         ("fql_kind_id", cols.fql_kind_id),
@@ -444,19 +444,40 @@ fn a_column_absent_from_the_toc_resolves_to_the_empty_range() {
 /// hoping the corpus contains an old enough segment.
 #[test]
 fn accessors_on_an_absent_column_return_their_documented_default() {
-    let (_tmp, seg) = make_segment(&[("alpha", "function", 7)]);
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let seg = tmp.path().join("seg.fqsf");
+    let mut b = SegmentBuilder::new("test", &[0xAB_u8; 20]);
+    let row = b.emit_row(SymbolRow {
+        name: "alpha",
+        fql_kind: "function",
+        language: "rust",
+        line: 7,
+        byte_start: 0,
+        byte_end: 10,
+        usages_count: 0,
+    });
+    // Named in the header, so the reader carries a real column name; the blob
+    // behind it is taken away below.
+    b.set_field(row, "phantom", "present");
+    b.flush(&seg).expect("flush");
+
     let mut reader = SegmentReader::open(&seg).expect("open");
     assert_eq!(
         reader.line_of(0),
         7,
         "control: the column is present to begin with"
     );
+    assert_eq!(
+        reader.extra_field_str("phantom", 0),
+        Some("present"),
+        "control: the enrichment column is present to begin with"
+    );
 
-    reader.fixed = FixedColumns::resolve(&HashMap::new());
-    reader.extra_cols.clear();
     // A column the header names but whose blob never reached the TOC: the name
     // is known, the range is empty, and the value must read as absent.
-    reader.extra_cols.push(("phantom".to_owned(), (0, 0)));
+    let name = Arc::clone(&reader.extra_cols[0].name);
+    reader.fixed = FixedColumns::resolve(&Toc::default());
+    reader.set_extra_cols(vec![ExtraCol { name, data: (0, 0) }]);
 
     assert_eq!(reader.line_of(0), 0);
     assert_eq!(reader.byte_start_of(0), 0);
@@ -538,14 +559,20 @@ fn every_col_blob_the_builder_writes_is_reachable_by_name() {
     );
 
     let mut checked = 0;
-    for name in reader.blobs.keys() {
-        let Some(short) = name.strip_prefix("col_") else {
+    // The reader keeps no name table of its own, so read the table of contents
+    // back off the file the builder wrote. That is the stronger check anyway:
+    // it asks the bytes on disk what blobs exist, not the reader's idea of it.
+    let bytes = std::fs::read(&seg).expect("read segment");
+    let toc = parse_toc(&bytes, bytes.len(), &seg).expect("parse toc");
+    for entry in toc.entries() {
+        let Some(short) = entry.name.strip_prefix("col_") else {
             continue;
         };
         assert_ne!(
             reader.col_range(short),
             (0, 0),
-            "TOC holds blob '{name}' but the reader cannot reach column '{short}' by name"
+            "TOC holds blob '{}' but the reader cannot reach column '{short}' by name",
+            entry.name
         );
         checked += 1;
     }
@@ -860,12 +887,9 @@ fn a_column_named_after_any_declared_field_answers_as_the_built_row_or_not_at_al
     // collides with one can never be given an enrichment column. Learn which
     // names those are from a real segment rather than listing them again.
     let (_probe_tmp, probe) = make_segment(&[("probe", "function", 1)]);
-    let fixed_blobs: Vec<String> = SegmentReader::open(&probe)
-        .expect("open")
-        .blobs
-        .keys()
-        .cloned()
-        .collect();
+    let probe_bytes = std::fs::read(&probe).expect("read probe segment");
+    let probe_toc = parse_toc(&probe_bytes, probe_bytes.len(), &probe).expect("parse probe toc");
+    let fixed_blobs: Vec<&str> = probe_toc.entries().map(|entry| entry.name).collect();
 
     let declared: Vec<&str> = <SymbolMatch as crate::filter::ClauseTarget>::STR_FIELDS
         .iter()
@@ -877,7 +901,7 @@ fn a_column_named_after_any_declared_field_answers_as_the_built_row_or_not_at_al
     let path = PathBuf::from("src/lib.rs");
     let mut compared = 0_usize;
     for field in declared {
-        if fixed_blobs.contains(&format!("col_{field}")) {
+        if fixed_blobs.contains(&format!("col_{field}").as_str()) {
             // The shadowing case cannot arise for this name, but the fixed
             // answer it stands for must still be one the guard covers.
             assert!(

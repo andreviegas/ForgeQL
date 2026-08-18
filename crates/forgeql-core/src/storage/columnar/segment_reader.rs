@@ -2,9 +2,10 @@
 //!
 //! Opens a segment file written by [`SegmentBuilder`], validates the outer
 //! `FQSF` magic and the inner `FQSG` header blob, mmaps the whole file with
-//! a single `Mmap`, parses the TOC to locate every named blob, opens the FSTs
-//! over the mapping, and addresses the Roaring posting blobs in place — a
-//! bitmap is decoded only when a lookup asks for it (see `postings.rs`).
+//! a single `Mmap`, reads the TOC in place to locate every named blob, opens
+//! the FSTs over the mapping, and addresses the Roaring posting blobs in
+//! place — a bitmap is decoded only when a lookup asks for it (see
+//! `postings.rs`).
 //!
 //! One `Mmap` per segment → 1 VMA instead of 25.
 
@@ -22,8 +23,8 @@
     clippy::ref_option,                // &Option<Mmap> helper signatures are clear as-is
 )]
 
-use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result, ensure};
@@ -41,8 +42,12 @@ use super::segment_builder::{
     ZONEMAP_NUMERIC_FIELDS,
 };
 
+mod intern;
 mod load;
-use load::{decode_name_postings, load_zone_maps, parse_column_entries, parse_toc};
+use intern::intern;
+use load::{
+    Toc, blob_name_in, decode_name_postings, load_zone_maps, parse_column_entries, parse_toc,
+};
 mod postings;
 use postings::{Key, KeyKind, PostingBlob, decode};
 
@@ -264,8 +269,8 @@ struct FixedColumns {
 
 impl FixedColumns {
     /// Resolve every fixed column against the segment's TOC.
-    fn resolve(blobs: &HashMap<String, (usize, usize)>) -> Self {
-        let at = |name: &str| blobs.get(name).copied().unwrap_or((0, 0));
+    fn resolve(toc: &Toc<'_>) -> Self {
+        let at = |name: &str| toc.get(name).unwrap_or((0, 0));
         Self {
             name_id: at("col_name_id"),
             fql_kind_id: at("col_fql_kind_id"),
@@ -331,6 +336,13 @@ const STRUCT_BACKED_FIELDS: &[&str] = &[
     "count",
     "line",
 ];
+
+/// One bit per name in [`SegmentReader::shadowed_struct_fields`], so the list
+/// may not outgrow the mask that stands for it.
+const _: () = assert!(
+    STRUCT_BACKED_FIELDS.len() <= u16::BITS as usize,
+    "STRUCT_BACKED_FIELDS no longer fits the shadowed-field mask"
+);
 
 /// Which column answers a clause field on a row of a segment.
 ///
@@ -420,6 +432,16 @@ fn id_entries(
     })
 }
 
+/// The text at `range` in `mmap`; the empty string when those bytes are not
+/// valid UTF-8.
+///
+/// A segment spells its own column names in its header. They are read from
+/// there once, at open, and interned — so this runs per column per segment
+/// while a segment is being opened, and never again while it is read.
+fn text_at(mmap: &Mmap, range: ColRange) -> &str {
+    std::str::from_utf8(&mmap[range.0..range.1]).unwrap_or("")
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SegmentReader
 // ─────────────────────────────────────────────────────────────────────────────
@@ -434,27 +456,34 @@ struct HeaderFields {
     content_id: Vec<u8>,
     row_count: u32,
     string_count: u32,
-    extra_col_names: Vec<String>,
+    /// Byte range of each extra enrichment column name within the mapping, in
+    /// header order. The header parse hands on the range; `open` reads the name
+    /// from it once and interns it.
+    extra_col_names: Vec<ColRange>,
 }
 pub struct SegmentReader {
     /// Whole-file mmap shared with the string pool.
     mmap: Arc<Mmap>,
-    /// TOC: blob name → `(start, end)` byte offsets within `mmap`.
-    blobs: HashMap<String, (usize, usize)>,
     /// Byte ranges of the fixed columns, resolved once at open so that reading
     /// a row costs an index into the mapping and nothing else.
     fixed: FixedColumns,
-    /// Absolute path of the opened `.fqsf` file (for diagnostics).
-    pub path: PathBuf,
     /// Number of rows stored in this segment.
     pub row_count: u32,
     /// Provider ID decoded from the header blob.
     pub provider_id: String,
     /// Raw content ID bytes (length matches the provider's hash width).
     pub content_id: Vec<u8>,
-    /// Enrichment columns from the header blob, in header order, each paired
-    /// with the byte range its `col_<name>` blob occupies in `mmap`.
-    extra_cols: Vec<(String, ColRange)>,
+    /// Enrichment columns from the header blob, in header order.
+    extra_cols: Vec<ExtraCol>,
+    /// Bit `i` is set when an enrichment column of this segment is named
+    /// `STRUCT_BACKED_FIELDS[i]` — the collision that makes that one field
+    /// unanswerable from the columns.
+    ///
+    /// Derived from `extra_cols` at open because [`Self::row_field`] asks the
+    /// question once per row: answering it by scanning the column names would
+    /// read the mapping a million times over a whole-corpus scan, and the
+    /// answer cannot change while the segment is open.
+    shadowed_struct_fields: u16,
     strings: StringPool,
     /// `postings_fql_kind`, addressed in place — see `postings.rs`. Nothing
     /// is decoded until a lookup asks for one kind's rows.
@@ -462,18 +491,51 @@ pub struct SegmentReader {
     /// One `postings_<field>` per enrichment field this segment posts, in
     /// `POSTING_ENRICHMENT_FIELDS` order, addressed in place.
     field_blobs: Vec<(&'static str, PostingBlob)>,
-    pub(crate) zone_maps: HashMap<String, (u32, u32)>,
+    pub(crate) zone_maps: HashMap<&'static str, (u32, u32)>,
     /// `name_prefix`, addressed in place; keyed by lower-cased 1–2 character
     /// name prefixes.
     name_prefix_blob: PostingBlob,
     pub(crate) name_fst: FstMap<MmapSlice>,
+    /// Row ids behind the name FST's values, as a byte range in the mapping.
+    name_postings: ColRange,
     /// Usage postings FST (BUG-006): identifier text → 1-based source lines.
     /// `None` when the file produced no usage sites (blob omitted at flush).
     pub(crate) usages_fst: Option<FstMap<MmapSlice>>,
-    /// Mention postings FSTs, one per occurrence role, keyed by role name and
-    /// sorted so lookups return roles in a stable order. Empty when the file
+    /// Lines behind the usage FST's values, as a byte range in the mapping;
+    /// empty when the segment carries no usages blob.
+    usages_postings: ColRange,
+    /// Mention postings, one per occurrence role the file produced, sorted by
+    /// role so lookups return roles in a stable order. Empty when the file
     /// produced no mentions (the blob pairs are omitted at flush).
-    pub(crate) mention_fsts: BTreeMap<String, FstMap<MmapSlice>>,
+    mentions: Vec<MentionIndex>,
+}
+
+/// One enrichment column of a segment.
+///
+/// The values stay where the `col_<name>` blob already holds them, as a byte
+/// range into the mapping. The name is interned instead of either copied or
+/// re-read: a segment carries its own column names, so tens of thousands of
+/// segments naming the same forty columns would hold tens of thousands of
+/// copies of those names, while reading each one back out of the mapping makes
+/// every row batch pay for it again.
+struct ExtraCol {
+    /// The column's name, shared with every other reader whose segment names a
+    /// column the same way.
+    name: Arc<str>,
+    /// Byte range of the column's `col_<name>` blob within the mapping.
+    data: ColRange,
+}
+
+/// One occurrence role's mention index.
+struct MentionIndex {
+    /// The role's name, shared the same way an enrichment column name is.
+    /// Reading it off the segment's own table of contents rather than a list
+    /// compiled into the reader is what keeps roles additive.
+    role: Arc<str>,
+    /// Name → encoded postings for this role.
+    fst: FstMap<MmapSlice>,
+    /// Byte range of the role's `mentions_<role>_postings` blob.
+    postings: ColRange,
 }
 
 impl SegmentReader {
@@ -496,55 +558,60 @@ impl SegmentReader {
         let (mmap, file_len) = Self::map_and_validate(path)?;
 
         // ── 3. Parse TOC ──────────────────────────────────────────────────
-        let blobs = parse_toc(&mmap, file_len, path)?;
+        // Read in place, and dropped when this function returns: what the
+        // reader keeps of the table is the byte ranges resolved below, plus
+        // one interned copy of each name it still needs once open has returned.
+        let toc = parse_toc(&mmap, file_len, path)?;
 
         // ── 4-5. Inner FQSG header blob + extra enrichment columns ────────
-        let hdr = Self::parse_header_blob(&mmap, &blobs, path)?;
+        let hdr = Self::parse_header_blob(&mmap, &toc, path)?;
 
         // ── 6. String pool ────────────────────────────────────────────────
-        let off_range = blobs.get("strings_offsets").copied().unwrap_or((0, 0));
-        let dat_range = blobs.get("strings_data").copied().unwrap_or((0, 0));
+        let off_range = toc.get("strings_offsets").unwrap_or((0, 0));
+        let dat_range = toc.get("strings_data").unwrap_or((0, 0));
         let strings =
             StringPool::from_blobs(Arc::clone(&mmap), off_range, dat_range, hdr.string_count)?;
 
         // ── 7. Roaring postings — addressed in place, layout checked, not
-        //       decoded (see `postings.rs`) ──────────────────────────────────
-        let kind_blob = PostingBlob::new(
-            blobs.get("postings_fql_kind").copied().unwrap_or((0, 0)),
-            KeyKind::Id,
-        );
+        //       decoded (see `postings.rs`). The blob names are built in a
+        //       stack buffer: one `String` per posted field per segment is
+        //       millions of allocations across a workspace.
+        let kind_blob =
+            PostingBlob::new(toc.get("postings_fql_kind").unwrap_or((0, 0)), KeyKind::Id);
         kind_blob.validate(&mmap, "postings_fql_kind")?;
         let mut field_blobs: Vec<(&'static str, PostingBlob)> = Vec::new();
+        let mut name_buf = [0_u8; ENTRY_NAME_LEN];
         for &field in POSTING_ENRICHMENT_FIELDS {
-            let blob_name = format!("postings_{field}");
-            let Some(&range) = blobs.get(&blob_name) else {
+            let Some(blob_name) = blob_name_in(&mut name_buf, "postings_", field, "") else {
+                continue;
+            };
+            let Some(range) = toc.get(blob_name) else {
                 continue;
             };
             let blob = PostingBlob::new(range, KeyKind::Id);
             if !blob.is_present() {
                 continue;
             }
-            blob.validate(&mmap, &blob_name)?;
+            blob.validate(&mmap, blob_name)?;
             field_blobs.push((field, blob));
         }
-        let zone_maps = load_zone_maps(&blobs, &mmap)?;
+        let zone_maps = load_zone_maps(&toc, &mmap)?;
 
         // ── 8. FST + name prefix ──────────────────────────────────────────
-        let (fst_start, fst_end) = blobs.get("name_fst").copied().unwrap_or((0, 0));
+        let (fst_start, fst_end) = toc.get("name_fst").unwrap_or((0, 0));
         let name_fst = FstMap::new(MmapSlice {
             mmap: Arc::clone(&mmap),
             start: fst_start,
             end: fst_end,
         })
         .context("parsing name_fst blob")?;
-        let name_prefix_blob = PostingBlob::new(
-            blobs.get("name_prefix").copied().unwrap_or((0, 0)),
-            KeyKind::Bytes,
-        );
+        let name_postings = toc.get("name_postings").unwrap_or((0, 0));
+        let name_prefix_blob =
+            PostingBlob::new(toc.get("name_prefix").unwrap_or((0, 0)), KeyKind::Bytes);
         name_prefix_blob.validate(&mmap, "name_prefix")?;
 
         // ── 8b. Usage postings FST (BUG-006; blob absent = no usages) ─────
-        let usages_fst = match blobs.get("usages_fst").copied() {
+        let usages_fst = match toc.get("usages_fst") {
             Some((start, end)) if end > start => Some(
                 FstMap::new(MmapSlice {
                     mmap: Arc::clone(&mmap),
@@ -555,61 +622,135 @@ impl SegmentReader {
             ),
             _ => None,
         };
+        let usages_postings = toc.get("usages_postings").unwrap_or((0, 0));
 
-        // Mention postings: one FST per role, discovered from the TOC so the
-        // reader never needs a list of roles compiled into it. A segment
-        // written before a role existed simply has no blob for it.
-        let mut mention_fsts: BTreeMap<String, FstMap<MmapSlice>> = BTreeMap::new();
-        for (blob_name, &(start, end)) in &blobs {
-            let Some(role) = blob_name
-                .strip_prefix("mentions_")
-                .and_then(|rest| rest.strip_suffix("_fst"))
-            else {
-                continue;
-            };
-            if end <= start {
-                continue;
-            }
-            let fst = FstMap::new(MmapSlice {
-                mmap: Arc::clone(&mmap),
-                start,
-                end,
-            })
-            .with_context(|| format!("parsing {blob_name} blob"))?;
-            let _ = mention_fsts.insert(role.to_owned(), fst);
-        }
+        // ── 8c. Mention postings, one FST per occurrence role ─────────────
+        let mentions = Self::load_mentions(&mmap, &toc)?;
 
         // ── 9. Column ranges ──────────────────────────────────────────────
         // A column's bytes never move for the life of the mmap, so every range
         // is resolved once here; reading a row then costs an index into the
         // mapping, with no column name to format and no TOC lookup to hash.
-        let fixed = FixedColumns::resolve(&blobs);
-        let extra_cols: Vec<(String, ColRange)> = hdr
+        let fixed = FixedColumns::resolve(&toc);
+        let mut name_buf = [0_u8; ENTRY_NAME_LEN];
+        let extra_cols: Vec<ExtraCol> = hdr
             .extra_col_names
-            .into_iter()
-            .map(|name| {
-                let range = blobs.get(&format!("col_{name}")).copied().unwrap_or((0, 0));
-                (name, range)
+            .iter()
+            .map(|&name| {
+                let name = text_at(&mmap, name);
+                let data = blob_name_in(&mut name_buf, "col_", name, "")
+                    .and_then(|blob| toc.get(blob))
+                    .unwrap_or((0, 0));
+                ExtraCol {
+                    name: intern(name),
+                    data,
+                }
             })
             .collect();
+
+        // Which of the fields a built row answers from its own struct this
+        // segment shadows with an enrichment column of the same name. Asked
+        // once per row later, so it is answered once here.
+        let shadowed_struct_fields = Self::shadow_mask(&extra_cols);
+
         Ok(Self {
             mmap,
-            blobs,
             fixed,
-            path: path.to_owned(),
             row_count: hdr.row_count,
             provider_id: hdr.provider_id,
             content_id: hdr.content_id,
             extra_cols,
+            shadowed_struct_fields,
             strings,
             kind_blob,
             field_blobs,
             zone_maps,
             name_prefix_blob,
             name_fst,
+            name_postings,
             usages_fst,
-            mention_fsts,
+            usages_postings,
+            mentions,
         })
+    }
+
+    /// Discover this segment's mention postings from its table of contents.
+    ///
+    /// One FST per occurrence role, found by the shape of the blob name so the
+    /// reader needs no list of roles compiled into it: a segment written before
+    /// a role existed simply has no blob for it. What a role costs the reader
+    /// is its FST, two byte ranges, and a pointer to the one shared copy of
+    /// the role's name.
+    ///
+    /// # Errors
+    /// Returns `Err` when a role's FST blob does not parse.
+    fn load_mentions(mmap: &Arc<Mmap>, toc: &Toc<'_>) -> Result<Vec<MentionIndex>> {
+        const PREFIX: &str = "mentions_";
+        const SUFFIX: &str = "_fst";
+
+        let mut mentions: Vec<MentionIndex> = Vec::new();
+        let mut name_buf = [0_u8; ENTRY_NAME_LEN];
+        for entry in toc.entries() {
+            let Some(role) = entry
+                .name
+                .strip_prefix(PREFIX)
+                .and_then(|rest| rest.strip_suffix(SUFFIX))
+            else {
+                continue;
+            };
+            let (start, end) = entry.range;
+            if end <= start {
+                continue;
+            }
+            let fst = FstMap::new(MmapSlice {
+                mmap: Arc::clone(mmap),
+                start,
+                end,
+            })
+            .with_context(|| format!("parsing {} blob", entry.name))?;
+            let postings = blob_name_in(&mut name_buf, PREFIX, role, "_postings")
+                .and_then(|name| toc.get(name))
+                .unwrap_or((0, 0));
+            mentions.push(MentionIndex {
+                role: intern(role),
+                fst,
+                postings,
+            });
+        }
+        // Sorted by role name — the order the map this replaced returned.
+        mentions.sort_by(|a, b| a.role.cmp(&b.role));
+        Ok(mentions)
+    }
+
+    /// Which of the fields a built row answers from its own struct these
+    /// enrichment columns shadow, as one bit per name in
+    /// [`STRUCT_BACKED_FIELDS`].
+    ///
+    /// The mask is a derivation of the column names and of nothing else, so it
+    /// is computed here and installed together with them — see
+    /// [`Self::set_extra_cols`] — rather than kept in step by hand. A mask that
+    /// disagreed with the columns would have [`Self::row_field`] answer a
+    /// shadowed field from the struct, confidently and wrongly.
+    fn shadow_mask(extra_cols: &[ExtraCol]) -> u16 {
+        STRUCT_BACKED_FIELDS
+            .iter()
+            .enumerate()
+            .fold(0_u16, |mask, (index, field)| {
+                let shadowed = extra_cols.iter().any(|extra| extra.name.as_ref() == *field);
+                if shadowed { mask | (1 << index) } else { mask }
+            })
+    }
+
+    /// Replace the enrichment columns, recomputing the shadow mask from them.
+    ///
+    /// Change the columns of an open reader through here and not by assigning
+    /// `extra_cols`: the mask is derived from the names and would otherwise go
+    /// stale. Module-private, so that is a convention this module keeps, not
+    /// something the compiler enforces.
+    #[cfg(test)]
+    fn set_extra_cols(&mut self, extra_cols: Vec<ExtraCol>) {
+        self.shadowed_struct_fields = Self::shadow_mask(&extra_cols);
+        self.extra_cols = extra_cols;
     }
 
     /// Mmap `path` and validate the outer FQSF magic, version, and host
@@ -657,14 +798,8 @@ impl SegmentReader {
     /// Parse and validate the inner FQSG `header` blob: schema version, provider
     /// id, content id, and row/string counts, plus the extra enrichment column
     /// names (non-core string-option columns).
-    fn parse_header_blob(
-        mmap: &Arc<Mmap>,
-        blobs: &HashMap<String, (usize, usize)>,
-        path: &Path,
-    ) -> Result<HeaderFields> {
-        let &(hs, he) = blobs
-            .get("header")
-            .context("missing 'header' blob in FQSF")?;
+    fn parse_header_blob(mmap: &Arc<Mmap>, toc: &Toc<'_>, path: &Path) -> Result<HeaderFields> {
+        let (hs, he) = toc.get("header").context("missing 'header' blob in FQSF")?;
         let header_bytes = &mmap[hs..he];
 
         ensure!(
@@ -719,12 +854,17 @@ impl SegmentReader {
         let columns = parse_column_entries(header_bytes, HEADER_PREAMBLE_LEN, column_count)?;
 
         // ── 5. Collect extra enrichment column names ───────────────────────
-        let extra_col_names: Vec<String> = columns
+        // As byte ranges into the mapping, since the header blob already spells
+        // every one of them: the ranges are shifted from header-relative to
+        // mapping-absolute here so a reader can read a name back without
+        // knowing where its header sits.
+        let extra_col_names: Vec<ColRange> = columns
             .iter()
-            .filter(|(name, tag)| {
-                !CORE_COLUMN_NAMES.contains(&name.as_str()) && *tag == TYPE_TAG_STR_OPT
+            .filter(|&&(name, tag)| {
+                let text = std::str::from_utf8(&header_bytes[name.0..name.1]).unwrap_or("");
+                !CORE_COLUMN_NAMES.contains(&text) && tag == TYPE_TAG_STR_OPT
             })
-            .map(|(name, _)| name.clone())
+            .map(|&(name, _)| (hs + name.0, hs + name.1))
             .collect();
 
         Ok(HeaderFields {
@@ -784,7 +924,7 @@ impl SegmentReader {
         let Some(encoded) = fst.get(name.as_bytes()) else {
             return Vec::new();
         };
-        decode_name_postings(encoded, self.blob_bytes("usages_postings"))
+        decode_name_postings(encoded, self.col_bytes(self.usages_postings))
     }
 
     /// Every distinct usage token in this segment.
@@ -816,15 +956,15 @@ impl SegmentReader {
     /// on it. Returns empty when the file mentions the name nowhere.
     pub fn lookup_mention_sites(&self, name: &str) -> Vec<(&str, u32)> {
         let mut sites = Vec::new();
-        for (role, fst) in &self.mention_fsts {
-            let Some(encoded) = fst.get(name.as_bytes()) else {
+        for mention in &self.mentions {
+            let Some(encoded) = mention.fst.get(name.as_bytes()) else {
                 continue;
             };
-            let postings = self.blob_bytes(&format!("mentions_{role}_postings"));
+            let role: &str = &mention.role;
             sites.extend(
-                decode_name_postings(encoded, postings)
+                decode_name_postings(encoded, self.col_bytes(mention.postings))
                     .into_iter()
-                    .map(|line| (role.as_str(), line)),
+                    .map(|line| (role, line)),
             );
         }
         sites
@@ -832,7 +972,7 @@ impl SegmentReader {
 
     /// Return the raw bytes of the `name_postings` blob (used by overlay builder).
     pub fn name_postings_bytes(&self) -> &[u8] {
-        self.blob_bytes("name_postings")
+        self.col_bytes(self.name_postings)
     }
 
     /// Return the number of enrichment (extra) column names stored in this segment.
@@ -844,7 +984,7 @@ impl SegmentReader {
     /// Whether this segment stores an enrichment column named `name`.
     #[must_use]
     pub fn has_extra_col(&self, name: &str) -> bool {
-        self.extra_cols.iter().any(|(c, _)| c == name)
+        self.extra_col_range(name).is_some()
     }
 
     /// Whether this segment stores a value→rows posting index for `field`.
@@ -1119,8 +1259,8 @@ impl SegmentReader {
     /// single row.  Returns an empty map when no enrichment columns are present.
     pub(crate) fn enrichment_for_row(&self, row: u32) -> HashMap<String, String> {
         let mut map = HashMap::new();
-        for (col_name, range) in &self.extra_cols {
-            let blob = self.col_bytes(*range);
+        for extra in &self.extra_cols {
+            let blob = self.col_bytes(extra.data);
             if blob.is_empty() {
                 continue;
             }
@@ -1129,7 +1269,7 @@ impl SegmentReader {
                 if id != u32::MAX {
                     let s = self.strings.get(id);
                     if !s.is_empty() {
-                        let _ = map.insert(col_name.clone(), s.to_owned());
+                        let _ = map.insert((*extra.name).to_owned(), s.to_owned());
                     }
                 }
             }
@@ -1153,14 +1293,14 @@ impl SegmentReader {
     /// value for it.  An absent column yields an empty slice rather than being
     /// skipped, so every segment reports the same column list its header does.
     pub(crate) fn enrichment_columns(&self) -> impl Iterator<Item = (&str, &[u32])> {
-        self.extra_cols.iter().map(|(name, range)| {
-            let blob = self.col_bytes(*range);
+        self.extra_cols.iter().map(|extra| {
+            let blob = self.col_bytes(extra.data);
             let ids: &[u32] = if blob.is_empty() {
                 &[]
             } else {
                 cast_slice(blob)
             };
-            (name.as_str(), ids)
+            (extra.name.as_ref(), ids)
         })
     }
 
@@ -1168,18 +1308,10 @@ impl SegmentReader {
     // Private helpers
     // ─────────────────────────────────────────────────────────────────────
 
-    /// Return the byte range for a named blob as a `&[u8]` slice.
-    /// Returns `&[]` when the blob is absent.
-    fn blob_bytes(&self, name: &str) -> &[u8] {
-        let Some(&(start, end)) = self.blobs.get(name) else {
-            return &[];
-        };
-        &self.mmap[start..end]
-    }
-
-    /// The bytes of a column whose range was resolved at open.
+    /// The bytes at a range resolved at open — a column's values, or a
+    /// postings blob.
     ///
-    /// A column the segment does not store resolved to `(0, 0)`, which slices
+    /// Anything the segment does not store resolved to `(0, 0)`, which slices
     /// to the same empty blob a missing TOC entry used to yield.
     fn col_bytes(&self, range: ColRange) -> &[u8] {
         &self.mmap[range.0..range.1]
@@ -1196,8 +1328,8 @@ impl SegmentReader {
     /// fixed columns, so every `col_*` blob a segment holds stays reachable by
     /// name, exactly as when the name was formatted and hashed per access.
     fn col_range(&self, col: &str) -> ColRange {
-        if let Some((_, range)) = self.extra_cols.iter().find(|(name, _)| name == col) {
-            return *range;
+        if let Some(range) = self.extra_col_range(col) {
+            return range;
         }
         self.fixed.by_short_name(col)
     }
@@ -1228,8 +1360,8 @@ impl SegmentReader {
     fn extra_col_range(&self, col: &str) -> Option<ColRange> {
         self.extra_cols
             .iter()
-            .find(|(name, _)| name == col)
-            .map(|(_, range)| *range)
+            .find(|extra| extra.name.as_ref() == col)
+            .map(|extra| extra.data)
     }
 
     /// Resolve a string-id column to its pool string at `row`, reporting an
@@ -1261,15 +1393,17 @@ impl SegmentReader {
     /// assigned later still by GROUP BY. A predicate on one of them is left to
     /// run against the built rows rather than answered from a column.
     pub(crate) fn row_field(&self, field: &str, has_path: bool) -> RowField {
-        if !STRUCT_BACKED_FIELDS.contains(&field) {
+        let Some(index) = STRUCT_BACKED_FIELDS.iter().position(|name| *name == field) else {
             return self
                 .extra_col_range(field)
                 .map_or(RowField::Unanswerable, RowField::Extra);
-        }
+        };
         // Only the colliding name falls back. An enrichment column named after
         // one struct-backed field says nothing about the others, so a segment
-        // carrying one still answers every field it does not shadow.
-        if self.extra_col_range(field).is_some() {
+        // carrying one still answers every field it does not shadow. The mask
+        // stands for the column-name scan this used to run per call, over the
+        // same names and resolved at open.
+        if self.shadowed_struct_fields & (1 << index) != 0 {
             return RowField::Unanswerable;
         }
         match field {
@@ -1352,7 +1486,7 @@ impl SegmentReader {
                             // row stays a candidate and the residual filter
                             // decides — complete, slower, never a false negative.
                             tracing::warn!(
-                                path = %self.path.display(),
+                                segment = %self.content_id_hex(),
                                 kind = %kind_val,
                                 "postings_fql_kind unreadable, not narrowing: {e:#}"
                             );
@@ -1439,7 +1573,7 @@ impl SegmentReader {
                     // predicate is left to the residual filter, like a field
                     // with no posting file at all.
                     tracing::warn!(
-                        path = %self.path.display(),
+                        segment = %self.content_id_hex(),
                         field = %pred.field,
                         "posting bitmap unreadable, not narrowing: {e:#}"
                     );
@@ -1474,7 +1608,7 @@ impl SegmentReader {
         let extras: Vec<(&str, &[u32])> = self
             .extra_cols
             .iter()
-            .map(|(col_name, range)| (col_name.as_str(), self.col_u32(*range)))
+            .map(|extra| (extra.name.as_ref(), self.col_u32(extra.data)))
             .collect();
 
         rows.iter()
@@ -1562,8 +1696,8 @@ impl SegmentReader {
         let usages = self.u32_in(self.fixed.usages_count, row);
 
         let mut fields: HashMap<String, String> = HashMap::new();
-        for (col_name, range) in &self.extra_cols {
-            let blob = self.col_bytes(*range);
+        for extra in &self.extra_cols {
+            let blob = self.col_bytes(extra.data);
             if blob.is_empty() {
                 continue;
             }
@@ -1572,7 +1706,7 @@ impl SegmentReader {
                 if id != u32::MAX {
                     let s = self.strings.get(id);
                     if !s.is_empty() {
-                        let _ = fields.insert(col_name.clone(), s.to_owned());
+                        let _ = fields.insert((*extra.name).to_owned(), s.to_owned());
                     }
                 }
             }
