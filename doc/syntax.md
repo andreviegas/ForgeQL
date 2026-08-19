@@ -1060,6 +1060,8 @@ all three want no uncommitted rows in the session, no two segments of the index
 built from one source path, and a `HAVING`/`ORDER BY` that names only `count` or
 the grouped field, since a group row counted this way carries those two and
 nothing else and a predicate on any other name would be false on every group.
+One that names anything else is answered by the scan, and this budget applies
+there too.
 What they make of a `WHERE` is the gate you will actually meet, and it is not the
 same for all three. A stored cardinality counts a value over whole segments and
 cannot be narrowed to the subset a predicate selects, so
@@ -1075,8 +1077,11 @@ whatever a tier proposes is what gets counted, and every name tier only proposes
 — a literal under three bytes leaves every row a candidate, a literal the tier
 answers still proposes a superset, and a plain `name =` proposes the duplicate
 rows inside a file that the answer collapses into one. Such a query is answered
-by the scan, which decides each row by reading it, and the counts it returns are
-the counts a `WHERE line >= 0` beside the same grouping returns.
+by the scan, which decides each row by reading it — an ordinary scan, so this
+budget applies to it and on a large corpus it can be refused where the counted
+route returned a number; narrow it with `IN`/`EXCLUDE`, since a `LIMIT` cannot
+help a `GROUP BY`. The counts it returns are the counts a `WHERE line >= 0`
+beside the same grouping returns.
 The enrichment one asks for two things beyond the `WHERE`: the field must
 have survived the overlay's per-field value budget, and none of the segments the
 query actually selects may store its column without posting it — a segment the
@@ -1089,12 +1094,15 @@ For a counted grouping — whichever of the three answered — counted or
 scanned gives the same groups and the same sizes: the stored
 cardinalities are drawn from the same collapsed rows the scan dedupes to, and
 the rows the grouped field says nothing about are the one group keyed by the
-empty string either way. What differs is the order, wherever the clause does not
-decide it — a counted group is named by its own value and a scanned one by the
-first row of the group, so with no `ORDER BY`, or where an `ORDER BY count`
-ties, the two routes sort the same groups differently, and under the 20-row
-default that changes which of a wide field's groups the page holds, though never
-`total`. Write `ORDER BY count DESC` and the field, not the page, decides.
+empty string either way. What differs is what the delivered row says about
+itself: a counted group row is named by the grouped value, where a scanned one
+is the first row of its group and reports that row's own name, path and line —
+so a kind group reads `comment` counted and reads the first comment's text
+scanned. The page order follows from that, wherever the clause does not decide
+it: with no `ORDER BY`, or where an `ORDER BY count` ties, the two routes sort
+the same groups differently, and under the 20-row default that changes which of
+a wide field's groups the page holds, though never `total`. Write
+`ORDER BY count DESC` and the field, not the page, decides.
 
 The row budget is enforced wherever result rows accumulate without a bound of
 their own: the `FIND symbols` scan over the on-disk index, the union of a
@@ -1217,7 +1225,7 @@ IN → EXCLUDE → WHERE → GROUP BY → HAVING → ORDER BY → OFFSET → LIM
 | `IN` | Restrict to files matching glob pattern. On a verb that names a symbol and whose rows carry no file of their own — `SHOW members`, `SHOW body`, `SHOW context`, `SHOW signature` — it scopes which symbol was resolved rather than filtering those rows, which it could only ever empty. `SHOW NODE`, `SHOW LINES`, `SHOW MORE` and `SHOW COMMITS` have rows with no path and resolve no name either, so a glob there has nothing to scope and nothing to match and is refused. |
 | `EXCLUDE` | Remove files matching glob pattern. Repeatable — every `EXCLUDE` clause applies; a row is dropped when **any** pattern matches its path. Scopes the lookup, or is refused, on exactly the verbs the `IN` row names, and on the same grounds. |
 | `ORDER BY` | Sort results. Default `ASC`. On `FIND symbols` the field must be one a symbol row resolves — `name`, `fql_kind`/`kind`, `node_id`, `path`/`file`, `language`/`lang`, `line`, `usages`, `count` — or an enrichment field or stored extra column (numeric values like `shadow_count`, `escape_count` sort numerically). Anything else is refused rather than tied and returned in name order: `text`/`content` and `node_kind` both fall here, as do the `FIND files` fields `size`, `depth` and `extension`/`ext`, and `signature`, `marker` and `declaration`, which belong to other verbs' rows. Unlike `WHERE` it is never split between the rows and a lookup, because no lookup reads it — so on `SHOW members` and `SHOW callees` the field must be one the **returned rows** carry, and `SHOW members OF 'Foo' ORDER BY language` is refused even though `WHERE language = 'cpp'` is accepted. The verbs that answer with source lines — `SHOW body`, `SHOW context`, `SHOW signature`, `SHOW NODE`, `SHOW LINES`, `SHOW MORE` — answer in source order and sort not at all, so any `ORDER BY` there is refused rather than accepted and ignored, which with a `LIMIT` would have paged from the wrong end. |
-| `GROUP BY` | Aggregate by field. Adds `count` to each group. Narrower than `ORDER BY`, because grouping keys a row through its **string** fields only: on `FIND symbols` the accepted set is `name`, `fql_kind`/`kind`, `path`/`file`, `language`/`lang`, `node_id`, plus any enrichment field or stored extra column. `line`, `usages` and `count` are numeric and are refused; so is any name a symbol row cannot resolve, which would otherwise report one group named by the empty string holding every row. Not split between the rows and a lookup either, on the same grounds as `ORDER BY`, and refused outright on the line-answering verbs for the same reason. The key column is labelled with the spelling you wrote — `GROUP BY file` heads it `file` — while the grouping itself runs on the canonical field, so an alias and its canonical name always produce the same groups. Grouping on the kind is the one case with no key column: the compact layout already groups a symbol listing by kind, so `GROUP BY fql_kind` and `GROUP BY kind` both render in that layout. Three groupings are counted from the index rather than scanned — `fql_kind`, the path, and an enrichment field the segments post per value — and a group row from that route carries the grouped value and `count` and **nothing else**: no `path`, `line`, `node_id` or `rev`, where a scanned group row is the first row of its group and carries all four. On all three the counts and the groups are the scan's, the group of rows the grouped field says nothing about included; what differs is the order of a page no `ORDER BY` decides, since a counted group is named by its own value and a scanned one by that first row, and `total` is the same either way. A `HAVING` or `ORDER BY` naming a field a group row does not carry is answered by the scan on all three, rather than evaluated against rows that cannot answer it and returned as an empty set. The gates deciding which route answers are in Result budget above. |
+| `GROUP BY` | Aggregate by field. Adds `count` to each group. Narrower than `ORDER BY`, because grouping keys a row through its **string** fields only: on `FIND symbols` the accepted set is `name`, `fql_kind`/`kind`, `path`/`file`, `language`/`lang`, `node_id`, plus any enrichment field or stored extra column. `line`, `usages` and `count` are numeric and are refused; so is any name a symbol row cannot resolve, which would otherwise report one group named by the empty string holding every row. Not split between the rows and a lookup either, on the same grounds as `ORDER BY`, and refused outright on the line-answering verbs for the same reason. The key column is labelled with the spelling you wrote — `GROUP BY file` heads it `file` — while the grouping itself runs on the canonical field, so an alias and its canonical name always produce the same groups. Grouping on the kind is the one case with no key column: the compact layout already groups a symbol listing by kind, so `GROUP BY fql_kind` and `GROUP BY kind` both render in that layout. Three groupings are counted from the index rather than scanned — `fql_kind`, the path, and an enrichment field the segments post per value — and a group row from that route is **named by the grouped value** and carries `count` and nothing else: no `path`, `line`, `node_id` or `rev`, where a scanned group row is the first row of its group, named by that row, and carries all four. On all three the counts and the groups are the scan's, the group of rows the grouped field says nothing about included; what differs is that naming, and the order of a page no `ORDER BY` decides which follows from it, while `total` is the same either way. A `HAVING` or `ORDER BY` naming a field a group row does not carry is answered by the scan on all three, rather than evaluated against rows that cannot answer it and returned as an empty set — and a query rerouted that way is an ordinary scan, so the result budget can refuse it on a large corpus. The gates deciding which route answers are in Result budget above. |
 | `LIMIT` | Maximum rows returned. Implicit cap of 20 when omitted on `FIND`. On `FIND usages` without `GROUP BY` the unit is **files**, not rows: the cap selects whole files and every site of a selected file is returned. |
 | `OFFSET` | Skip N rows (pagination). On `FIND usages` without `GROUP BY` it skips whole **files**, so a page never splits one file. |
 | `DEPTH` | Read by exactly three verbs: `SHOW body` (collapse depth), `SHOW context` (how many context lines) and `FIND files` (directory tree depth). Refused on every other verb, because nothing there reads it — including `SHOW outline`, whose rows carry a `depth` column of their own, so `DEPTH 2` looked like a request for a depth-limited tree and returned the whole one. |

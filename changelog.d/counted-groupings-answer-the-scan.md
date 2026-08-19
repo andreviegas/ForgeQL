@@ -1,7 +1,11 @@
 - **The two older counted `GROUP BY` routes now answer what the scan answers.**
   `GROUP BY fql_kind` and `GROUP BY file` are read from stored counts instead of
   by building every matching row. Three ways that produced a number no row had
-  been consulted for are fixed, all at query time; nothing stored changes.
+  been consulted for are fixed, all at query time; nothing stored changes. What
+  the two routes deliver still differs in the group row itself — a counted one
+  is named by the grouped value and carries no path, line or handle, where a
+  scanned one is the first row of its group and carries that row's — but the
+  counts, the groups and `total` are now the same on both.
 
   **A counted `GROUP BY file` no longer counts what nothing verified.** It
   intersected whatever candidate bitmap the index tiers proposed with each
