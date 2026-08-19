@@ -1721,6 +1721,14 @@ pub(super) fn group_by_file_fast_path_eligible(clauses: &Clauses, dirty_empty: b
 
 /// Returns `true` when `GROUP BY fql_kind` can be served from the overlay's
 /// kind bitmaps alone (no per-row materialisation needed).
+///
+/// Two answers this route gets wrong are pinned as open defects rather than
+/// fixed here, because fixing either changes what the grouping returns:
+/// `open_defects::a_counted_group_by_fql_kind_keeps_the_kindless_rows` — rows
+/// carrying no kind are dropped instead of grouped under the empty string —
+/// and `open_defects::a_counted_group_by_fql_kind_answers_a_having_on_a_row_field`
+/// — a `HAVING`/`ORDER BY` naming a field the group row does not carry comes
+/// back empty instead of declining to the scan.
 pub(super) fn group_by_kind_fast_path_eligible(clauses: &Clauses, dirty_empty: bool) -> bool {
     dirty_empty
         && clauses.where_predicates.is_empty()

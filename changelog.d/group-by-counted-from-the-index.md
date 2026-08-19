@@ -48,8 +48,21 @@
   plain `name =` counts the intra-segment duplicates the answer collapses,
   because the name postings are not intersected with each segment's canonical
   rows the way the kind and enrichment postings are
-  (`…_counts_each_row_once`). `fql_kind =` is the only admitted predicate that
-  counts exactly. Extending any
+  (`…_counts_each_row_once`); and a `name` literal long enough for the trigram
+  tier to answer still proposes a superset, so there is no safe literal length
+  (`…_counts_an_answered_pattern_once`). `fql_kind =` is the only admitted
+  predicate that counts exactly.
+
+  Two more wrong answers on the older counted routes are pinned here and left
+  unfixed the same way: `GROUP BY fql_kind` drops the rows carrying no kind
+  rather than grouping them under the empty string, losing 2,169 of 59,636 rows
+  on the corpus these cases use
+  (`…_a_counted_group_by_fql_kind_keeps_the_kindless_rows`); and both older
+  routes answer a `HAVING` or `ORDER BY` naming a field their group row does not
+  carry with an empty set instead of declining to the scan
+  (`…_a_counted_group_by_fql_kind_answers_a_having_on_a_row_field`,
+  `…_a_counted_group_by_file_answers_a_having_on_a_row_field`). The enrichment
+  route refuses that shape, which is why it is not in that company. Extending any
   `WHERE` admission to the enrichment table has to clear the bar that one does
   not — per predicate tier, that the candidate set is exact — which is why this
   change takes none. `IN` and `EXCLUDE` are welcome everywhere: a segment is one
