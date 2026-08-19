@@ -1,19 +1,18 @@
 //! Unit tests for [`Overlay`](super::Overlay).
 
 use std::collections::HashMap;
-use std::io::{BufWriter, Write};
 
 use roaring::RoaringBitmap;
 
 use super::*;
-use crate::storage::columnar::overlay_writer::{self, write_v3};
+use crate::storage::columnar::overlay_builder::OverlayBuilder;
 
 /// Build a minimal FQOV v3 overlay in a tempfile.
 ///
 /// Only `trigram_postings` and `row_count` are populated; all other blobs
 /// are empty or trivially valid.
 fn make_test_overlay(
-    trigram_postings: &HashMap<[u8; 3], Vec<u8>>,
+    trigram_postings: &HashMap<[u8; 3], RoaringBitmap>,
     row_count: u32,
 ) -> tempfile::NamedTempFile {
     let empty_fst = fst::MapBuilder::memory()
@@ -27,27 +26,13 @@ fn make_test_overlay(
         .collect();
 
     let tmp = tempfile::NamedTempFile::new().expect("tempfile");
-    {
-        let mut f = BufWriter::new(tmp.as_file());
-        write_v3(
-            &mut f,
-            &overlay_writer::WriteV3Params {
-                generation: 1,
-                global_row_table: &row_table,
-                kind_postings: &HashMap::new(),
-                trigram_postings,
-                name_fst_bytes: &empty_fst,
-                name_postings_bytes: &[],
-                segment_metas: &[],
-                index_files_bytes: &[],
-                enrich_bitmaps_bytes: &[],
-                file_entries_bytes: &[],
-                usages_count_fst_bytes: &[],
-            },
-        )
-        .expect("write_v3");
-        f.flush().expect("flush");
-    }
+    OverlayBuilder::write_overlay_for_test(
+        tmp.path(),
+        row_table,
+        empty_fst,
+        trigram_postings.clone(),
+    )
+    .expect("write test overlay");
     tmp
 }
 
@@ -80,9 +65,7 @@ fn substring_candidates_none_for_short_input() {
     // Non-empty trigram index so we reach the length check.
     let mut trig = HashMap::new();
     let bm: RoaringBitmap = std::iter::once(0u32).collect();
-    let mut bm_bytes = Vec::new();
-    bm.serialize_into(&mut bm_bytes).unwrap();
-    trig.insert(*b"abc", bm_bytes);
+    let _ = trig.insert(*b"abc", bm);
 
     let tmp = make_test_overlay(&trig, 1);
     let overlay = Overlay::open(tmp.path()).expect("open");
@@ -98,9 +81,7 @@ fn substring_candidates_intersects_and_misses() {
     let rows: RoaringBitmap = [0u32, 2].iter().copied().collect();
     let mut trig = HashMap::new();
     for t in [*b"alp", *b"lph", *b"pha"] {
-        let mut bytes = Vec::new();
-        rows.serialize_into(&mut bytes).unwrap();
-        trig.insert(t, bytes);
+        let _ = trig.insert(t, rows.clone());
     }
 
     let tmp = make_test_overlay(&trig, 3);

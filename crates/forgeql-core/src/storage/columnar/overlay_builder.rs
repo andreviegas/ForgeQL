@@ -16,10 +16,11 @@
 //! mid-write leaves either the old or the new file, never a partial one.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::io::Write;
+use std::io::{self, Seek, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use bytemuck::cast_slice;
 use fst::{IntoStreamer as _, Map as FstMap, MapBuilder, Streamer as _};
 use ignore::WalkBuilder;
@@ -28,8 +29,12 @@ use roaring::RoaringBitmap;
 use tracing::{debug, info};
 
 use super::bytes_to_hex;
-use super::overlay::{EnrichEntry, RowPtr, SegmentMeta};
-use super::overlay_writer;
+use super::overlay::{EnrichEntry, KindEntry, RowPtr, SegmentRecord, TrigramEntry};
+use super::overlay_writer::{
+    BLOB_BITMAP_DATA, BLOB_ENRICH_BITMAPS, BLOB_FILE_ENTRIES, BLOB_INDEX_FILES, BLOB_KIND_INDEX,
+    BLOB_KIND_STRINGS, BLOB_NAME_FST, BLOB_NAME_POSTINGS, BLOB_ROW_TABLE, BLOB_SEGMENT_STRINGS,
+    BLOB_SEGMENTS, BLOB_TRIGRAM_INDEX, BLOB_USAGES_COUNT_FST, OverlayWriter, to_u16, to_u32,
+};
 use super::segment_builder::{POSTING_ENRICHMENT_FIELDS, overlay_budget};
 use super::segment_reader::SegmentReader;
 
@@ -40,6 +45,26 @@ pub struct OverlayBuilder {
     worktree_root: PathBuf,
     /// Absolute source path → raw content-ID bytes.
     segment_map: HashMap<PathBuf, Vec<u8>>,
+}
+
+/// The blobs an overlay build produces before the file is opened.
+///
+/// They are handed to the write as one value so that each can be dropped the
+/// moment its bytes are on disk, rather than all of them staying alive until
+/// the whole file is assembled. Everything else the file holds is produced
+/// during the write, at the point the layout calls for it.
+struct OverlayBlobs {
+    global_row_table: Vec<RowPtr>,
+    /// Merged per-kind row sets, still as bitmaps: serialising them here would
+    /// mean holding both forms at once, and the write needs only their sizes
+    /// before it needs their bytes.
+    kind_postings: HashMap<String, RoaringBitmap>,
+    trigram_postings: HashMap<[u8; 3], RoaringBitmap>,
+    name_fst_bytes: Vec<u8>,
+    name_postings_bytes: Vec<u8>,
+    /// Enrichment `field=value` row sets, keyed by the string the key table
+    /// stores; also kept as bitmaps, for the same reason.
+    enrich_raw: HashMap<String, RoaringBitmap>,
 }
 
 impl OverlayBuilder {
@@ -127,50 +152,27 @@ impl OverlayBuilder {
                 )
             },
         );
-        let enrich_bitmaps_bytes = enrich_res?;
+        let enrich_raw = enrich_res?;
         let (name_fst_bytes, name_postings_bytes) = name_res?;
-        let name_trigram_postings = trigram_res?;
+        let trigram_postings = trigram_res?;
 
-        // 7. Segment metadata list (source segments only — file-only entries
-        //    go into the separate `file_entries` blob, not segment_metas).
-        let segment_metas: Vec<SegmentMeta> = segs
-            .iter()
-            .enumerate()
-            .map(|(seg_idx, (rel_path, hex, reader))| SegmentMeta {
-                hex_content_id: hex.clone(),
-                source_path: rel_path.clone(),
-                row_count: reader.row_count,
-                dedup_row_count: seg_dedup[seg_idx].1,
-                sha256: [0u8; 32], // not used by write_v3; computed at read time
-                prefix_len: 0,     // not used by write_v3; computed at read time
-            })
-            .collect();
-
-        // 7.5. Cached file sizes per source segment.
-        let index_files_u32 = self.step75_build_index_files(&segs);
-        let index_files_bytes: &[u8] = cast_slice(&index_files_u32);
-
-        // 7.6. File-only entries blob.
-        let file_entries_bytes = self.step76_build_file_entries(&file_only);
-
-        // 6.5. Usages-count FST (BUG-006 U3): name → total usage-site count.
-        let usages_count_fst_bytes = Self::step65_build_usages_count_fst(&segs)?;
-
-        // 8. Atomic overlay write.
-        Self::step8_write_overlay(
+        // 7 + 7.5 + 7.6 + 6.5 + 8. Everything still to be produced is produced
+        //    inside the write, at the point the file's layout puts it, and every
+        //    buffer is dropped as soon as its bytes are on disk. The file is
+        //    unchanged: the blobs go down in exactly the order they always did,
+        //    and the header that describes them is filled in last.
+        self.step8_write_overlay(
             overlay_path,
-            &overlay_writer::WriteV3Params {
-                generation: 1,
-                global_row_table: &global_row_table,
-                kind_postings: &kind_postings,
-                trigram_postings: &name_trigram_postings,
-                name_fst_bytes: &name_fst_bytes,
-                name_postings_bytes: &name_postings_bytes,
-                segment_metas: &segment_metas,
-                index_files_bytes,
-                enrich_bitmaps_bytes: &enrich_bitmaps_bytes,
-                file_entries_bytes: &file_entries_bytes,
-                usages_count_fst_bytes: &usages_count_fst_bytes,
+            &segs,
+            &file_only,
+            &seg_dedup,
+            OverlayBlobs {
+                global_row_table,
+                kind_postings,
+                trigram_postings,
+                name_fst_bytes,
+                name_postings_bytes,
+                enrich_raw,
             },
         )?;
 
@@ -448,7 +450,7 @@ impl OverlayBuilder {
         segs: &[(PathBuf, String, SegmentReader)],
         row_offsets: &[u32],
         seg_dedup: &[(RoaringBitmap, u32)],
-    ) -> Result<HashMap<String, Vec<u8>>> {
+    ) -> Result<HashMap<String, RoaringBitmap>> {
         let t_step = std::time::Instant::now();
         let mut kind_merged: HashMap<String, RoaringBitmap> = HashMap::new();
         for (seg_idx, (seg_path, _, reader)) in segs.iter().enumerate() {
@@ -468,20 +470,12 @@ impl OverlayBuilder {
                 }
             }
         }
-        let mut kind_postings: HashMap<String, Vec<u8>> = HashMap::with_capacity(kind_merged.len());
-        for (kind_str, bitmap) in &kind_merged {
-            let mut bytes = Vec::new();
-            bitmap
-                .serialize_into(&mut bytes)
-                .with_context(|| format!("serialising kind bitmap for '{kind_str}'"))?;
-            let _ = kind_postings.insert(kind_str.clone(), bytes);
-        }
         info!(
             ms = t_step.elapsed().as_millis(),
-            kinds = kind_postings.len(),
+            kinds = kind_merged.len(),
             mem = %crate::mem::snapshot(), "TIMING step5: kind postings merge",
         );
-        Ok(kind_postings)
+        Ok(kind_merged)
     }
 
     // ── Step 5.5 ─────────────────────────────────────────────────────────────
@@ -490,7 +484,7 @@ impl OverlayBuilder {
         segs: &[(PathBuf, String, SegmentReader)],
         row_offsets: &[u32],
         seg_dedup: &[(RoaringBitmap, u32)],
-    ) -> Result<Vec<u8>> {
+    ) -> Result<HashMap<String, RoaringBitmap>> {
         let t_step = std::time::Instant::now();
         let mut enrich_raw: HashMap<String, RoaringBitmap> = HashMap::new();
         let mut field_seen: HashMap<String, HashSet<String>> = HashMap::new();
@@ -515,15 +509,13 @@ impl OverlayBuilder {
             &mut pruned_fields,
         );
 
-        let enrich_bitmaps_bytes = Self::serialize_enrich_bitmaps(&enrich_raw)?;
         info!(
             ms = t_step.elapsed().as_millis(),
             entries = enrich_raw.len(),
             pruned = pruned_fields.len(),
-            bytes = enrich_bitmaps_bytes.len(),
             mem = %crate::mem::snapshot(), "TIMING step5.5: enrichment bitmaps",
         );
-        Ok(enrich_bitmaps_bytes)
+        Ok(enrich_raw)
     }
 
     /// Category 1 of step 5.5: boolean flags + string enums sourced from each
@@ -696,48 +688,6 @@ impl OverlayBuilder {
         }
     }
 
-    /// Serialise the collected enrichment bitmaps into the `enrich_bitmaps` blob:
-    /// a sorted (entry-table, key-bytes, bitmap-bytes) layout.
-    fn serialize_enrich_bitmaps(enrich_raw: &HashMap<String, RoaringBitmap>) -> Result<Vec<u8>> {
-        let mut sorted_enrich: Vec<(&String, &RoaringBitmap)> = enrich_raw.iter().collect();
-        sorted_enrich.sort_by_key(|(k, _)| k.as_str());
-        let mut enrich_key_bytes: Vec<u8> = Vec::new();
-        let mut enrich_bitmap_data: Vec<u8> = Vec::new();
-        let mut enrich_entries: Vec<EnrichEntry> = Vec::new();
-        for (key, bitmap) in &sorted_enrich {
-            let mut bm_bytes = Vec::new();
-            bitmap
-                .serialize_into(&mut bm_bytes)
-                .with_context(|| format!("serialising enrich bitmap '{key}'"))?;
-            enrich_entries.push(EnrichEntry {
-                key_offset: u32::try_from(enrich_key_bytes.len()).unwrap_or(u32::MAX),
-                key_len: u16::try_from(key.len()).unwrap_or(u16::MAX),
-                _pad: 0,
-                bitmap_offset: u32::try_from(enrich_bitmap_data.len()).unwrap_or(u32::MAX),
-                bitmap_len: u32::try_from(bm_bytes.len()).unwrap_or(u32::MAX),
-            });
-            enrich_key_bytes.extend_from_slice(key.as_bytes());
-            enrich_bitmap_data.extend_from_slice(&bm_bytes);
-        }
-        let entry_count_le = u32::try_from(enrich_entries.len())
-            .unwrap_or(u32::MAX)
-            .to_le_bytes();
-        let key_data_len_le = u32::try_from(enrich_key_bytes.len())
-            .unwrap_or(u32::MAX)
-            .to_le_bytes();
-        let mut enrich_bitmaps_bytes: Vec<u8> = Vec::with_capacity(
-            8 + enrich_entries.len() * std::mem::size_of::<EnrichEntry>()
-                + enrich_key_bytes.len()
-                + enrich_bitmap_data.len(),
-        );
-        enrich_bitmaps_bytes.extend_from_slice(&entry_count_le);
-        enrich_bitmaps_bytes.extend_from_slice(&key_data_len_le);
-        enrich_bitmaps_bytes.extend_from_slice(cast_slice(enrich_entries.as_slice()));
-        enrich_bitmaps_bytes.extend_from_slice(&enrich_key_bytes);
-        enrich_bitmaps_bytes.extend_from_slice(&enrich_bitmap_data);
-        Ok(enrich_bitmaps_bytes)
-    }
-
     // ── Step 6 ───────────────────────────────────────────────────────────────
 
     fn step6_build_name_fst(
@@ -857,20 +807,41 @@ impl OverlayBuilder {
     /// trigrams deduplicated per name, ascending global row IDs. Every
     /// segment walks its own (already sorted) name FST once and offsets its
     /// local rows into the global ID space; bitmap union is associative and
-    /// commutative, so the per-segment maps fold in parallel and the merged
-    /// content is identical to computing it from the merged name list.
+    /// commutative, so segments accumulate into whichever worker map picks
+    /// them up and the merged content is identical to computing it from the
+    /// merged name list.
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "the worker's slot is deliberately held for the whole segment: \
+                  no other thread can lock it, so there is nothing to contend \
+                  with, and re-locking per name would buy nothing"
+    )]
     fn step6a_build_trigrams(
         segs: &[(PathBuf, String, SegmentReader)],
         row_offsets: &[u32],
-    ) -> Result<HashMap<[u8; 3], Vec<u8>>> {
+    ) -> Result<HashMap<[u8; 3], RoaringBitmap>> {
         let t_step = std::time::Instant::now();
-        let trigram_merged: HashMap<[u8; 3], RoaringBitmap> = segs
-            .par_iter()
+
+        // One partial map per rayon worker, not one per segment. Mapping each
+        // segment to its own trigram map and reducing pairwise meant the number
+        // of maps alive at once followed rayon's split tree rather than the
+        // pool, and each one held whole bitmaps. A worker is the only thread
+        // that can run with its own index, so its slot is uncontended and it
+        // merges every segment it is given straight into it.
+        let workers = rayon::current_num_threads().max(1);
+        let partials: Vec<Mutex<HashMap<[u8; 3], RoaringBitmap>>> =
+            (0..workers).map(|_| Mutex::new(HashMap::new())).collect();
+
+        segs.par_iter()
             .enumerate()
-            .map(|(seg_idx, (_, _, reader))| {
+            .try_for_each(|(seg_idx, (_, _, reader))| -> Result<()> {
+                let slot = rayon::current_thread_index().unwrap_or(0).min(workers - 1);
+                let mut local = partials[slot]
+                    .lock()
+                    .map_err(|_| anyhow!("trigram partial map poisoned"))?;
+
                 let row_offset = row_offsets[seg_idx];
                 let name_postings_raw = reader.name_postings_bytes();
-                let mut local: HashMap<[u8; 3], RoaringBitmap> = HashMap::new();
                 let mut stream = reader.name_fst.stream();
                 while let Some((name_bytes, encoded)) = stream.next() {
                     if name_bytes.len() < 3 {
@@ -892,36 +863,42 @@ impl OverlayBuilder {
                         }
                     }
                 }
-                local
-            })
-            .reduce(HashMap::new, |mut merged, local| {
-                for (t, bm) in local {
-                    match merged.entry(t) {
-                        std::collections::hash_map::Entry::Occupied(mut e) => {
-                            *e.get_mut() |= bm;
-                        }
-                        std::collections::hash_map::Entry::Vacant(v) => {
-                            let _ = v.insert(bm);
+                Ok(())
+            })?;
+
+        // At most `workers` maps enter the merge, and the union is commutative,
+        // so the tree reduce below cannot change the answer — only how many
+        // partial maps exist while it runs.
+        let mut collected: Vec<HashMap<[u8; 3], RoaringBitmap>> = Vec::with_capacity(workers);
+        for slot in partials {
+            collected.push(
+                slot.into_inner()
+                    .map_err(|_| anyhow!("trigram partial map poisoned"))?,
+            );
+        }
+        let trigram_merged: HashMap<[u8; 3], RoaringBitmap> =
+            collected
+                .into_par_iter()
+                .reduce(HashMap::new, |mut merged, local| {
+                    for (t, bm) in local {
+                        match merged.entry(t) {
+                            std::collections::hash_map::Entry::Occupied(mut e) => {
+                                *e.get_mut() |= bm;
+                            }
+                            std::collections::hash_map::Entry::Vacant(v) => {
+                                let _ = v.insert(bm);
+                            }
                         }
                     }
-                }
-                merged
-            });
-        let mut name_trigram_postings: HashMap<[u8; 3], Vec<u8>> =
-            HashMap::with_capacity(trigram_merged.len());
-        for (trigram, bitmap) in &trigram_merged {
-            let mut bytes = Vec::new();
-            bitmap
-                .serialize_into(&mut bytes)
-                .with_context(|| format!("serialising trigram bitmap {trigram:?}"))?;
-            let _ = name_trigram_postings.insert(*trigram, bytes);
-        }
+                    merged
+                });
+
         info!(
             ms = t_step.elapsed().as_millis(),
-            trigrams = name_trigram_postings.len(),
+            trigrams = trigram_merged.len(),
             mem = %crate::mem::snapshot(), "TIMING step6a: trigram bitmaps (parallel)",
         );
-        Ok(name_trigram_postings)
+        Ok(trigram_merged)
     }
 
     /// Step 6.5 (BUG-006 U3): merge every segment's usage postings into one
@@ -1040,9 +1017,19 @@ impl OverlayBuilder {
 
     // ── Step 8 ───────────────────────────────────────────────────────────────
 
+    /// Create the overlay file, write every blob into it, and rename it into
+    /// place.
+    ///
+    /// The write goes to a temp file in the destination directory and is then
+    /// renamed, so a crash mid-write leaves either the old overlay or the new
+    /// one, never a partial file.
     fn step8_write_overlay(
+        &self,
         overlay_path: &Path,
-        params: &overlay_writer::WriteV3Params<'_>,
+        segs: &[(PathBuf, String, SegmentReader)],
+        file_only: &[(PathBuf, String)],
+        seg_dedup: &[(RoaringBitmap, u32)],
+        blobs: OverlayBlobs,
     ) -> Result<()> {
         let t_step = std::time::Instant::now();
         if let Some(parent) = overlay_path.parent() {
@@ -1053,19 +1040,326 @@ impl OverlayBuilder {
             overlay_path.parent().unwrap_or_else(|| Path::new(".")),
         )
         .context("creating temp overlay file")?;
-        {
-            let mut f = std::io::BufWriter::new(tmp.as_file());
-            overlay_writer::write_v3(&mut f, params).context("writing v3 overlay")?;
+        let bytes = {
+            let mut writer = OverlayWriter::new(std::io::BufWriter::new(tmp.as_file()), 1)
+                .context("starting v3 overlay")?;
+            self.write_blobs(&mut writer, segs, file_only, seg_dedup, blobs)?;
+            let bytes = writer.bytes_written();
+            let mut f = writer.finish().context("writing v3 overlay")?;
             f.flush().context("flushing overlay buffer")?;
             tmp.as_file().sync_all().context("fsyncing overlay file")?;
-        }
+            bytes
+        };
         let _ = tmp
             .persist(overlay_path)
             .with_context(|| format!("persisting overlay to {}", overlay_path.display()))?;
         info!(
             ms = t_step.elapsed().as_millis(),
+            bytes,
             mem = %crate::mem::snapshot(), "TIMING step8: write v3 overlay (atomic)",
         );
+        Ok(())
+    }
+
+    /// Write an overlay holding only a row table, a name FST and trigram
+    /// bitmaps — no segments — so a test can open a real file.
+    ///
+    /// It goes through the same write as a real build, so a test that opens
+    /// the result is also exercising the writer rather than a stand-in for it.
+    #[cfg(test)]
+    pub(super) fn write_overlay_for_test(
+        overlay_path: &Path,
+        global_row_table: Vec<RowPtr>,
+        name_fst_bytes: Vec<u8>,
+        trigram_postings: HashMap<[u8; 3], RoaringBitmap>,
+    ) -> Result<()> {
+        let builder = Self::new("test", PathBuf::new(), PathBuf::new(), HashMap::new());
+        builder.step8_write_overlay(
+            overlay_path,
+            &[],
+            &[],
+            &[],
+            OverlayBlobs {
+                global_row_table,
+                kind_postings: HashMap::new(),
+                trigram_postings,
+                name_fst_bytes,
+                name_postings_bytes: Vec::new(),
+                enrich_raw: HashMap::new(),
+            },
+        )
+    }
+
+    /// Write every blob, in the order the file lays them out.
+    ///
+    /// The sequence below IS the layout — `overlay_writer::BLOB_ORDER` holds
+    /// the same order and the writer refuses a blob presented out of turn.
+    /// Each buffer is dropped as soon as its bytes are on disk, and the blobs
+    /// no earlier step needed (the segment table, the per-file sizes, the
+    /// file-only entries, the usages-count FST) are produced here rather than
+    /// up front, so they allocate against a heap the earlier blobs have already
+    /// been freed from.
+    fn write_blobs<W: Write + Seek>(
+        &self,
+        w: &mut OverlayWriter<W>,
+        segs: &[(PathBuf, String, SegmentReader)],
+        file_only: &[(PathBuf, String)],
+        seg_dedup: &[(RoaringBitmap, u32)],
+        blobs: OverlayBlobs,
+    ) -> Result<()> {
+        let OverlayBlobs {
+            global_row_table,
+            kind_postings,
+            trigram_postings,
+            name_fst_bytes,
+            name_postings_bytes,
+            enrich_raw,
+        } = blobs;
+
+        // row_table: eight bytes for every row in the commit, and the first
+        // blob in the file — so the largest single buffer is also the first
+        // one freed.
+        w.blob(BLOB_ROW_TABLE, |sink| {
+            sink.write_all(cast_slice(&global_row_table))
+        })?;
+        drop(global_row_table);
+
+        Self::write_bitmap_blobs(w, kind_postings, trigram_postings)?;
+
+        w.blob(BLOB_NAME_FST, |sink| sink.write_all(&name_fst_bytes))?;
+        drop(name_fst_bytes);
+
+        w.blob(BLOB_NAME_POSTINGS, |sink| {
+            sink.write_all(&name_postings_bytes)
+        })?;
+        drop(name_postings_bytes);
+
+        Self::write_segment_blobs(w, segs, seg_dedup)?;
+
+        // 7.5. Cached file sizes per source segment.
+        let index_files_u32 = self.step75_build_index_files(segs);
+        w.blob(BLOB_INDEX_FILES, |sink| {
+            sink.write_all(cast_slice(&index_files_u32))
+        })?;
+        drop(index_files_u32);
+
+        w.blob(BLOB_ENRICH_BITMAPS, |sink| {
+            Self::write_enrich_bitmaps(sink, &enrich_raw)
+        })?;
+        drop(enrich_raw);
+
+        // 7.6. File-only entries blob.
+        let file_entries_bytes = self.step76_build_file_entries(file_only);
+        w.blob(BLOB_FILE_ENTRIES, |sink| {
+            sink.write_all(&file_entries_bytes)
+        })?;
+        drop(file_entries_bytes);
+
+        // 6.5. Usages-count FST: name → total usage-site count. It goes last in
+        //      the file, so it is also built last — its shard maps hold a key
+        //      for every name in the commit, and by this point every other blob
+        //      has been written and freed.
+        let usages_count_fst_bytes = Self::step65_build_usages_count_fst(segs)?;
+        w.blob(BLOB_USAGES_COUNT_FST, |sink| {
+            sink.write_all(&usages_count_fst_bytes)
+        })?;
+
+        Ok(())
+    }
+
+    /// Write `kind_strings`, `kind_index`, `bitmap_data` and `trigram_index`.
+    ///
+    /// The two index blobs are written before the payload they point into, so
+    /// their offsets come from each bitmap's serialised size rather than from
+    /// its bytes — which is what lets the payload go straight to the file.
+    /// Holding the merged rows as bitmaps until here removes the two copies the
+    /// previous writer made at the build's peak: one serialised buffer per
+    /// bitmap, and one concatenation of them all.
+    fn write_bitmap_blobs<W: Write + Seek>(
+        w: &mut OverlayWriter<W>,
+        kind_postings: HashMap<String, RoaringBitmap>,
+        trigram_postings: HashMap<[u8; 3], RoaringBitmap>,
+    ) -> Result<()> {
+        // Sorted by kind name for binary search at query time.
+        let mut kinds: Vec<(&str, &RoaringBitmap)> = kind_postings
+            .iter()
+            .map(|(kind, bitmap)| (kind.as_str(), bitmap))
+            .collect();
+        kinds.sort_by_key(|(kind, _)| *kind);
+
+        w.blob(BLOB_KIND_STRINGS, |sink| {
+            for (kind, _) in &kinds {
+                sink.write_all(kind.as_bytes())?;
+            }
+            Ok(())
+        })?;
+
+        let mut kind_entries: Vec<KindEntry> = Vec::with_capacity(kinds.len());
+        let mut kind_offset: u32 = 0;
+        let mut bitmap_offset: u32 = 0;
+        for (kind, bitmap) in &kinds {
+            let kind_len = to_u32(kind.len(), "kind name too long for u32")?;
+            let bitmap_len = to_u32(bitmap.serialized_size(), "kind bitmap too large for u32")?;
+            kind_entries.push(KindEntry {
+                kind_offset,
+                kind_len,
+                bitmap_offset,
+                bitmap_len,
+            });
+            kind_offset = kind_offset
+                .checked_add(kind_len)
+                .context("kind strings offset exceeds u32::MAX")?;
+            bitmap_offset = bitmap_offset
+                .checked_add(bitmap_len)
+                .context("bitmap data offset exceeds u32::MAX")?;
+        }
+        w.blob(BLOB_KIND_INDEX, |sink| {
+            sink.write_all(cast_slice(kind_entries.as_slice()))
+        })?;
+        drop(kind_entries);
+
+        // The trigram bitmaps share bitmap_data with the kind ones, so their
+        // offsets carry on from where those ended.
+        let mut trigrams: Vec<(&[u8; 3], &RoaringBitmap)> = trigram_postings.iter().collect();
+        trigrams.sort_by_key(|(trigram, _)| **trigram);
+
+        let mut trigram_entries: Vec<TrigramEntry> = Vec::with_capacity(trigrams.len());
+        for (trigram, bitmap) in &trigrams {
+            let mut tg4 = [0u8; 4];
+            tg4[..3].copy_from_slice(trigram.as_ref());
+            let bitmap_len = to_u32(bitmap.serialized_size(), "trigram bitmap too large for u32")?;
+            trigram_entries.push(TrigramEntry {
+                trigram: tg4,
+                bitmap_offset,
+                bitmap_len,
+            });
+            bitmap_offset = bitmap_offset
+                .checked_add(bitmap_len)
+                .context("bitmap data offset exceeds u32::MAX")?;
+        }
+
+        // Every kind bitmap, then every trigram bitmap, serialised straight
+        // into the file.
+        w.blob_of_len(BLOB_BITMAP_DATA, bitmap_offset, |sink| {
+            for (_, bitmap) in &kinds {
+                bitmap.serialize_into(&mut *sink)?;
+            }
+            for (_, bitmap) in &trigrams {
+                bitmap.serialize_into(&mut *sink)?;
+            }
+            Ok(())
+        })?;
+        drop(kinds);
+        drop(kind_postings);
+
+        w.blob(BLOB_TRIGRAM_INDEX, |sink| {
+            sink.write_all(cast_slice(trigram_entries.as_slice()))
+        })?;
+        drop(trigram_entries);
+        drop(trigrams);
+        drop(trigram_postings);
+        Ok(())
+    }
+
+    /// Write `segments` and `segment_strings`.
+    ///
+    /// The records carry offsets into the strings, so the offsets are laid out
+    /// first — the file puts the records first — and the string bytes are then
+    /// written straight out of the segment list. Neither the `Vec<SegmentMeta>`
+    /// that used to carry them to the writer nor its clone of every path and
+    /// content ID is built at all.
+    fn write_segment_blobs<W: Write + Seek>(
+        w: &mut OverlayWriter<W>,
+        segs: &[(PathBuf, String, SegmentReader)],
+        seg_dedup: &[(RoaringBitmap, u32)],
+    ) -> Result<()> {
+        let mut seg_records: Vec<SegmentRecord> = Vec::with_capacity(segs.len());
+        let mut string_offset: u32 = 0;
+        for (seg_idx, (rel_path, hex, reader)) in segs.iter().enumerate() {
+            let path_len = to_u16(
+                rel_path.to_string_lossy().len(),
+                "segment source path too long for u16",
+            )?;
+            let hex_id_len = to_u16(hex.len(), "hex content ID too long for u16")?;
+            let path_offset = string_offset;
+            let hex_id_offset = path_offset
+                .checked_add(u32::from(path_len))
+                .context("segment hex-id offset exceeds u32::MAX")?;
+            seg_records.push(SegmentRecord {
+                row_count: reader.row_count,
+                path_offset,
+                hex_id_offset,
+                dedup_row_count: seg_dedup[seg_idx].1,
+                path_len,
+                hex_id_len,
+            });
+            string_offset = hex_id_offset
+                .checked_add(u32::from(hex_id_len))
+                .context("segment path offset exceeds u32::MAX")?;
+        }
+        w.blob(BLOB_SEGMENTS, |sink| {
+            sink.write_all(cast_slice(seg_records.as_slice()))
+        })?;
+        drop(seg_records);
+
+        w.blob_of_len(BLOB_SEGMENT_STRINGS, string_offset, |sink| {
+            for (rel_path, hex, _) in segs {
+                sink.write_all(rel_path.to_string_lossy().as_bytes())?;
+                sink.write_all(hex.as_bytes())?;
+            }
+            Ok(())
+        })
+        .map_err(Into::into)
+    }
+
+    /// Write the `enrich_bitmaps` blob:
+    /// `[u32 entry_count][u32 key_data_len][EnrichEntry × entry_count]`
+    /// `[key bytes][bitmap bytes]`, keys sorted lexicographically.
+    ///
+    /// The entries carry offsets into the two regions that follow them, so both
+    /// regions are measured before anything is written — a bitmap's serialised
+    /// size is known without serialising it. That is what lets the payload go
+    /// straight to the file: the previous version built the concatenated bitmap
+    /// region and then a second buffer holding the whole blob, so the
+    /// enrichment data existed three times over at the moment it was handed to
+    /// the writer.
+    fn write_enrich_bitmaps(
+        out: &mut impl Write,
+        enrich_raw: &HashMap<String, RoaringBitmap>,
+    ) -> io::Result<()> {
+        let mut sorted_enrich: Vec<(&String, &RoaringBitmap)> = enrich_raw.iter().collect();
+        sorted_enrich.sort_by_key(|(key, _)| key.as_str());
+
+        let mut entries: Vec<EnrichEntry> = Vec::with_capacity(sorted_enrich.len());
+        let mut key_offset: u32 = 0;
+        let mut bitmap_offset: u32 = 0;
+        for (key, bitmap) in &sorted_enrich {
+            let bitmap_len = u32::try_from(bitmap.serialized_size()).unwrap_or(u32::MAX);
+            entries.push(EnrichEntry {
+                key_offset,
+                key_len: u16::try_from(key.len()).unwrap_or(u16::MAX),
+                _pad: 0,
+                bitmap_offset,
+                bitmap_len,
+            });
+            key_offset = key_offset.saturating_add(u32::try_from(key.len()).unwrap_or(u32::MAX));
+            bitmap_offset = bitmap_offset.saturating_add(bitmap_len);
+        }
+
+        out.write_all(
+            &u32::try_from(entries.len())
+                .unwrap_or(u32::MAX)
+                .to_le_bytes(),
+        )?;
+        out.write_all(&key_offset.to_le_bytes())?;
+        out.write_all(cast_slice(entries.as_slice()))?;
+        drop(entries);
+        for (key, _) in &sorted_enrich {
+            out.write_all(key.as_bytes())?;
+        }
+        for (_, bitmap) in &sorted_enrich {
+            bitmap.serialize_into(&mut *out)?;
+        }
         Ok(())
     }
 }

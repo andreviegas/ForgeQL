@@ -86,14 +86,17 @@ impl SymbolTable {
         debug!(files = paths.len(), "indexing files in parallel");
 
         // Pass 1 — collect macro definitions (parallel, per-file, then merged).
-        // All parallel parse+enrich passes run on `indexing_pool()`, whose workers
-        // have a large stack — AST enrichers recurse over the syntax tree and would
-        // otherwise overflow rayon's default ~2 MiB worker stack on deeply nested
-        // source (see `indexing_pool`).
+        // All parallel parse+enrich passes run on one pool built for this build,
+        // whose workers have a large stack — AST enrichers recurse over the
+        // syntax tree and would otherwise overflow rayon's default ~2 MiB worker
+        // stack on deeply nested source (see `build_indexing_pool`).
+        // One pool for the whole build, dropped when `build` returns — that is
+        // what hands the worker stacks back.
+        let index_pool = Self::build_indexing_pool();
+
         let t_build = std::time::Instant::now();
         let t_step = std::time::Instant::now();
-        let macro_table =
-            Self::indexing_pool().install(|| Self::collect_macro_table(&paths, lang_registry));
+        let macro_table = index_pool.install(|| Self::collect_macro_table(&paths, lang_registry));
 
         info!(
             ms = t_step.elapsed().as_millis(),
@@ -110,7 +113,7 @@ impl SymbolTable {
         // This eliminates the ~2-minute sequential bottleneck on large repos.
         if seg_ctx.is_some() {
             let t_fast = std::time::Instant::now();
-            Self::indexing_pool().install(|| {
+            index_pool.install(|| {
                 Self::build_columnar_segments(
                     &paths,
                     lang_registry,
@@ -130,7 +133,7 @@ impl SymbolTable {
         // Pass 2 — parse + enrich each file in parallel, merging via tree
         // reduction so merges also happen across multiple cores.
         let t_step = std::time::Instant::now();
-        let mut table = Self::indexing_pool().install(|| {
+        let mut table = index_pool.install(|| {
             Self::parse_and_reduce(&paths, lang_registry, &macro_table, seg_ctx, workspace)
         });
 
@@ -166,8 +169,25 @@ impl SymbolTable {
         Ok((table, macro_table))
     }
 
-    /// Dedicated rayon thread pool for the parallel parse + enrich passes, whose
-    /// worker threads are given a large stack.
+    /// Worker threads for an index build's parse + enrich passes.
+    ///
+    /// Half the machine's cores by default. How many per-file peaks can
+    /// overlap is set by how many workers there are, and two index builds
+    /// whose peaks coincided drove a 24 GB machine into a 2,824-second swap
+    /// event. `FORGEQL_INDEX_THREADS` overrides it; zero, empty or malformed
+    /// falls back to the default, as with the other indexing knobs.
+    fn index_thread_count() -> usize {
+        let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+        let default = u64::try_from(cores.div_ceil(2)).unwrap_or(1);
+        usize::try_from(Self::parse_size_knob(
+            std::env::var("FORGEQL_INDEX_THREADS").ok().as_deref(),
+            default,
+        ))
+        .unwrap_or(1)
+    }
+
+    /// Build the rayon thread pool for one index run: the parallel parse +
+    /// enrich passes, with a large per-worker stack.
     ///
     /// AST enrichers (`casts`, `metrics`, `escape`, `recursion`, `fallthrough`,
     /// `todo`, …) walk the syntax tree recursively. The tree depth of real-world
@@ -176,8 +196,13 @@ impl SymbolTable {
     /// process with `fatal runtime error: stack overflow`. Reserving a generous
     /// per-worker stack (virtual address space, paged in on demand) makes indexing
     /// robust to depth without asking users to raise their ambient `ulimit -s`.
+    /// Keep that property.
     ///
-    /// Initialised once and reused for every build.
+    /// The pool used to be `'static`, which meant every stack page an enricher
+    /// had ever touched stayed mapped for the life of the process — a cost the
+    /// machine went on paying long after the build that caused it. Building one
+    /// per run hands those pages back when the run ends, so a caller must hold
+    /// the pool for the whole run and let it drop at the end.
     ///
     /// `pub(crate)` so the incremental reindex paths (`SymbolTable::reindex_files`
     /// and `ColumnarStorage::reindex_files_impl`) can run their per-file
@@ -187,17 +212,22 @@ impl SymbolTable {
     #[expect(
         clippy::expect_used,
         reason = "pool construction only fails on OS thread-spawn exhaustion; \
-                  indexing cannot proceed without it, and this runs once at startup"
+                  indexing cannot proceed without it"
     )]
-    pub(crate) fn indexing_pool() -> &'static rayon::ThreadPool {
-        static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
-        POOL.get_or_init(|| {
-            rayon::ThreadPoolBuilder::new()
-                .stack_size(256 * 1024 * 1024)
-                .thread_name(|i| format!("forgeql-index-{i}"))
-                .build()
-                .expect("failed to build forgeql indexing thread pool")
-        })
+    pub(crate) fn build_indexing_pool() -> rayon::ThreadPool {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(Self::index_thread_count())
+            .stack_size(256 * 1024 * 1024)
+            .thread_name(|i| format!("forgeql-index-{i}"))
+            .build()
+            .expect("failed to build forgeql indexing thread pool")
+    }
+
+    /// Run `f` on a pool from [`Self::build_indexing_pool`] and drop the pool
+    /// when it returns. For a caller with one parallel pass; a caller with
+    /// several should build the pool once and install on it.
+    pub(crate) fn with_indexing_pool<R: Send>(f: impl FnOnce() -> R + Send) -> R {
+        Self::build_indexing_pool().install(f)
     }
 
     /// Merge another `SymbolTable` into this one.
@@ -696,9 +726,8 @@ impl SymbolTable {
         // Run the per-file parse+enrich on the big-stack indexing pool: `index_file`
         // walks the AST recursively and a single deeply-nested edited file would
         // otherwise overflow rayon's default ~2 MiB stack. The full build already
-        // does this (see `indexing_pool`); the incremental path needs it too.
-        Self::indexing_pool()
-            .install(|| self.reindex_files_inner(paths, lang_registry, workspace_root))
+        // does this (see `build_indexing_pool`); the incremental path needs it too.
+        Self::with_indexing_pool(|| self.reindex_files_inner(paths, lang_registry, workspace_root))
     }
 
     fn reindex_files_inner(
