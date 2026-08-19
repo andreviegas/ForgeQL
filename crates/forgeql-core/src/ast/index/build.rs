@@ -4,7 +4,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use rayon::prelude::*;
 use tracing::{debug, info, warn};
 
@@ -92,7 +92,7 @@ impl SymbolTable {
         // stack on deeply nested source (see `build_indexing_pool`).
         // One pool for the whole build, dropped when `build` returns — that is
         // what hands the worker stacks back.
-        let index_pool = Self::build_indexing_pool();
+        let index_pool = Self::build_indexing_pool()?;
 
         let t_build = std::time::Instant::now();
         let t_step = std::time::Instant::now();
@@ -209,25 +209,45 @@ impl SymbolTable {
     /// parse+enrich on the same big-stack workers — they call `index_file` too and
     /// would otherwise overflow the small default stack when a single edited file
     /// is deeply nested.
-    #[expect(
-        clippy::expect_used,
-        reason = "pool construction only fails on OS thread-spawn exhaustion; \
-                  indexing cannot proceed without it"
-    )]
-    pub(crate) fn build_indexing_pool() -> rayon::ThreadPool {
+    /// `pub(crate)` so the incremental reindex paths (`SymbolTable::reindex_files`
+    /// and `ColumnarStorage::reindex_files_impl`) can run their per-file
+    /// parse+enrich on the same big-stack workers — they call `index_file` too and
+    /// would otherwise overflow the small default stack when a single edited file
+    /// is deeply nested.
+    ///
+    /// # Errors
+    /// Returns `Err` when the OS refuses to spawn the workers. That used to be a
+    /// panic, which was defensible while the pool was built once at first index
+    /// and is not now that one is built per run: a transient spawn refusal on a
+    /// loaded machine would take down a mutation.
+    pub(crate) fn build_indexing_pool() -> Result<rayon::ThreadPool> {
+        Self::pool_with_threads(Self::index_thread_count())
+    }
+
+    /// A big-stack pool with `threads` workers.
+    fn pool_with_threads(threads: usize) -> Result<rayon::ThreadPool> {
         rayon::ThreadPoolBuilder::new()
-            .num_threads(Self::index_thread_count())
+            .num_threads(threads)
             .stack_size(256 * 1024 * 1024)
             .thread_name(|i| format!("forgeql-index-{i}"))
             .build()
-            .expect("failed to build forgeql indexing thread pool")
+            .context("building the indexing thread pool")
     }
 
-    /// Run `f` on a pool from [`Self::build_indexing_pool`] and drop the pool
-    /// when it returns. For a caller with one parallel pass; a caller with
-    /// several should build the pool once and install on it.
-    pub(crate) fn with_indexing_pool<R: Send>(f: impl FnOnce() -> R + Send) -> R {
-        Self::build_indexing_pool().install(f)
+    /// Run `f` on a single big-stack worker and drop the pool when it returns.
+    ///
+    /// One worker, not [`Self::index_thread_count`], because this is for a
+    /// caller that needs the stack and not the parallelism: the incremental
+    /// reindex paths walk their files sequentially with one parser and contain
+    /// no parallel iterator at all, so a pool sized for the build's passes
+    /// would spawn every worker but one to do nothing — on the path every
+    /// successful mutation takes. `install` runs the closure on a pool worker
+    /// whatever the pool's size, so the stack guarantee is unchanged.
+    ///
+    /// # Errors
+    /// As [`Self::build_indexing_pool`].
+    pub(crate) fn with_indexing_pool<R: Send>(f: impl FnOnce() -> R + Send) -> Result<R> {
+        Ok(Self::pool_with_threads(1)?.install(f))
     }
 
     /// Merge another `SymbolTable` into this one.
@@ -727,7 +747,7 @@ impl SymbolTable {
         // walks the AST recursively and a single deeply-nested edited file would
         // otherwise overflow rayon's default ~2 MiB stack. The full build already
         // does this (see `build_indexing_pool`); the incremental path needs it too.
-        Self::with_indexing_pool(|| self.reindex_files_inner(paths, lang_registry, workspace_root))
+        Self::with_indexing_pool(|| self.reindex_files_inner(paths, lang_registry, workspace_root))?
     }
 
     fn reindex_files_inner(

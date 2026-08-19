@@ -60,7 +60,12 @@
   by how many workers there are, and coinciding peaks have driven a 24 GB
   machine into a 2,824-second swap event. On a machine with memory to spare
   this trades some index-build wall clock for that headroom; raise the variable
-  to get it back.
+  to get it back. The incremental reindex a mutation triggers takes a pool of
+  one worker instead: it walks its handful of edited files sequentially, so it
+  wants the stack and none of the parallelism, and spawning a full pool there
+  would cost every mutation a set of threads with nothing to do. Failing to
+  spawn the workers is now an error rather than a panic, which matters once a
+  pool is built per run rather than once per process.
 
 - One measurement that moved rather than disappeared: the enrichment step's
   log line no longer reports the serialised size of its blob, which it could

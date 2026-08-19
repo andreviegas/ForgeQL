@@ -28,7 +28,7 @@ impl ColumnarStorage {
         // walks the AST recursively and a single deeply-nested edited file would
         // otherwise overflow rayon's default ~2 MiB stack. The full build already
         // does this (see `SymbolTable::build_indexing_pool`); reindex needs it too.
-        SymbolTable::with_indexing_pool(|| self.reindex_files_on_pool(paths, tombstones))
+        SymbolTable::with_indexing_pool(|| self.reindex_files_on_pool(paths, tombstones))?
     }
 
     #[allow(clippy::too_many_lines)]
