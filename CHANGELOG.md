@@ -6,6 +6,34 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.175.0] — 2026-08-19 — a segment's index costs its mapping and little else
+
+### Performance
+
+- Opening a segment no longer copies its table of contents onto the heap. The
+  table is read in place and dropped when the open finishes, leaving the reader
+  holding the byte ranges of the blobs it reads, and the names that repeat
+  across every segment — enrichment column names, occurrence role names — are
+  interned once for the process instead of once per segment. Measured on a
+  3.06M-row, 32,748-segment corpus: opening the segments adds 8 MiB where it
+  added 299, a session holds 437 MiB once its index is open instead of 825, and
+  a cold index peaks at 2,824 MB instead of 3,143 — at the same wall time, with
+  the overlay byte-identical, so nothing reindexes. Extra sessions on one commit
+  still cost 3 MB each.
+
+  With the posting lists that stopped being decoded at open in 0.173.0, opening
+  every segment of that corpus now costs 8 MiB where it cost about 560.
+
+- Whole-corpus scans came out faster: whether a segment shadows a field a result
+  row answers from its own struct is a bit test resolved at open, not a walk of
+  that segment's column names on every row.
+
+### Notes
+
+- A reader no longer keeps the path of the file it was opened from, so a
+  diagnostic raised inside one names the segment by its content id. The overlay
+  build, which knows the path, still names the path.
+
 ## [0.174.0] — 2026-08-18 — a name with a multi-byte character stops crashing the page it is on
 
 ### Fixed
