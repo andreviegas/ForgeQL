@@ -6,6 +6,44 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.176.0] — 2026-08-19 — a GROUP BY the index already counted
+
+### Added
+
+- `FIND symbols ... GROUP BY <field>` on an enrichment field the segments post
+  per value is answered from the overlay's stored cardinalities instead of
+  materialising every matching row. On a 3M-symbol corpus `GROUP BY naming`
+  used to spend the whole result budget and be refused; it now answers. The
+  counts are the scan's collapsed counts, not an approximation: each stored
+  bitmap was written as a segment's postings intersected with its canonical row
+  set, and a row carries at most one value of a field, so the cardinalities
+  partition the rows. Rows the field says nothing about are one group keyed by
+  the empty string.
+
+  Anywhere those counts would not be the collapsed ones the query is handed
+  back to the scan — a refusal, never an approximation: any `WHERE`, a field
+  the overlay pruned, a selected segment storing the column but posting none of
+  its values, a session with uncommitted edits, two segments built from one
+  source path, a `HAVING`/`ORDER BY` naming anything but `count` or the grouped
+  field, and a key table that cannot be read whole. `IN` and `EXCLUDE` are
+  welcome: a segment is one source path, so a glob selects whole segments.
+
+  A counted group row carries the value and the count and nothing else, so with
+  no `ORDER BY` the groups come back in a different order from the scan's, which
+  names each group by the first row that fell into it. `total` and every count
+  are the same either way.
+
+### Notes
+
+- Writing the gates down exposed wrong answers on the two older counted
+  groupings, pinned as open defects rather than fixed, since fixing either
+  changes what the grouping returns. `GROUP BY file` admits a `WHERE` on
+  `name`, but every name tier proposes a superset and none verifies, so it
+  counts high at any literal length — only `fql_kind =` is exact. `GROUP BY
+  fql_kind` drops the rows carrying no kind instead of grouping them under the
+  empty string. Both older routes answer a `HAVING`/`ORDER BY` on a field their
+  group row does not carry with an empty set instead of declining to the scan.
+
 ## [0.175.0] — 2026-08-19 — a segment's index costs its mapping and little else
 
 ### Performance
