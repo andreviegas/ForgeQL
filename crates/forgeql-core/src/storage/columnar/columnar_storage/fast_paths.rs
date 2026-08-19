@@ -57,9 +57,12 @@ const FIND_BYTES_PER_ROW: usize = 1_600;
 /// `fql_kind =` and `name =`/`LIKE`/`MATCHES`, an admission wider than that
 /// argument supports: `fast_group_by_file` counts `prefilter_global`'s
 /// candidates and clears the residual `WHERE` first, so only `fql_kind =` is
-/// exact and a `name` predicate can count high. Both correct answers are pinned
-/// as `open_defects::a_counted_group_by_file_counts_only_matching_rows` and
-/// `open_defects::a_counted_group_by_file_counts_each_row_once`. The
+/// exact and a `name` predicate can count high at any literal length. The two
+/// older counted paths carry three more gaps besides — a counted
+/// `GROUP BY fql_kind` omits the rows that have no kind, and both answer a
+/// `HAVING`/`ORDER BY` on a field a group row does not carry with an empty set.
+/// All of them are pinned in `crates/forgeql/tests/golden/open_defects.json`;
+/// see [`group_by_file_fast_path_eligible`] for the list. The
 /// enrichment one takes no `WHERE` at all, and also wants the field to have
 /// survived the overlay's value budget with none of the segments the query
 /// selects storing the column without posting it — an excluded segment is not
@@ -1668,19 +1671,24 @@ pub(super) fn glob_to_path_prefix(glob: &str) -> Option<&str> {
 /// `WHERE` at all or one built entirely from `fql_kind =` and
 /// `name =`/`LIKE`/`MATCHES` — the body below is the authority on that list.
 ///
-/// **That admission is known to be too wide, and the counts it produces can be
-/// too high.** [`ColumnarStorage::fast_group_by_file`] counts
-/// `prefilter_global`'s candidate bitmap and clears the residual `WHERE` before
-/// counting, so no candidate is ever tested. Only `fql_kind =` is exact, its
-/// postings being intersected with each segment's canonical rows at overlay
-/// build. A `name` pattern the trigram tier declines leaves every row a
-/// candidate; a plain `name =` carries the intra-segment duplicates the answer
-/// collapses, because `step6_build_name_fst` does not do the intersection
-/// `step5_build_kind_postings` does. Both correct answers are pinned as
-/// `open_defects::a_counted_group_by_file_counts_only_matching_rows` and
-/// `open_defects::a_counted_group_by_file_counts_each_row_once`; narrowing this
-/// list is not on its own a fix, since `name =` is one of the shapes that
-/// breaks.
+/// **This path is known to answer wrongly in three shapes, all pinned in
+/// `crates/forgeql/tests/golden/open_defects.json`.**
+/// [`ColumnarStorage::fast_group_by_file`] counts `prefilter_global`'s
+/// candidate bitmap and clears the residual `WHERE` before counting, so no
+/// candidate is ever tested. Only `fql_kind =` is exact, its postings being
+/// canonical-intersected at overlay build; every `name` tier merely proposes,
+/// so `…_counts_only_matching_rows` (a sub-trigram literal, where the tier
+/// declines and every row becomes a candidate),
+/// `…_counts_an_answered_pattern_once` (a literal the tier *answers* and still
+/// over-counts, so no length is safe) and `…_counts_each_row_once` (a plain
+/// `name =`, whose postings `step6_build_name_fst` never intersects with the
+/// canonical set) all count high. Narrowing this list is not on its own a fix,
+/// since `name =` is one of the broken shapes. A fourth pin,
+/// `…_answers_a_having_on_a_row_field`, covers a `HAVING`/`ORDER BY` naming a
+/// field a group row does not carry: this function does not test for one, and
+/// [`ColumnarStorage::fast_group_by_file`] then evaluates it against rows
+/// holding only `path` and `count` and returns an empty set.
+/// [`group_by_enrichment_fast_path_field`] shows the test that belongs here.
 pub(super) fn group_by_file_fast_path_eligible(clauses: &Clauses, dirty_empty: bool) -> bool {
     if !dirty_empty {
         return false;

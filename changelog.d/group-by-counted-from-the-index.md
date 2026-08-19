@@ -67,6 +67,19 @@
   as a column — `num_format`, `lines`, `guard`, `error_scope` — is unchanged and
   still scans.
 
+  **What it costs.** One stored bitmap is decoded per distinct value of the
+  field, so the cost tracks the field's cardinality rather than the corpus. For
+  the narrow fields that is a handful — `naming` has seven values. Five fields
+  are budgeted wide (`key_path`, `guard_defines`, `guard_mentions`,
+  `guard_negates`, `guard_group_id`) and can carry thousands: `GROUP BY
+  key_path` over this repository's own 84,762-symbol index decodes 1,085 of
+  them and takes about 0.8 s against a 0.1 s warm-session baseline, where
+  `GROUP BY naming` on the same session is not separable from the baseline at
+  all. On a 3-million-symbol corpus those five decline before that ever
+  matters — some segment there exceeds its per-field posting budget, so the
+  partial-posting gate hands them to the scan — and the counted route in
+  practice serves the narrow fields.
+
   **Measurement.** No fixed bench class covers a `GROUP BY`, so this is not a
   `bench_mem` or `bench_ab` figure. What is measured is a pair of probe runs of
   the same query through the same freshly built (unoptimised) binary on a

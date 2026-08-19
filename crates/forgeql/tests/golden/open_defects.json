@@ -177,10 +177,10 @@
 ,
   {
    "name": "control_a_kind_predicate_groups_by_file_exactly",
-   "description": "Anchors the case below by isolating which admitted predicate is exact. The kind postings ARE intersected with each segment's canonical row set at overlay build (step5_build_kind_postings, with the comment saying so), so a fql_kind = predicate beside GROUP BY file counts each row once and the counted answer equals the scan's."
+   "description": "Anchors the case below by isolating which admitted predicate is exact, through the SCAN. The kind postings ARE intersected with each segment's canonical row set at overlay build (step5_build_kind_postings, with the comment saying so), so a fql_kind = predicate beside GROUP BY file counts each row once. Its counted twin is the next case; the two agreeing is the claim, and a control that ran the counted route alone could not have made it."
    ,
    "use": "forgeql-pub.frozen",
-   "fql": "FIND symbols WHERE fql_kind = 'number' IN 'crates/forgeql-core/src/transforms/diff.rs' GROUP BY file",
+   "fql": "FIND symbols WHERE line >= 0 WHERE fql_kind = 'number' IN 'crates/forgeql-core/src/transforms/diff.rs' GROUP BY file",
    "assert": {
     "row_count": 1,
     "rows": [
@@ -241,6 +241,71 @@
     "rows": [
      { "count": 768, "group_key": "crates/forgeql/tests/golden.json" }
     ]
+   }
+  }
+,
+  {
+   "name": "control_the_scan_keeps_the_kindless_rows",
+   "description": "Anchors the case below. Not every row of this index has an fql_kind: 2,169 of the 59,636 carry an empty one, and the scan's grouping gives them their own group keyed by the empty string, so it reports 42 groups where the counted route reports 41."
+   ,
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE line >= 0 GROUP BY fql_kind",
+   "assert": {
+    "total": 42
+   }
+  },
+  {
+   "name": "a_counted_group_by_fql_kind_keeps_the_kindless_rows",
+   "description": "The same defect family as the GROUP BY file cases, in the third counted grouping: a count taken from the index that does not account for every row. GROUP BY fql_kind is the oldest of the three and the only one that loses rows outright rather than counting extra.",
+   "use": "forgeql-pub.frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "kind_global_counts emits one group per kind bitmap and no remainder, while step5_build_kind_postings skips the empty kind at build (if kind_str.is_empty() { continue; }), so every row whose fql_kind is empty is dropped from the counted answer with nothing to say it went missing -- 2,169 of 59,636 rows, 3.6% of this corpus, and 41 groups reported against the scan's 42. The scan keys those rows as one empty-string group, the way apply_group_by keys any row whose field does not resolve. The fix is the subtraction fast_group_by_enrichment already does: Sigma dedup_row_count over the selected segments minus the sum of the kind cardinalities, pushed as an empty-keyed group when it is not zero. Nothing stored changes, so no ENRICH_VER bump is owed",
+   "fql": "FIND symbols GROUP BY fql_kind",
+   "assert": {
+    "total": 42
+   }
+  }
+,
+  {
+   "name": "control_the_scan_answers_a_having_on_a_row_field",
+   "description": "Anchors the two cases below. HAVING runs after the grouping pass, over whatever the retained row carries. On the scan that row is the first row of its group, so HAVING lines >= 2 keeps the six kinds whose representative is a multi-line node."
+   ,
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE line >= 0 GROUP BY fql_kind HAVING lines >= 2",
+   "assert": {
+    "row_count": 6
+   }
+  },
+  {
+   "name": "a_counted_group_by_fql_kind_answers_a_having_on_a_row_field",
+   "description": "A HAVING the counted route cannot evaluate must send the query back to the scan, not answer nothing. Zero rows is a claim about the corpus.",
+   "use": "forgeql-pub.frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "fast_group_by_kind builds SymbolMatch rows carrying only name/fql_kind/count and then runs the HAVING over them, so a predicate naming any other field is false on every group and the answer is an empty set delivered with full confidence -- 0 rows here where the scan returns 6. fast_group_by_file has the same shape through apply_clauses_counted over rows carrying only path and count (FIND symbols GROUP BY file HAVING lines >= 2 gives 0 against the scan's 3), and an ORDER BY on such a field silently ranks every group equal. The fix already exists in this file's neighbourhood: group_by_enrichment_fast_path_field refuses a HAVING or ORDER BY naming anything but count or the grouped field, and the same test belongs on group_by_kind_fast_path_eligible and group_by_file_fast_path_eligible",
+   "fql": "FIND symbols GROUP BY fql_kind HAVING lines >= 2",
+   "assert": {
+    "row_count": 6
+   }
+  },
+  {
+   "name": "control_the_scan_answers_a_having_on_a_row_field_grouped_by_file",
+   "description": "The same anchor for the file grouping: three files whose retained row is a multi-line node."
+   ,
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE line >= 0 GROUP BY file HAVING lines >= 2",
+   "assert": {
+    "row_count": 3
+   }
+  },
+  {
+   "name": "a_counted_group_by_file_answers_a_having_on_a_row_field",
+   "description": "The file grouping's half of the same defect, pinned separately because the two eligibility functions are separate and a fix may land on one before the other.",
+   "use": "forgeql-pub.frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "fast_group_by_file hands apply_clauses_counted rows carrying only path and count, so HAVING lines >= 2 is false on every group and 0 rows come back where the scan returns 3. Same cause and same fix as a_counted_group_by_fql_kind_answers_a_having_on_a_row_field",
+   "fql": "FIND symbols GROUP BY file HAVING lines >= 2",
+   "assert": {
+    "row_count": 3
    }
   }
  ]
