@@ -920,3 +920,157 @@ fn count_and_the_grouped_field_are_the_only_two_the_group_row_answers() {
         "HAVING on a field the group row does not carry"
     );
 }
+
+/// The one predicate a counted `GROUP BY file` may narrow by is `fql_kind =`
+/// with a string value.
+///
+/// Every arm here is load-bearing. `prefilter_global` SKIPS a predicate no tier
+/// serves, and [`ColumnarStorage::fast_group_by_file`] clears the residual
+/// `WHERE` before delivering, so a predicate admitted here and unserved there is
+/// counted as the whole segment. The three `name` spellings were admitted for
+/// years and all three counted high; `open_defects.json` carries the numbers.
+#[test]
+fn only_an_exact_kind_predicate_narrows_a_counted_file_group() {
+    let with = |pred: crate::ir::Predicate| Clauses {
+        where_predicates: vec![pred],
+        ..bare_group_by("file")
+    };
+    assert!(
+        group_by_file_fast_path_eligible(&bare_group_by("file"), true),
+        "no WHERE at all counts from dedup_row_count"
+    );
+    assert!(
+        group_by_file_fast_path_eligible(
+            &with(predicate(
+                "fql_kind",
+                CompareOp::Eq,
+                PredicateValue::String("function".to_owned())
+            )),
+            true
+        ),
+        "the canonical kind postings are exact"
+    );
+    for (label, pred) in [
+        (
+            "name =",
+            predicate(
+                "name",
+                CompareOp::Eq,
+                PredicateValue::String("0".to_owned()),
+            ),
+        ),
+        (
+            "name LIKE",
+            predicate(
+                "name",
+                CompareOp::Like,
+                PredicateValue::String("%ab%".to_owned()),
+            ),
+        ),
+        (
+            "name MATCHES",
+            predicate(
+                "name",
+                CompareOp::Matches,
+                PredicateValue::String("^a".to_owned()),
+            ),
+        ),
+        (
+            "fql_kind = <number>, which prefilter_global has no arm for",
+            predicate("fql_kind", CompareOp::Eq, PredicateValue::Number(2)),
+        ),
+        (
+            "fql_kind LIKE",
+            predicate(
+                "fql_kind",
+                CompareOp::Like,
+                PredicateValue::String("fun%".to_owned()),
+            ),
+        ),
+        (
+            "an enrichment predicate",
+            predicate("lines", CompareOp::Gte, PredicateValue::Number(2)),
+        ),
+    ] {
+        assert!(
+            !group_by_file_fast_path_eligible(&with(pred), true),
+            "{label} must go to the scan"
+        );
+    }
+}
+
+/// A counted group row carries the grouped value and its count and nothing else,
+/// so those are the only two an aggregate clause may name — on the file grouping
+/// as on the enrichment one.
+///
+/// Without this test the gate can lose the check and no golden would see it: the
+/// answer to `HAVING lines >= 2` would go back to being an empty set, which
+/// reads as a fact about the corpus rather than as a path declining.
+#[test]
+fn count_and_the_file_are_the_only_two_the_file_group_row_answers() {
+    let order_by = |field: &str| Clauses {
+        order_by: Some(OrderBy {
+            field: field.to_owned(),
+            direction: SortDirection::Desc,
+        }),
+        ..bare_group_by("file")
+    };
+    assert!(group_by_file_fast_path_eligible(&order_by("count"), true));
+    assert!(group_by_file_fast_path_eligible(&order_by("file"), true));
+    assert!(group_by_file_fast_path_eligible(&order_by("path"), true));
+    for field in ["name", "line", "usages", "fql_kind", "lines"] {
+        assert!(
+            !group_by_file_fast_path_eligible(&order_by(field), true),
+            "ORDER BY {field}"
+        );
+    }
+
+    let having = |field: &str| Clauses {
+        having_predicates: vec![predicate(field, CompareOp::Gte, PredicateValue::Number(2))],
+        ..bare_group_by("file")
+    };
+    assert!(group_by_file_fast_path_eligible(&having("count"), true));
+    assert!(
+        !group_by_file_fast_path_eligible(&having("lines"), true),
+        "HAVING on a field the group row does not carry"
+    );
+}
+
+/// The same two on the kind grouping — and `name` is the one that must NOT pass.
+///
+/// Its group row happens to carry the kind string in the name field, so a
+/// `HAVING name = 'function'` would answer something; it would just not be the
+/// scan's answer, where the name is the first row's own.
+#[test]
+fn count_and_the_kind_are_the_only_two_the_kind_group_row_answers() {
+    let order_by = |field: &str| Clauses {
+        order_by: Some(OrderBy {
+            field: field.to_owned(),
+            direction: SortDirection::Desc,
+        }),
+        ..bare_group_by("fql_kind")
+    };
+    assert!(group_by_kind_fast_path_eligible(&order_by("count"), true));
+    assert!(group_by_kind_fast_path_eligible(
+        &order_by("fql_kind"),
+        true
+    ));
+    for field in ["name", "line", "usages", "path", "lines"] {
+        assert!(
+            !group_by_kind_fast_path_eligible(&order_by(field), true),
+            "ORDER BY {field}"
+        );
+    }
+
+    let having = |field: &str| Clauses {
+        having_predicates: vec![predicate(field, CompareOp::Gte, PredicateValue::Number(2))],
+        ..bare_group_by("fql_kind")
+    };
+    assert!(group_by_kind_fast_path_eligible(&having("count"), true));
+    for field in ["lines", "name"] {
+        assert!(
+            !group_by_kind_fast_path_eligible(&having(field), true),
+            "HAVING {field}"
+        );
+    }
+}

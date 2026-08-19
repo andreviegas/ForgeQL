@@ -6,8 +6,7 @@ use roaring::RoaringBitmap;
 
 use crate::ast::query::glob_matches;
 use crate::filter::{
-    TOPK_THRESHOLD, apply_clauses_counted, collect_top_k, eval_predicate, eval_predicate_on,
-    order_cmp,
+    TOPK_THRESHOLD, apply_clauses_counted, collect_top_k, eval_predicate_on, order_cmp,
 };
 use crate::ir::{Clauses, CompareOp, GroupBy, OrderBy, PredicateValue, SortDirection};
 use crate::result::SymbolMatch;
@@ -49,25 +48,23 @@ const FIND_BYTES_PER_ROW: usize = 1_600;
 /// watch is a `GROUP BY` no fast path accepts: its answer is a handful of rows
 /// but it materialises every matching row to get there. `fql_kind`, the path,
 /// and an enrichment field the segments post per value are counted from the
-/// index instead. All three want no uncommitted rows in the session and no two
-/// segments built from one source path. `fql_kind` and the enrichment field
-/// also want no `WHERE` — a stored cardinality counts a value over whole
-/// segments and cannot be narrowed to what a predicate selects — where
-/// `GROUP BY file` groups by segment and so admits a `WHERE` built from
-/// `fql_kind =` and `name =`/`LIKE`/`MATCHES`, an admission wider than that
-/// argument supports: `fast_group_by_file` counts `prefilter_global`'s
-/// candidates and clears the residual `WHERE` first, so only `fql_kind =` is
-/// exact and a `name` predicate can count high at any literal length. The two
-/// older counted paths carry three more gaps besides — a counted
-/// `GROUP BY fql_kind` omits the rows that have no kind, and both answer a
-/// `HAVING`/`ORDER BY` on a field a group row does not carry with an empty set.
-/// All of them are pinned in `crates/forgeql/tests/golden/open_defects.json`;
-/// see [`group_by_file_fast_path_eligible`] for the list. The
-/// enrichment one takes no `WHERE` at all, and also wants the field to have
-/// survived the overlay's value budget with none of the segments the query
-/// selects storing the column without posting it — an excluded segment is not
-/// asked, its rows being in neither the counts nor the total — and any
-/// `HAVING`/`ORDER BY` to read `count` or the grouped field.
+/// index instead. All three want no uncommitted rows in the session, no two
+/// segments built from one source path, and any `HAVING`/`ORDER BY` to name
+/// only `count` or the grouped field — a group row carries those two and
+/// nothing else, so a predicate on any other field would be false on every
+/// group and deliver an empty set with full confidence. `fql_kind` and the
+/// enrichment field also want no `WHERE`: a stored cardinality counts a value
+/// over whole segments and cannot be narrowed to what a predicate selects.
+/// `GROUP BY file` groups by segment, so it admits exactly one —
+/// `fql_kind = '<value>'`, whose postings are intersected with each segment's
+/// canonical rows at build and are the only tier that both verifies and
+/// deduplicates. A `name` predicate is admitted at no literal length: the
+/// trigram index over-generates, the name FST is never canonical-intersected,
+/// and nothing on a counted path reads a row to settle either. The enrichment
+/// one also wants the field to have survived the overlay's value budget with
+/// none of the segments the query selects storing the column without posting
+/// it — an excluded segment is not asked, its rows being in neither the counts
+/// nor the total.
 /// Outside those gates the scan is still what answers.
 ///
 /// **What this bound covers.** Every path that builds a `FIND` result row set
@@ -185,13 +182,14 @@ pub(in crate::storage) fn row_budget_exceeded(max_rows: usize) -> anyhow::Error 
          not armed alongside one and the scan is refused here \
          instead, as it is where two segments of this index were \
          built from one source path and a segment collapsing its own \
-         duplicates is no longer the whole collapse. A FIND with no \
-         LIMIT written, no GROUP BY and no HAVING is handed its \
-         default page as that k under the same gates, so it takes the same route; the \
-         name streams (ORDER BY name, or the clause-free shape) count \
-         the answer from the stored per-segment deduplicated counts \
-         and decline to the scan where two segments were built from \
-         one source path. FORGEQL_FIND_MAX_ROWS overrides the bound in \
+         duplicates is no longer the whole collapse. One shape is \
+         counted differently: ORDER BY name, with at most an fql_kind \
+         equality beside it, no IN or EXCLUDE and no uncommitted \
+         edits in the session, is what the name index streams k rows \
+         at a time, and that route reports k as its total — it hands \
+         the query back to the full scan whenever its page would be \
+         short, so the same query is sometimes counted honestly and \
+         sometimes not. FORGEQL_FIND_MAX_ROWS overrides the bound in \
          rows; 0 disables it.",
         max_rows.saturating_mul(FIND_BYTES_PER_ROW) / (1024 * 1024 * 1024)
     )
@@ -389,11 +387,16 @@ impl ColumnarStorage {
     // ─────────────────────────────────────────────────────────────────────
 
     /// Fast-path for `FIND symbols GROUP BY file ORDER BY count DESC LIMIT N`
-    /// when there are no WHERE predicates.
+    /// with no `WHERE`, or one built entirely from `fql_kind = '<value>'`.
     ///
-    /// Sums `SegmentMeta.row_count` per source path in O(segments) time.
+    /// Sums `SegmentMeta.dedup_row_count` per source path in O(segments) time —
+    /// or, under a predicate, each segment's share of the canonical kind bitmap.
     /// No individual symbol rows are materialised.
-    pub(super) fn fast_group_by_file(&self, clauses: &Clauses) -> FindPage {
+    ///
+    /// `None` hands the query to the scan. A predicate no stored structure
+    /// settles exactly cannot be counted here, because nothing on this path ever
+    /// reads a row to test one against.
+    pub(super) fn fast_group_by_file(&self, clauses: &Clauses) -> Option<FindPage> {
         let mut counts: HashMap<PathBuf, usize> = HashMap::new();
 
         let path_floor = clauses
@@ -405,12 +408,21 @@ impl ColumnarStorage {
                 row_range.collect::<RoaringBitmap>()
             });
 
-        // Compute candidates if there are filters
-        let has_filters = !clauses.where_predicates.is_empty();
-        let candidates = if has_filters {
-            Some(self.prefilter_global(clauses, path_floor))
-        } else {
+        // Counted, so every predicate must be one a stored structure settles
+        // exactly. `prefilter_global` SKIPS a predicate no tier can serve rather
+        // than failing, and this path clears the residual `WHERE` before
+        // delivering — so an unadmitted predicate would neither narrow the
+        // candidates nor be tested against a row, and the count reported would be
+        // the whole segment's. `group_by_file_fast_path_eligible` refuses those
+        // shapes; this refuses them again, because the two sit far apart in the
+        // file and only this one is next to the counting.
+        let candidates = if clauses.where_predicates.is_empty() {
             None
+        } else {
+            if !clauses.where_predicates.iter().all(counts_exactly) {
+                return None;
+            }
+            Some(self.prefilter_global(clauses, path_floor))
         };
 
         for (idx, meta) in self.overlay().segments().iter().enumerate() {
@@ -436,17 +448,17 @@ impl ColumnarStorage {
                 ..SymbolMatch::default()
             })
             .collect();
-        // HAVING (count-based filtering)
         // HAVING, ORDER BY, LIMIT (skip GROUP BY — already grouped; IN/EXCLUDE already applied
         // during segment iteration so strip them here to avoid re-filtering by path.
-        // Also clear where_predicates since we already filtered the roaring bitmaps by them.)
+        // Also clear where_predicates: each was applied exactly to the candidate
+        // bitmap above, and none of them names a field a group row carries.)
         let mut no_group = clauses.clone();
         no_group.group_by = None;
         no_group.in_glob = None;
         no_group.exclude_globs.clear();
         no_group.where_predicates.clear();
         let total = apply_clauses_counted(&mut results, &no_group);
-        FindPage::of(results, total)
+        Some(FindPage::of(results, total))
     }
 
     /// Fast-path for `FIND symbols GROUP BY fql_kind ORDER BY count DESC LIMIT N`
@@ -454,24 +466,35 @@ impl ColumnarStorage {
     ///
     /// Deserialises each kind bitmap and reads its cardinality in O(n_kinds) time.
     /// For IN-glob queries, intersects each kind bitmap with the path range bitmap.
-    pub(super) fn fast_group_by_kind(&self, clauses: &Clauses) -> FindPage {
-        // Build an optional path mask for IN/EXCLUDE glob filtering.
-        let path_mask: Option<RoaringBitmap> =
-            if clauses.in_glob.is_some() || !clauses.exclude_globs.is_empty() {
-                let bm: RoaringBitmap = self
-                    .overlay()
-                    .segments()
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, meta)| passes_resolve_glob(&meta.source_path, clauses))
-                    .flat_map(|(seg_idx, _)| self.overlay().segment_row_range(seg_idx))
-                    .collect();
-                Some(bm)
-            } else {
-                None
-            };
+    ///
+    /// The bitmaps hold only the rows that carry a kind, so the rows carrying
+    /// none are counted by subtracting the rest from the canonical total the
+    /// selected segments declare — the group the scan keys by the empty string.
+    /// `None` hands the query to the scan, which is what a subtraction that
+    /// cannot hold (or a kind table that cannot be read) means: the two sides are
+    /// not describing the same rows, and a group count is not worth guessing.
+    pub(super) fn fast_group_by_kind(&self, clauses: &Clauses) -> Option<FindPage> {
+        // `passes_resolve_glob` decides per source path and a segment is one
+        // source path, so IN/EXCLUDE select whole segments: the canonical total
+        // under them is the sum of the stored per-segment counts, and the mask
+        // that narrows the bitmaps is a union of whole segment row ranges.
+        let path_filtered = clauses.in_glob.is_some() || !clauses.exclude_globs.is_empty();
+        let mut mask = RoaringBitmap::new();
+        let mut canonical_rows: usize = 0;
+        for (idx, meta) in self.overlay().segments().iter().enumerate() {
+            if path_filtered && !passes_resolve_glob(&meta.source_path, clauses) {
+                continue;
+            }
+            canonical_rows = canonical_rows.saturating_add(meta.dedup_row_count as usize);
+            if path_filtered {
+                let _ = mask.insert_range(self.overlay().segment_row_range(idx));
+            }
+        }
 
-        let kind_counts = self.overlay().kind_global_counts(path_mask.as_ref());
+        let kind_counts = self
+            .overlay()
+            .kind_global_counts(path_filtered.then_some(&mask))?;
+        let described: usize = kind_counts.iter().map(|(_, n)| *n).sum();
         let mut results: Vec<SymbolMatch> = kind_counts
             .into_iter()
             .map(|(kind, count)| SymbolMatch {
@@ -481,17 +504,32 @@ impl ColumnarStorage {
                 ..SymbolMatch::default()
             })
             .collect();
-        for pred in &clauses.having_predicates {
-            let p = pred.clone();
-            results.retain(|item| eval_predicate(item, &p));
+
+        // A row of a selected segment either carries a kind or it does not, and
+        // `step5_build_kind_postings` skips the empty one, so the bitmaps
+        // partition only the rows that do. The rest are one group keyed by the
+        // empty string — what the grouping pass makes of a row whose field
+        // resolves to nothing — and its size is the canonical total less the rows
+        // the kinds account for. A remainder that cannot exist means the two
+        // sides are not describing the same rows, so the query goes to the scan
+        // rather than carry a count derived from a contradiction.
+        let unaccounted = canonical_rows.checked_sub(described)?;
+        if unaccounted > 0 {
+            results.push(SymbolMatch {
+                count: Some(unaccounted),
+                ..SymbolMatch::default()
+            });
         }
+
         // IN/EXCLUDE already applied via path_mask — strip to avoid re-filtering.
+        // HAVING is left on: `apply_clauses_counted` runs it, and the gate has
+        // already refused any that names a field these rows do not carry.
         let mut no_group = clauses.clone();
         no_group.group_by = None;
         no_group.in_glob = None;
         no_group.exclude_globs.clear();
         let total = apply_clauses_counted(&mut results, &no_group);
-        FindPage::of(results, total)
+        Some(FindPage::of(results, total))
     }
 
     /// `GROUP BY <posted enrichment field>` answered from the overlay's
@@ -1042,32 +1080,17 @@ impl ColumnarStorage {
                 .segments()
                 .get(seg_idx)
                 .map_or(seg.row_count, |m| m.row_count);
-            if seg.has_name_prefix_index() {
-                any_had_index = true;
-                match seg.name_prefix_rows(prefix) {
-                    Ok(Some(local_bm)) => {
-                        for local_row in local_bm {
-                            let _ = result.insert(seg_base + local_row);
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        // An index that will not decode cannot prune: keep
-                        // every row of the segment a candidate, as for a
-                        // segment with no index at all.
-                        tracing::warn!(
-                            segment = %seg.content_id_hex(),
-                            "name_prefix index unreadable, not pruning: {e:#}"
-                        );
-                        for local_row in 0..row_count {
-                            let _ = result.insert(seg_base + local_row);
-                        }
-                    }
-                }
-            } else {
+            if seg.name_prefix.is_empty() {
                 // No prefix index — include all rows from this segment.
                 for local_row in 0..row_count {
                     let _ = result.insert(seg_base + local_row);
+                }
+            } else {
+                any_had_index = true;
+                if let Some(local_bm) = seg.name_prefix.get(prefix) {
+                    for local_row in local_bm {
+                        let _ = result.insert(seg_base + local_row);
+                    }
                 }
             }
             seg_base = seg_base.saturating_add(row_count);
@@ -1667,28 +1690,18 @@ pub(super) fn glob_to_path_prefix(glob: &str) -> Option<&str> {
 /// alone (no per-row materialisation needed).
 ///
 /// Condition: `GROUP BY` on the file/path field, an empty dirty overlay (dirty
-/// segments are not integrated into the overlay metadata yet), and either no
-/// `WHERE` at all or one built entirely from `fql_kind =` and
-/// `name =`/`LIKE`/`MATCHES` — the body below is the authority on that list.
+/// segments are not integrated into the overlay metadata yet), a `HAVING` and
+/// `ORDER BY` naming only `count` or the grouped field, and either no `WHERE` at
+/// all or one built entirely from `fql_kind = '<value>'`. That is the whole
+/// admitted set: [`counts_exactly`] is the authority on the predicate and says
+/// why every other tier is out, and [`only_the_group_row_is_read`] on the two
+/// aggregate clauses.
 ///
-/// **This path is known to answer wrongly in three shapes, all pinned in
-/// `crates/forgeql/tests/golden/open_defects.json`.**
-/// [`ColumnarStorage::fast_group_by_file`] counts `prefilter_global`'s
-/// candidate bitmap and clears the residual `WHERE` before counting, so no
-/// candidate is ever tested. Only `fql_kind =` is exact, its postings being
-/// canonical-intersected at overlay build; every `name` tier merely proposes,
-/// so `…_counts_only_matching_rows` (a sub-trigram literal, where the tier
-/// declines and every row becomes a candidate),
-/// `…_counts_an_answered_pattern_once` (a literal the tier *answers* and still
-/// over-counts, so no length is safe) and `…_counts_each_row_once` (a plain
-/// `name =`, whose postings `step6_build_name_fst` never intersects with the
-/// canonical set) all count high. Narrowing this list is not on its own a fix,
-/// since `name =` is one of the broken shapes. A fourth pin,
-/// `…_answers_a_having_on_a_row_field`, covers a `HAVING`/`ORDER BY` naming a
-/// field a group row does not carry: this function does not test for one, and
-/// [`ColumnarStorage::fast_group_by_file`] then evaluates it against rows
-/// holding only `path` and `count` and returns an empty set.
-/// [`group_by_enrichment_fast_path_field`] shows the test that belongs here.
+/// With no `WHERE` a group's count is its segment's own `dedup_row_count`; with
+/// one it is that segment's share of a canonical-intersected kind bitmap.
+/// Neither counts a row the answer does not hold. Everything else — a `name`
+/// predicate, an enrichment predicate, a `HAVING` or `ORDER BY` on a field a
+/// group row does not carry — is answered by the scan, which reads each row.
 pub(super) fn group_by_file_fast_path_eligible(clauses: &Clauses, dirty_empty: bool) -> bool {
     if !dirty_empty {
         return false;
@@ -1701,39 +1714,80 @@ pub(super) fn group_by_file_fast_path_eligible(clauses: &Clauses, dirty_empty: b
     {
         return false;
     }
-    // Phase 1: eligible if no where predicates, OR if all where predicates
-    // are fql_kind / name indexed predicates only.
-    // NOTE: enrichment predicates are intentionally excluded — fast_group_by_file
-    // returns empty names, which breaks ordering and dedup in GROUP BY results.
-    // Enrichment-predicate GROUP BY file queries use the normal pipeline, which
-    // benefits from Phase 5 prefilter_global enrichment bitmaps for speed.
-    if clauses.where_predicates.is_empty() {
-        return true;
+    if !only_the_group_row_is_read(clauses, "path") {
+        return false;
     }
-    clauses.where_predicates.iter().all(|pred| {
-        matches!(
-            (crate::field_tiers::canonical(&pred.field), &pred.op),
-            ("fql_kind", CompareOp::Eq)
-                | ("name", CompareOp::Eq | CompareOp::Like | CompareOp::Matches)
-        )
-    })
+    clauses.where_predicates.iter().all(counts_exactly)
+}
+
+/// The one predicate a counted grouping may narrow by: `fql_kind = '<value>'`.
+///
+/// Its postings are the only tier that both verifies and deduplicates:
+/// `step5_build_kind_postings` intersects them with each segment's canonical row
+/// set, so a row sits in exactly one kind bitmap and a cardinality is a count of
+/// rows. Every other tier only proposes. The trigram index over-generates by
+/// construction, and the name FST carries a segment's raw rows because
+/// `step6_build_name_fst` does not canonical-intersect the way step 5 does — so
+/// a plain `name =` proposes the intra-segment duplicates the scan collapses.
+/// Nothing at query time can settle either of those, because the canonical row
+/// set is stored as a per-segment COUNT and not as a set, so there is nothing to
+/// intersect a candidate against; the shapes are handed to the scan, which
+/// decides each row by reading it. Making `name =` exact instead means
+/// canonical-intersecting the name postings at overlay build, which changes
+/// stored index output and owes an `ENRICH_VER` bump.
+///
+/// A non-string value is out for a different reason: `prefilter_global` has no
+/// arm for `fql_kind = <number>`, and a predicate it cannot serve it SKIPS —
+/// leaving every row a candidate rather than failing.
+fn counts_exactly(pred: &crate::ir::Predicate) -> bool {
+    matches!(
+        (
+            crate::field_tiers::canonical(&pred.field),
+            &pred.op,
+            &pred.value
+        ),
+        ("fql_kind", CompareOp::Eq, PredicateValue::String(_))
+    )
+}
+
+/// Whether every `HAVING` and `ORDER BY` names something a counted group row can
+/// answer: its own `count`, or the field the grouping keyed it by.
+///
+/// A group row built from counts carries the grouped value and the count and
+/// nothing else. Those two read on it exactly as they read on the representative
+/// row the scan returns; any other field reads as absent here and as that row's
+/// own value there. So a `HAVING lines >= 2` would be false on every group and
+/// deliver an empty set with full confidence, and an `ORDER BY` on one would
+/// rank every group equal. Both are handed back to the scan.
+fn only_the_group_row_is_read(clauses: &Clauses, grouped_field: &str) -> bool {
+    let reads_a_group_field = |name: &str| {
+        let named = crate::field_tiers::canonical(name);
+        named == "count" || named == grouped_field
+    };
+    clauses
+        .having_predicates
+        .iter()
+        .all(|p| reads_a_group_field(&p.field))
+        && clauses
+            .order_by
+            .as_ref()
+            .is_none_or(|o| reads_a_group_field(&o.field))
 }
 
 /// Returns `true` when `GROUP BY fql_kind` can be served from the overlay's
 /// kind bitmaps alone (no per-row materialisation needed).
 ///
-/// Two answers this route gets wrong are pinned as open defects rather than
-/// fixed here, because fixing either changes what the grouping returns:
-/// `open_defects::a_counted_group_by_fql_kind_keeps_the_kindless_rows` — rows
-/// carrying no kind are dropped instead of grouped under the empty string —
-/// and `open_defects::a_counted_group_by_fql_kind_answers_a_having_on_a_row_field`
-/// — a `HAVING`/`ORDER BY` naming a field the group row does not carry comes
-/// back empty instead of declining to the scan.
+/// Condition: `GROUP BY` on the kind field, an empty dirty overlay, no `WHERE`
+/// at all, and a `HAVING`/`ORDER BY` naming only `count` or the grouped field
+/// ([`only_the_group_row_is_read`]). The kind bitmaps carry no remainder — the
+/// rows with no kind are in none of them — so the counting path derives that
+/// group by subtraction and declines if the arithmetic cannot hold.
 pub(super) fn group_by_kind_fast_path_eligible(clauses: &Clauses, dirty_empty: bool) -> bool {
     dirty_empty
         && clauses.where_predicates.is_empty()
         && matches!(&clauses.group_by, Some(GroupBy::Field(f))
             if crate::field_tiers::canonical(f) == "fql_kind")
+        && only_the_group_row_is_read(clauses, "fql_kind")
 }
 
 /// A segment that stores the column for `field` but posted no values for it —
@@ -1778,27 +1832,7 @@ pub(super) fn group_by_enrichment_fast_path_field(
     if !super::super::segment_builder::POSTING_ENRICHMENT_FIELDS.contains(&field) {
         return None;
     }
-    // A group row from this path carries the grouped value and its count and
-    // nothing else. Those two read on it exactly as they read on the
-    // representative row the scan would have returned; any other name reads the
-    // first matching row's value there and nothing here, so a HAVING or an
-    // ORDER BY naming one is handed back rather than answered differently.
-    let reads_a_group_field = |name: &str| {
-        let named = crate::field_tiers::canonical(name);
-        named == "count" || named == field
-    };
-    if clauses
-        .having_predicates
-        .iter()
-        .any(|p| !reads_a_group_field(&p.field))
-    {
-        return None;
-    }
-    if clauses
-        .order_by
-        .as_ref()
-        .is_some_and(|o| !reads_a_group_field(&o.field))
-    {
+    if !only_the_group_row_is_read(clauses, field) {
         return None;
     }
     Some(field)

@@ -95,11 +95,19 @@ impl ColumnarStorage {
         self.reject_unknown_order_by_field(clauses)?;
         self.reject_unknown_group_by_field(clauses)?;
         let no_dup_paths = !self.overlay().has_duplicate_paths();
-        if group_by_kind_fast_path_eligible(clauses, self.dirty.is_empty()) && no_dup_paths {
-            return Ok(self.fast_group_by_kind(clauses));
+        // Each counted grouping hands the query back — to the pipeline below,
+        // unchanged — wherever the stored counts would not be the collapsed ones.
+        if group_by_kind_fast_path_eligible(clauses, self.dirty.is_empty())
+            && no_dup_paths
+            && let Some(page) = self.fast_group_by_kind(clauses)
+        {
+            return Ok(page);
         }
-        if group_by_file_fast_path_eligible(clauses, self.dirty.is_empty()) && no_dup_paths {
-            return Ok(self.fast_group_by_file(clauses));
+        if group_by_file_fast_path_eligible(clauses, self.dirty.is_empty())
+            && no_dup_paths
+            && let Some(page) = self.fast_group_by_file(clauses)
+        {
+            return Ok(page);
         }
         // A `GROUP BY` over an enrichment field the segments post per value is
         // a handful of stored cardinalities; without this it built every

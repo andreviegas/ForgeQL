@@ -130,16 +130,15 @@
 ,
   {
    "name": "control_a_long_literal_groups_by_file_correctly",
-   "description": "Anchors the cases below. GROUP BY file is counted from the index and admits a WHERE built from fql_kind = and name = / LIKE / MATCHES, and it counts the candidates without testing one of them. This is a case where the counted answer happens to come out right; it is NOT a boundary, and must not be read as one. A name tier that answers still only proposes, so agreement here is the corpus being kind, not the path being exact — see the three cases below, one of which is a longer literal that disagrees by one."
-   ,
+   "description": "Anchors the cases below. A name pattern is no longer counted from the index -- no name tier verifies the candidates it proposes -- so this grouping is answered by the scan, and the 57 files it reports are the files that hold a matching row. The counted route used to answer this shape and happened to agree here, which is exactly why the three cases below exist: agreement was the corpus being kind, not the path being exact. The line pins the route, since a counted group row from this path carries none of its own.",
    "use": "forgeql-pub.frozen",
    "fql": "FIND symbols WHERE name LIKE '%segment%' GROUP BY file ORDER BY count DESC",
    "assert": {
     "row_count": 20,
     "total": 57,
     "rows": [
-     { "count": 339, "group_key": "CHANGELOG.md" },
-     { "count": 154, "group_key": "crates/forgeql-core/tests/overlay_parity.rs" }
+     { "count": 339, "group_key": "CHANGELOG.md", "line": 29 },
+     { "count": 154, "group_key": "crates/forgeql-core/tests/overlay_parity.rs", "line": 6 }
     ]
    }
   },
@@ -160,31 +159,40 @@
   },
   {
    "name": "a_counted_group_by_file_counts_only_matching_rows",
-   "description": "A GROUP BY file counted from the index must return the counts the scan returns — the same contract every other counted grouping is held to. It does not when the WHERE is a name pattern the trigram tier declines to answer.",
+   "description": "A GROUP BY file counted from the index returns the counts the scan returns. It does, now that the only WHERE it counts under is fql_kind = -- the one tier whose postings are intersected with each segment's canonical rows at build. A name pattern the trigram tier declines used to leave every row a candidate and every candidate a count; group_by_file_fast_path_eligible hands the shape to the scan instead, which decides each row by reading it. The line: 3 pins that route: a counted group row carries no line of its own.",
    "use": "forgeql-pub.frozen",
-   "enforcement": "expect_fail",
-   "expect_fail_reason": "fast_group_by_file counts prefilter_global's candidate bitmap per segment and then clears the residual WHERE, so no candidate is ever tested against its own row. This is its loudest shape: a name literal shorter than the trigram width makes the tier return None, prefilter_global skips the predicate, and the candidate set becomes every row -- crates/forgeql/tests/golden.json is reported with 4,344, which is every row it holds, where 23 of them carry a name containing 'ab', and 220 files are reported where 165 hold the name at all. It is not the only shape, and there is no length below which the count is trustworthy: no name tier verifies, so name =, LIKE and MATCHES can all count high (see a_counted_group_by_file_counts_each_row_once and a_counted_group_by_file_counts_an_answered_pattern_once). Only fql_kind = is exact, so narrowing the admitted predicate list is not a fix. The fix is to make the candidate set authoritative before counting it -- intersect it with each segment's canonical rows and test the residual predicate -- which covers every shape; the counts this asserts are the scan's, from the control above",
    "fql": "FIND symbols WHERE name LIKE '%ab%' GROUP BY file ORDER BY count DESC",
    "assert": {
     "row_count": 20,
     "total": 165,
     "rows": [
-     { "count": 533, "group_key": "CHANGELOG.md" },
-     { "count": 97, "group_key": "crates/forgeql-core/tests/overlay_parity.rs" }
+     { "count": 533, "group_key": "CHANGELOG.md", "line": 3 },
+     { "count": 97, "group_key": "crates/forgeql-core/tests/overlay_parity.rs", "line": 1 }
     ]
    }
   }
 ,
   {
    "name": "control_a_kind_predicate_groups_by_file_exactly",
-   "description": "Anchors the case below by isolating which admitted predicate is exact, through the SCAN. The kind postings ARE intersected with each segment's canonical row set at overlay build (step5_build_kind_postings, with the comment saying so), so a fql_kind = predicate beside GROUP BY file counts each row once. Its counted twin is the next case; the two agreeing is the claim, and a control that ran the counted route alone could not have made it."
-   ,
+   "description": "Anchors the case below by isolating the one admitted predicate, through the SCAN. The kind postings ARE intersected with each segment's canonical row set at overlay build (step5_build_kind_postings, with the comment saying so), so a fql_kind = predicate beside GROUP BY file counts each row once. Its counted twin is the next case; the two agreeing is the claim, and a control that ran the counted route alone could not have made it.",
    "use": "forgeql-pub.frozen",
    "fql": "FIND symbols WHERE line >= 0 WHERE fql_kind = 'number' IN 'crates/forgeql-core/src/transforms/diff.rs' GROUP BY file",
    "assert": {
     "row_count": 1,
     "rows": [
      { "count": 215, "group_key": "crates/forgeql-core/src/transforms/diff.rs" }
+    ]
+   }
+  },
+  {
+   "name": "a_counted_group_by_file_still_counts_a_kind_predicate",
+   "description": "The twin, and the reason the fix is not simply to decline everything: fql_kind = stays on the counted route and reaches the control's 215 without materialising a row. The empty name and zero line are what say it stayed -- the scan's row for this group carries a name of its own. Without this case, a later change that declined this shape too would leave every other case in this file green while the counted path quietly died.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'number' IN 'crates/forgeql-core/src/transforms/diff.rs' GROUP BY file",
+   "assert": {
+    "row_count": 1,
+    "rows": [
+     { "count": 215, "group_key": "crates/forgeql-core/src/transforms/diff.rs", "name": "", "line": 0 }
     ]
    }
   },
@@ -203,15 +211,13 @@
   },
   {
    "name": "a_counted_group_by_file_counts_each_row_once",
-   "description": "The second half of the counted GROUP BY file defect, and the more insidious one: it needs no pattern, only a plain name equality — the shape the eligibility rule most obviously intends to admit.",
+   "description": "The half of the defect that needed no pattern, only a plain name equality -- the shape the old eligibility rule most obviously intended to admit, and the one it could not count. step6_build_name_fst merges each segment's raw name postings into the overlay FST without intersecting them with the canonical bitmap that step5_build_kind_postings and collect_posting_enrichment both apply, so a name posting still carries the intra-segment duplicates the scan collapses: this file reported 57 rows named '0' where it holds 48. Nothing at query time can settle that -- the canonical row set is stored as a per-segment count, not as a set -- so the shape is handed to the scan. Making it countable means canonical-intersecting the name postings at overlay build, which changes stored index output and owes an ENRICH_VER bump.",
    "use": "forgeql-pub.frozen",
-   "enforcement": "expect_fail",
-   "expect_fail_reason": "step6_build_name_fst merges each segment's raw name postings into the overlay FST without intersecting them with seg_dedup's canonical bitmap, where step5_build_kind_postings and collect_posting_enrichment both do intersect — so a name posting still carries the intra-segment duplicate rows the scan's dedupe pass collapses. fast_group_by_file counts those candidates without verifying them, and this file reports 57 rows named '0' where it holds 48. So name = is NOT an exact tier, and a fix that narrows group_by_file_fast_path_eligible to fql_kind = and name = would leave this case broken; the fix is to make the candidate set authoritative before counting it, by intersecting with each segment's canonical rows and testing the residual predicate, which is what the pattern cases also need. Canonical-intersecting the name postings at overlay build the way step 5 already does would fix this case alone, and that route changes stored index output -- the overlay carries the name FST, and overlay paths are keyed by ENRICH_VER through versioned_provider -- so it must bump ENRICH_VER in storage/columnar/mod.rs in the same commit, or every cached overlay keeps answering the old way and the change looks green while being dead",
    "fql": "FIND symbols WHERE name = '0' IN 'crates/forgeql-core/src/transforms/diff.rs' GROUP BY file",
    "assert": {
     "row_count": 1,
     "rows": [
-     { "count": 48, "group_key": "crates/forgeql-core/src/transforms/diff.rs" }
+     { "count": 48, "group_key": "crates/forgeql-core/src/transforms/diff.rs", "line": 191 }
     ]
    }
   }
@@ -231,15 +237,13 @@
   },
   {
    "name": "a_counted_group_by_file_counts_an_answered_pattern_once",
-   "description": "The case that says there is no safe literal length. A tier that ANSWERS still only proposes: this four-byte pattern is served by the trigram index, and the counted grouping still comes back one row high. Keep this beside the sub-trigram case so neither is read as marking a boundary the other stays inside.",
+   "description": "The case that said there is no safe literal length. This four-byte pattern IS served by the trigram index, and the counted grouping still came back one row high -- because a tier that answers still only proposes, and nothing tested a proposal against its own row. It is kept beside the sub-trigram case so neither is read as marking a boundary the other stays inside: the fix is not a longer literal, it is that no name tier is admitted to a counted group at all.",
    "use": "forgeql-pub.frozen",
-   "enforcement": "expect_fail",
-   "expect_fail_reason": "counted 769 against the scan's and the row listing's 768. The trigram tier answered this literal, so the candidate set is a real narrowing rather than the whole row range -- and it is still a superset, because name_substring_candidates proposes rows and fast_group_by_file counts them with the residual WHERE cleared. That is the whole defect in one line: no name tier verifies, so there is no literal long enough to trust and no admitted-predicate list that can be narrowed into correctness while a name predicate is on it. Only fql_kind = is exact. Fix by making the candidate set authoritative before counting -- intersect with each segment's canonical rows and test the residual predicate",
    "fql": "FIND symbols WHERE name LIKE '%name%' IN 'crates/forgeql/tests/golden.json' GROUP BY file",
    "assert": {
     "row_count": 1,
     "rows": [
-     { "count": 768, "group_key": "crates/forgeql/tests/golden.json" }
+     { "count": 768, "group_key": "crates/forgeql/tests/golden.json", "line": 10 }
     ]
    }
   }
@@ -256,13 +260,35 @@
   },
   {
    "name": "a_counted_group_by_fql_kind_keeps_the_kindless_rows",
-   "description": "The same defect family as the GROUP BY file cases, in the third counted grouping: a count taken from the index that does not account for every row. GROUP BY fql_kind is the oldest of the three and the only one that loses rows outright rather than counting extra.",
+   "description": "The same contract as the GROUP BY file cases, in the third counted grouping, and the one that lost rows outright rather than counting extra. kind_global_counts emits one group per kind bitmap, and step5_build_kind_postings skips the empty kind at build, so a row whose fql_kind is empty was in no group at all -- 2,169 of 59,636 rows, 3.6% of this corpus, 41 groups reported against the scan's 42. fast_group_by_kind now derives that group by subtraction, the way fast_group_by_enrichment derives its no-value group: the canonical total the selected segments declare, less the rows the kinds account for. Nothing stored changed, so no ENRICH_VER bump was owed.",
    "use": "forgeql-pub.frozen",
-   "enforcement": "expect_fail",
-   "expect_fail_reason": "kind_global_counts emits one group per kind bitmap and no remainder, while step5_build_kind_postings skips the empty kind at build (if kind_str.is_empty() { continue; }), so every row whose fql_kind is empty is dropped from the counted answer with nothing to say it went missing -- 2,169 of 59,636 rows, 3.6% of this corpus, and 41 groups reported against the scan's 42. The scan keys those rows as one empty-string group, the way apply_group_by keys any row whose field does not resolve. The fix is the subtraction fast_group_by_enrichment already does: Sigma dedup_row_count over the selected segments minus the sum of the kind cardinalities, pushed as an empty-keyed group when it is not zero. Nothing stored changes, so no ENRICH_VER bump is owed",
    "fql": "FIND symbols GROUP BY fql_kind",
    "assert": {
     "total": 42
+   }
+  },
+  {
+   "name": "control_the_scan_sizes_the_kindless_group",
+   "description": "The authoritative size of that group, and the shape of the row the scan delivers for it: 2,169 rows, represented by the first of them, which carries a name and a line of its own. The counted case below must agree on the count and differ on exactly those two -- that is what makes the pair a route test rather than two spellings of one query.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE line >= 0 GROUP BY fql_kind HAVING count = 2169",
+   "assert": {
+    "row_count": 1,
+    "rows": [
+     { "count": 2169, "name": "Text", "line": 55 }
+    ]
+   }
+  },
+  {
+   "name": "a_counted_group_by_fql_kind_sizes_the_kindless_group",
+   "description": "The subtraction is exact, not merely non-empty: the counted route puts 2,169 rows in the remainder group, the number the scan reaches by reading every row. A HAVING on count is one of the two the group row can answer, so this stays on the counted route -- and the empty name and zero line prove it did, since the scan's row for this group carries 'Text' at line 55. Without this the group could go missing again, or come back the wrong size, and only the group COUNT above would notice.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols GROUP BY fql_kind HAVING count = 2169",
+   "assert": {
+    "row_count": 1,
+    "rows": [
+     { "count": 2169, "name": "", "line": 0 }
+    ]
    }
   }
 ,
@@ -278,13 +304,14 @@
   },
   {
    "name": "a_counted_group_by_fql_kind_answers_a_having_on_a_row_field",
-   "description": "A HAVING the counted route cannot evaluate must send the query back to the scan, not answer nothing. Zero rows is a claim about the corpus.",
+   "description": "A HAVING the counted route cannot evaluate sends the query back to the scan rather than answering nothing. It used to build SymbolMatch rows carrying only name/fql_kind/count and run the HAVING over them, so a predicate naming any other field was false on every group and the empty set came back with full confidence -- 0 rows where the scan returns 6. group_by_kind_fast_path_eligible now asks only_the_group_row_is_read first, the same test group_by_enrichment_fast_path_field already applied. The struct row pins that the scan answered: a counted group row carries no line of its own.",
    "use": "forgeql-pub.frozen",
-   "enforcement": "expect_fail",
-   "expect_fail_reason": "fast_group_by_kind builds SymbolMatch rows carrying only name/fql_kind/count and then runs the HAVING over them, so a predicate naming any other field is false on every group and the answer is an empty set delivered with full confidence -- 0 rows here where the scan returns 6. fast_group_by_file has the same shape through apply_clauses_counted over rows carrying only path and count (FIND symbols GROUP BY file HAVING lines >= 2 gives 0 against the scan's 3), and an ORDER BY on such a field silently ranks every group equal. The fix already exists in this file's neighbourhood: group_by_enrichment_fast_path_field refuses a HAVING or ORDER BY naming anything but count or the grouped field, and the same test belongs on group_by_kind_fast_path_eligible and group_by_file_fast_path_eligible",
    "fql": "FIND symbols GROUP BY fql_kind HAVING lines >= 2",
    "assert": {
-    "row_count": 6
+    "row_count": 6,
+    "rows": [
+     { "name": "Cli", "line": 13, "count": 221 }
+    ]
    }
   },
   {
@@ -299,13 +326,14 @@
   },
   {
    "name": "a_counted_group_by_file_answers_a_having_on_a_row_field",
-   "description": "The file grouping's half of the same defect, pinned separately because the two eligibility functions are separate and a fix may land on one before the other.",
+   "description": "The file grouping's half of the same contract, pinned separately because the two eligibility functions are separate and a fix could land on one before the other. It handed apply_clauses_counted rows carrying only path and count, so HAVING lines >= 2 was false on every group and 0 rows came back where the scan returns 3. The named row pins the route: a counted group row from this path carries an empty name.",
    "use": "forgeql-pub.frozen",
-   "enforcement": "expect_fail",
-   "expect_fail_reason": "fast_group_by_file hands apply_clauses_counted rows carrying only path and count, so HAVING lines >= 2 is false on every group and 0 rows come back where the scan returns 3. Same cause and same fix as a_counted_group_by_fql_kind_answers_a_having_on_a_row_field",
    "fql": "FIND symbols GROUP BY file HAVING lines >= 2",
    "assert": {
-    "row_count": 3
+    "row_count": 3,
+    "rows": [
+     { "count": 7, "group_key": "crates/forgeql-core/src/zz_blankrepro.rs", "name": "first" }
+    ]
    }
   }
  ]

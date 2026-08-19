@@ -713,47 +713,43 @@ impl Overlay {
     /// materialising any individual symbol rows.  The pairs are returned in the same
     /// sorted order as the `kind_index` blob (lexicographic by kind name).
     ///
+    /// The counts are canonical — `step5_build_kind_postings` intersects each
+    /// segment's postings with its canonical row set — but they describe a SUBSET
+    /// of the rows: that step skips the empty kind, so a row whose `fql_kind` is
+    /// empty is in no posting here. A caller reporting groups owes the remainder
+    /// its own group; these pairs cannot supply it.
+    ///
     /// An optional `path_mask` narrows the count to only rows in a specific path range.
+    ///
+    /// `None` means a table this reads could not be read at all, which is not the
+    /// same answer as a corpus with no kinds: counting on through it would report
+    /// every row as carrying no kind. The caller declines to the scan instead.
     #[must_use]
     pub(super) fn kind_global_counts(
         &self,
         path_mask: Option<&RoaringBitmap>,
-    ) -> Vec<(String, usize)> {
-        let entries: &[KindEntry] =
-            cast_slice(self.mmap.get(self.kind_index_range.clone()).unwrap_or(&[]));
-        let kind_strings = self
-            .mmap
-            .get(self.kind_strings_range.clone())
-            .unwrap_or(&[]);
-        let bitmap_data = self.mmap.get(self.bitmap_data_range.clone()).unwrap_or(&[]);
+    ) -> Option<Vec<(String, usize)>> {
+        let entries: &[KindEntry] = cast_slice(self.mmap.get(self.kind_index_range.clone())?);
+        let kind_strings = self.mmap.get(self.kind_strings_range.clone())?;
+        let bitmap_data = self.mmap.get(self.bitmap_data_range.clone())?;
 
         let mut out = Vec::with_capacity(entries.len());
         for e in entries {
             let s_start = e.kind_offset as usize;
             let s_end = s_start + e.kind_len as usize;
-            let Some(s_bytes) = kind_strings.get(s_start..s_end) else {
-                continue;
-            };
-            let Ok(kind_name) = std::str::from_utf8(s_bytes) else {
-                continue;
-            };
+            let kind_name = std::str::from_utf8(kind_strings.get(s_start..s_end)?).ok()?;
             let bm_start = e.bitmap_offset as usize;
             let bm_end = bm_start + e.bitmap_len as usize;
-            let Some(bm_bytes) = bitmap_data.get(bm_start..bm_end) else {
-                continue;
-            };
-            let Ok(bm) = RoaringBitmap::deserialize_from(bm_bytes) else {
-                continue;
-            };
+            let bm = RoaringBitmap::deserialize_from(bitmap_data.get(bm_start..bm_end)?).ok()?;
             let count = match path_mask {
-                Some(mask) => usize::try_from((bm & mask).len()).unwrap_or(0),
-                None => usize::try_from(bm.len()).unwrap_or(0),
+                Some(mask) => usize::try_from((bm & mask).len()).unwrap_or(usize::MAX),
+                None => usize::try_from(bm.len()).unwrap_or(usize::MAX),
             };
             if count > 0 {
                 out.push((kind_name.to_owned(), count));
             }
         }
-        out
+        Some(out)
     }
 
     /// Per-value canonical row counts for one posted enrichment field, read
