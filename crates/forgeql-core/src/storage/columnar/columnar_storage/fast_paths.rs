@@ -61,9 +61,10 @@ const FIND_BYTES_PER_ROW: usize = 1_600;
 /// as `open_defects::a_counted_group_by_file_counts_only_matching_rows` and
 /// `open_defects::a_counted_group_by_file_counts_each_row_once`. The
 /// enrichment one takes no `WHERE` at all, and also wants the field to have
-/// survived the
-/// overlay's value budget with no segment storing the column without posting
-/// it, and any `HAVING`/`ORDER BY` to read `count` or the grouped field.
+/// survived the overlay's value budget with none of the segments the query
+/// selects storing the column without posting it — an excluded segment is not
+/// asked, its rows being in neither the counts nor the total — and any
+/// `HAVING`/`ORDER BY` to read `count` or the grouped field.
 /// Outside those gates the scan is still what answers.
 ///
 /// **What this bound covers.** Every path that builds a `FIND` result row set

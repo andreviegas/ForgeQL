@@ -1081,8 +1081,10 @@ answers are pinned as open defects. Until they are fixed, read a `GROUP BY file`
 count taken beside a `name` predicate against the same query carrying a `WHERE`
 the counted route does not take, such as `WHERE line >= 0`.
 The enrichment one asks for two things beyond the `WHERE`: the field must
-have survived the overlay's per-field value budget with no segment storing its
-column without posting it, and any `HAVING` or `ORDER BY` must read `count` or
+have survived the overlay's per-field value budget, and none of the segments the
+query actually selects may store its column without posting it — a segment the
+globs exclude is not asked, since its rows are in neither the counts nor the
+total. And any `HAVING` or `ORDER BY` must read `count` or
 the grouped field, since a group row counted this way carries those two and
 nothing else. `IN` and `EXCLUDE` are welcome throughout — a segment is one
 source path, so the globs select whole segments — and they narrow the reading as
