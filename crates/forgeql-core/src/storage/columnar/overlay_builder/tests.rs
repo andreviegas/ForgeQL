@@ -145,9 +145,10 @@ fn fixture_enrich_raw() -> HashMap<String, RoaringBitmap> {
 
 /// The fixture's row sets, laid out as the `enrich_bitmaps` blob.
 fn fixture_enrich_blob() -> Vec<u8> {
+    let enrich_raw = fixture_enrich_raw();
+    let layout = OverlayBuilder::plan_enrich_bitmaps(&enrich_raw).expect("lay out enrich blob");
     let mut blob = Vec::new();
-    OverlayBuilder::write_enrich_bitmaps(&mut blob, &fixture_enrich_raw())
-        .expect("write enrichment blob");
+    OverlayBuilder::write_enrich_bitmaps(&mut blob, &layout).expect("write enrichment blob");
     blob
 }
 
@@ -157,7 +158,10 @@ fn fixture_enrich_blob() -> Vec<u8> {
 /// the entries, the keys and that region.
 ///
 /// This is the oracle for `write_enrich_bitmaps` and the only copy of the
-/// algorithm it replaced.
+/// algorithm it replaced. Its saturating conversions are that algorithm's, and
+/// are deliberately NOT updated to the checked ones the builder now uses: they
+/// differ only for a key past 64 KiB or a region past 4 GiB, which no fixture
+/// produces and which the builder now refuses outright rather than truncating.
 fn reference_enrich_blob(enrich_raw: &HashMap<String, RoaringBitmap>) -> Vec<u8> {
     let mut sorted_enrich: Vec<(&String, &RoaringBitmap)> = enrich_raw.iter().collect();
     sorted_enrich.sort_by_key(|(key, _)| key.as_str());
@@ -214,8 +218,14 @@ fn the_enrichment_blob_matches_the_concatenating_writer() {
         "the fixture must produce entries, or this compares two empty blobs",
     );
 
+    let layout = OverlayBuilder::plan_enrich_bitmaps(&enrich_raw).expect("lay out enrich blob");
     let mut streamed = Vec::new();
-    OverlayBuilder::write_enrich_bitmaps(&mut streamed, &enrich_raw).expect("write blob");
+    OverlayBuilder::write_enrich_bitmaps(&mut streamed, &layout).expect("write blob");
+
+    // The length the entry table was laid out against is the length the blob
+    // actually writes. `blob_of_len` enforces this on every real build; here it
+    // is checked against a fixture with keys and bitmaps of several sizes.
+    assert_eq!(u32::try_from(streamed.len()).expect("fits u32"), layout.len,);
     assert_eq!(streamed, reference_enrich_blob(&enrich_raw));
 }
 

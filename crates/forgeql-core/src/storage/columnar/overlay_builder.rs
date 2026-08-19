@@ -67,6 +67,30 @@ struct OverlayBlobs {
     enrich_raw: HashMap<String, RoaringBitmap>,
 }
 
+/// Byte length of the `enrich_bitmaps` header: the entry count and the length
+/// of the key region, one `u32` each.
+const ENRICH_HEADER_LEN: u32 = 8;
+
+/// The `enrich_bitmaps` blob, laid out but not yet written.
+///
+/// Its entry table is emitted BEFORE the key bytes and the bitmap payload the
+/// entries point into, so their offsets are worked out from key lengths and
+/// `RoaringBitmap::serialized_size()` rather than read off the bytes as they
+/// are appended. `len` is what the blob must come to, and the writer refuses
+/// the overlay when what is written disagrees: a blob whose entries are
+/// misplaced still parses, and every `WHERE <field> = <value>` served from that
+/// key table would answer with another key's rows.
+struct EnrichLayout<'a> {
+    /// Keys and their row sets sorted by key — the order the entry table, the
+    /// key region and the bitmap region are all written in.
+    sorted: Vec<(&'a String, &'a RoaringBitmap)>,
+    entries: Vec<EnrichEntry>,
+    /// Total byte length of the key region.
+    key_data_len: u32,
+    /// Total byte length of the blob.
+    len: u32,
+}
+
 impl OverlayBuilder {
     /// Create a builder.
     ///
@@ -1143,9 +1167,11 @@ impl OverlayBuilder {
         })?;
         drop(index_files_u32);
 
-        w.blob(BLOB_ENRICH_BITMAPS, |sink| {
-            Self::write_enrich_bitmaps(sink, &enrich_raw)
+        let enrich = Self::plan_enrich_bitmaps(&enrich_raw)?;
+        w.blob_of_len(BLOB_ENRICH_BITMAPS, enrich.len, |sink| {
+            Self::write_enrich_bitmaps(sink, &enrich)
         })?;
+        drop(enrich);
         drop(enrich_raw);
 
         // 7.6. File-only entries blob.
@@ -1312,52 +1338,83 @@ impl OverlayBuilder {
         .map_err(Into::into)
     }
 
-    /// Write the `enrich_bitmaps` blob:
+    /// Lay out the `enrich_bitmaps` blob:
     /// `[u32 entry_count][u32 key_data_len][EnrichEntry × entry_count]`
     /// `[key bytes][bitmap bytes]`, keys sorted lexicographically.
     ///
-    /// The entries carry offsets into the two regions that follow them, so both
-    /// regions are measured before anything is written — a bitmap's serialised
-    /// size is known without serialising it. That is what lets the payload go
-    /// straight to the file: the previous version built the concatenated bitmap
-    /// region and then a second buffer holding the whole blob, so the
-    /// enrichment data existed three times over at the moment it was handed to
-    /// the writer.
-    fn write_enrich_bitmaps(
-        out: &mut impl Write,
+    /// The entry table is emitted BEFORE the two regions it points into, so
+    /// both are measured here — a bitmap's serialised size is known without
+    /// serialising it. That is what lets the payload go straight to the file:
+    /// the previous version built the concatenated bitmap region and then a
+    /// second buffer holding the whole blob, so the enrichment data existed
+    /// three times over at the moment it was handed to the writer.
+    ///
+    /// # Errors
+    /// Returns `Err` when a key, a bitmap or the blob itself outgrows the
+    /// widths the format stores them in, rather than truncating an offset and
+    /// writing an index that points into the wrong place.
+    fn plan_enrich_bitmaps(
         enrich_raw: &HashMap<String, RoaringBitmap>,
-    ) -> io::Result<()> {
-        let mut sorted_enrich: Vec<(&String, &RoaringBitmap)> = enrich_raw.iter().collect();
-        sorted_enrich.sort_by_key(|(key, _)| key.as_str());
+    ) -> Result<EnrichLayout<'_>> {
+        let mut sorted: Vec<(&String, &RoaringBitmap)> = enrich_raw.iter().collect();
+        sorted.sort_by_key(|(key, _)| key.as_str());
 
-        let mut entries: Vec<EnrichEntry> = Vec::with_capacity(sorted_enrich.len());
+        let mut entries: Vec<EnrichEntry> = Vec::with_capacity(sorted.len());
         let mut key_offset: u32 = 0;
         let mut bitmap_offset: u32 = 0;
-        for (key, bitmap) in &sorted_enrich {
-            let bitmap_len = u32::try_from(bitmap.serialized_size()).unwrap_or(u32::MAX);
+        for (key, bitmap) in &sorted {
+            let key_len = to_u16(key.len(), "enrichment key too long for u16")?;
+            let bitmap_len = to_u32(
+                bitmap.serialized_size(),
+                "enrichment bitmap too large for u32",
+            )?;
             entries.push(EnrichEntry {
                 key_offset,
-                key_len: u16::try_from(key.len()).unwrap_or(u16::MAX),
+                key_len,
                 _pad: 0,
                 bitmap_offset,
                 bitmap_len,
             });
-            key_offset = key_offset.saturating_add(u32::try_from(key.len()).unwrap_or(u32::MAX));
-            bitmap_offset = bitmap_offset.saturating_add(bitmap_len);
+            key_offset = key_offset
+                .checked_add(u32::from(key_len))
+                .context("enrichment key offset exceeds u32::MAX")?;
+            bitmap_offset = bitmap_offset
+                .checked_add(bitmap_len)
+                .context("enrichment bitmap offset exceeds u32::MAX")?;
         }
 
-        out.write_all(
-            &u32::try_from(entries.len())
-                .unwrap_or(u32::MAX)
-                .to_le_bytes(),
+        let table_len = to_u32(
+            entries.len().saturating_mul(size_of::<EnrichEntry>()),
+            "enrichment entry table too large for u32",
         )?;
-        out.write_all(&key_offset.to_le_bytes())?;
-        out.write_all(cast_slice(entries.as_slice()))?;
-        drop(entries);
-        for (key, _) in &sorted_enrich {
+        let len = ENRICH_HEADER_LEN
+            .checked_add(table_len)
+            .and_then(|total| total.checked_add(key_offset))
+            .and_then(|total| total.checked_add(bitmap_offset))
+            .context("enrichment blob exceeds u32::MAX")?;
+
+        Ok(EnrichLayout {
+            sorted,
+            entries,
+            key_data_len: key_offset,
+            len,
+        })
+    }
+
+    /// Write the blob [`Self::plan_enrich_bitmaps`] laid out, in that layout's
+    /// key order.
+    fn write_enrich_bitmaps(out: &mut impl Write, layout: &EnrichLayout<'_>) -> io::Result<()> {
+        let entry_count = to_u32(
+            layout.entries.len(),
+            "enrichment entry count too large for u32",
+        )?;
+        out.write_all(&entry_count.to_le_bytes())?;
+        out.write_all(&layout.key_data_len.to_le_bytes())?;
+        out.write_all(cast_slice(layout.entries.as_slice()))?;
+        for (key, _) in &layout.sorted {
             out.write_all(key.as_bytes())?;
         }
-        for (_, bitmap) in &sorted_enrich {
+        for (_, bitmap) in &layout.sorted {
             bitmap.serialize_into(&mut *out)?;
         }
         Ok(())
