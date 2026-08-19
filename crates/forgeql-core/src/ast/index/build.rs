@@ -204,23 +204,16 @@ impl SymbolTable {
     /// per run hands those pages back when the run ends, so a caller must hold
     /// the pool for the whole run and let it drop at the end.
     ///
-    /// `pub(crate)` so the incremental reindex paths (`SymbolTable::reindex_files`
-    /// and `ColumnarStorage::reindex_files_impl`) can run their per-file
-    /// parse+enrich on the same big-stack workers — they call `index_file` too and
-    /// would otherwise overflow the small default stack when a single edited file
-    /// is deeply nested.
-    /// `pub(crate)` so the incremental reindex paths (`SymbolTable::reindex_files`
-    /// and `ColumnarStorage::reindex_files_impl`) can run their per-file
-    /// parse+enrich on the same big-stack workers — they call `index_file` too and
-    /// would otherwise overflow the small default stack when a single edited file
-    /// is deeply nested.
+    /// Private, and no longer shared with the incremental reindex paths: those
+    /// take [`Self::with_indexing_pool`]'s one-worker pool, so the only caller
+    /// of this one is the build itself.
     ///
     /// # Errors
     /// Returns `Err` when the OS refuses to spawn the workers. That used to be a
     /// panic, which was defensible while the pool was built once at first index
     /// and is not now that one is built per run: a transient spawn refusal on a
     /// loaded machine would take down a mutation.
-    pub(crate) fn build_indexing_pool() -> Result<rayon::ThreadPool> {
+    fn build_indexing_pool() -> Result<rayon::ThreadPool> {
         Self::pool_with_threads(Self::index_thread_count())
     }
 
@@ -743,10 +736,10 @@ impl SymbolTable {
         lang_registry: &LanguageRegistry,
         workspace_root: Option<&Path>,
     ) -> Result<()> {
-        // Run the per-file parse+enrich on the big-stack indexing pool: `index_file`
+        // Run the per-file parse+enrich on a big-stack worker: `index_file`
         // walks the AST recursively and a single deeply-nested edited file would
-        // otherwise overflow rayon's default ~2 MiB stack. The full build already
-        // does this (see `build_indexing_pool`); the incremental path needs it too.
+        // otherwise overflow rayon's default ~2 MiB stack. One worker is enough
+        // — the loop below is sequential (see `with_indexing_pool`).
         Self::with_indexing_pool(|| self.reindex_files_inner(paths, lang_registry, workspace_root))?
     }
 

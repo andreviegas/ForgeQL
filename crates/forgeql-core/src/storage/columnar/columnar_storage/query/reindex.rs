@@ -24,10 +24,10 @@ impl ColumnarStorage {
         paths: &[PathBuf],
         tombstones: &OrdinalTombstones,
     ) -> Result<()> {
-        // Run the per-file parse+enrich on the big-stack indexing pool: `index_file`
+        // Run the per-file parse+enrich on a big-stack worker: `index_file`
         // walks the AST recursively and a single deeply-nested edited file would
-        // otherwise overflow rayon's default ~2 MiB stack. The full build already
-        // does this (see `SymbolTable::build_indexing_pool`); reindex needs it too.
+        // otherwise overflow rayon's default ~2 MiB stack. One worker is enough
+        // — the loop below is sequential (see `SymbolTable::with_indexing_pool`).
         SymbolTable::with_indexing_pool(|| self.reindex_files_on_pool(paths, tombstones))?
     }
 
