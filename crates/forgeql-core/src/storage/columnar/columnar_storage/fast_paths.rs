@@ -55,10 +55,11 @@ const FIND_BYTES_PER_ROW: usize = 1_600;
 /// segments and cannot be narrowed to what a predicate selects — where
 /// `GROUP BY file` groups by segment and so admits a `WHERE` built from
 /// `fql_kind =` and `name =`/`LIKE`/`MATCHES`, an admission wider than that
-/// argument supports and one whose hole is pinned as
-/// `open_defects::a_counted_group_by_file_counts_only_matching_rows`: the
-/// pattern tiers propose candidates a residual `WHERE` would still have to
-/// test, and `fast_group_by_file` clears that residual before counting. The
+/// argument supports: `fast_group_by_file` counts `prefilter_global`'s
+/// candidates and clears the residual `WHERE` first, so only `fql_kind =` is
+/// exact and a `name` predicate can count high. Both correct answers are pinned
+/// as `open_defects::a_counted_group_by_file_counts_only_matching_rows` and
+/// `open_defects::a_counted_group_by_file_counts_each_row_once`. The
 /// enrichment one takes no `WHERE` at all, and also wants the field to have
 /// survived the
 /// overlay's value budget with no segment storing the column without posting
@@ -1661,9 +1662,24 @@ pub(super) fn glob_to_path_prefix(glob: &str) -> Option<&str> {
 /// Returns `true` when `GROUP BY file/path` can be served from segment metadata
 /// alone (no per-row materialisation needed).
 ///
-/// Condition: GROUP BY on the file/path field, no WHERE predicates (we cannot
-/// predict which rows match a filter without reading them), dirty overlay empty
-/// (dirty segments are not integrated into the overlay metadata yet).
+/// Condition: `GROUP BY` on the file/path field, an empty dirty overlay (dirty
+/// segments are not integrated into the overlay metadata yet), and either no
+/// `WHERE` at all or one built entirely from `fql_kind =` and
+/// `name =`/`LIKE`/`MATCHES` — the body below is the authority on that list.
+///
+/// **That admission is known to be too wide, and the counts it produces can be
+/// too high.** [`ColumnarStorage::fast_group_by_file`] counts
+/// `prefilter_global`'s candidate bitmap and clears the residual `WHERE` before
+/// counting, so no candidate is ever tested. Only `fql_kind =` is exact, its
+/// postings being intersected with each segment's canonical rows at overlay
+/// build. A `name` pattern the trigram tier declines leaves every row a
+/// candidate; a plain `name =` carries the intra-segment duplicates the answer
+/// collapses, because `step6_build_name_fst` does not do the intersection
+/// `step5_build_kind_postings` does. Both correct answers are pinned as
+/// `open_defects::a_counted_group_by_file_counts_only_matching_rows` and
+/// `open_defects::a_counted_group_by_file_counts_each_row_once`; narrowing this
+/// list is not on its own a fix, since `name =` is one of the shapes that
+/// breaks.
 pub(super) fn group_by_file_fast_path_eligible(clauses: &Clauses, dirty_empty: bool) -> bool {
     if !dirty_empty {
         return false;

@@ -1070,12 +1070,16 @@ like any other grouping — and on a large enough corpus refused — and `GROUP 
 fql_kind` refuses a `WHERE` outright for the same reason. `GROUP BY file` is the
 exception: its groups are the segments themselves, so a `WHERE` built from
 `fql_kind =` and `name =`/`LIKE`/`MATCHES` is intersected against them and still
-rides the counted route — with one known hole, recorded here rather than papered
-over. A `name` pattern the index tier cannot answer, which a literal shorter
-than three bytes is, leaves every row a candidate, and that grouping then
-reports each file's whole row count. The correct answer is pinned as an open
-defect; until it is fixed, read such a count against the same query carrying a
-`WHERE` the counted route does not take.
+rides the counted route. Only the `fql_kind =` form of that is exact, and the
+gap is recorded here rather than papered over: the candidate rows a `name`
+predicate proposes are never tested before they are counted, so such a count can
+come back **larger than the answer**. A `name` pattern the index tier cannot
+answer — a literal shorter than three bytes — leaves every row a candidate and
+the grouping reports each file's whole row count; a plain `name =` counts the
+duplicate rows inside a file that the answer collapses into one. Both correct
+answers are pinned as open defects. Until they are fixed, read a `GROUP BY file`
+count taken beside a `name` predicate against the same query carrying a `WHERE`
+the counted route does not take, such as `WHERE line >= 0`.
 The enrichment one asks for two things beyond the `WHERE`: the field must
 have survived the overlay's per-field value budget with no segment storing its
 column without posting it, and any `HAVING` or `ORDER BY` must read `count` or
@@ -1084,7 +1088,8 @@ nothing else. `IN` and `EXCLUDE` are welcome throughout — a segment is one
 source path, so the globs select whole segments — and they narrow the reading as
 well as the answer.
 
-Counted or scanned, the groups and their sizes are the same: the stored
+For the enrichment grouping — the one with no `WHERE` to reconcile — counted or
+scanned gives the same groups and the same sizes: the stored
 cardinalities are drawn from the same collapsed rows the scan dedupes to, and
 the rows the field says nothing about are the one group keyed by the empty
 string either way. What differs is the order, wherever the clause does not

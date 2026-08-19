@@ -163,7 +163,7 @@
    "description": "A GROUP BY file counted from the index must return the counts the scan returns — the same contract every other counted grouping is held to. It does not when the WHERE is a name pattern the trigram tier declines to answer.",
    "use": "forgeql-pub.frozen",
    "enforcement": "expect_fail",
-   "expect_fail_reason": "group_by_file_fast_path_eligible admits name LIKE / MATCHES, but those tiers PROPOSE candidates rather than decide, and fast_group_by_file counts prefilter_global's candidate bitmap per segment and then clears the residual WHERE, so nothing ever tests a candidate against its own name; a literal shorter than the trigram width makes the tier return None, prefilter_global skips the predicate, and the candidate set becomes every row — so each file reports its WHOLE row count -- crates/forgeql/tests/golden.json is reported with 4,344, which is every row it holds, where 23 of them carry a name containing 'ab' -- and 220 files are reported where 165 hold the name at all. The fix is either to verify candidates against the stored names before counting, or to narrow the admission to the tiers that decide (fql_kind =, name =, and name MATCHES only where the name FST answered); the counts this asserts are the scan's, from the control above",
+   "expect_fail_reason": "fast_group_by_file counts prefilter_global's candidate bitmap per segment and then clears the residual WHERE, so no candidate is ever tested against its own row. This is the pattern half of that: a name literal shorter than the trigram width makes the tier return None, prefilter_global skips the predicate, and the candidate set becomes every row -- crates/forgeql/tests/golden.json is reported with 4,344, which is every row it holds, where 23 of them carry a name containing 'ab', and 220 files are reported where 165 hold the name at all. The other half is pinned by a_counted_group_by_file_counts_each_row_once below, and neither is fixed by narrowing the admitted predicates to fql_kind = and name =: only fql_kind = is exact. The fix is to make the candidate set authoritative before counting it -- intersect it with each segment's canonical rows and test the residual predicate -- which covers both halves; the counts this asserts are the scan's, from the control above",
    "fql": "FIND symbols WHERE name LIKE '%ab%' GROUP BY file ORDER BY count DESC",
    "assert": {
     "row_count": 20,
@@ -171,6 +171,47 @@
     "rows": [
      { "count": 533, "group_key": "CHANGELOG.md" },
      { "count": 97, "group_key": "crates/forgeql-core/tests/overlay_parity.rs" }
+    ]
+   }
+  }
+,
+  {
+   "name": "control_a_kind_predicate_groups_by_file_exactly",
+   "description": "Anchors the case below by isolating which admitted predicate is exact. The kind postings ARE intersected with each segment's canonical row set at overlay build (step5_build_kind_postings, with the comment saying so), so a fql_kind = predicate beside GROUP BY file counts each row once and the counted answer equals the scan's."
+   ,
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'number' IN 'crates/forgeql-core/src/transforms/diff.rs' GROUP BY file",
+   "assert": {
+    "row_count": 1,
+    "rows": [
+     { "count": 215, "group_key": "crates/forgeql-core/src/transforms/diff.rs" }
+    ]
+   }
+  },
+  {
+   "name": "control_the_scan_counts_each_name_once",
+   "description": "The authoritative answer the case below asserts. This file holds 48 rows named '0'; the row listing returns 48 of them, and the scan's grouping counts 48."
+   ,
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE line >= 0 WHERE name = '0' IN 'crates/forgeql-core/src/transforms/diff.rs' GROUP BY file",
+   "assert": {
+    "row_count": 1,
+    "rows": [
+     { "count": 48, "group_key": "crates/forgeql-core/src/transforms/diff.rs" }
+    ]
+   }
+  },
+  {
+   "name": "a_counted_group_by_file_counts_each_row_once",
+   "description": "The second half of the counted GROUP BY file defect, and the more insidious one: it needs no pattern, only a plain name equality — the shape the eligibility rule most obviously intends to admit.",
+   "use": "forgeql-pub.frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "step6_build_name_fst merges each segment's raw name postings into the overlay FST without intersecting them with seg_dedup's canonical bitmap, where step5_build_kind_postings and collect_posting_enrichment both do intersect — so a name posting still carries the intra-segment duplicate rows the scan's dedupe pass collapses. fast_group_by_file counts those candidates without verifying them, and this file reports 57 rows named '0' where it holds 48. So name = is NOT an exact tier, and a fix that narrows group_by_file_fast_path_eligible to fql_kind = and name = would leave this case broken; the fix is to make the candidate set authoritative before counting it, by intersecting with each segment's canonical rows (and testing the residual predicate, which is what the pattern half above also needs), or by canonical-intersecting the name postings at overlay build the way step 5 already does",
+   "fql": "FIND symbols WHERE name = '0' IN 'crates/forgeql-core/src/transforms/diff.rs' GROUP BY file",
+   "assert": {
+    "row_count": 1,
+    "rows": [
+     { "count": 48, "group_key": "crates/forgeql-core/src/transforms/diff.rs" }
     ]
    }
   }

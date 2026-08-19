@@ -39,11 +39,17 @@
   scans exactly as it did, as `GROUP BY fql_kind` beside any `WHERE` does. Note
   that `GROUP BY file` is not in that company — it groups by segment, so it
   admits a `WHERE` built from `fql_kind =` and `name =`/`LIKE`/`MATCHES` and
-  counts the intersection. Writing that down turned up a defect in it, now
-  pinned as `open_defects::a_counted_group_by_file_counts_only_matching_rows`
-  and untouched here: the pattern tiers propose candidates rather than decide,
-  and a `name` literal shorter than the trigram width leaves every row a
-  candidate, so that grouping reports each file's whole row count. Extending any
+  counts the intersection. Writing that down turned up a defect in it, pinned
+  here and left unfixed: `fast_group_by_file` counts those candidates without
+  testing one of them, having cleared the residual `WHERE` first. A `name`
+  literal shorter than the trigram width leaves every row a candidate, so the
+  grouping reports each file's whole row count
+  (`open_defects::a_counted_group_by_file_counts_only_matching_rows`); and a
+  plain `name =` counts the intra-segment duplicates the answer collapses,
+  because the name postings are not intersected with each segment's canonical
+  rows the way the kind and enrichment postings are
+  (`…_counts_each_row_once`). `fql_kind =` is the only admitted predicate that
+  counts exactly. Extending any
   `WHERE` admission to the enrichment table has to clear the bar that one does
   not — per predicate tier, that the candidate set is exact — which is why this
   change takes none. `IN` and `EXCLUDE` are welcome everywhere: a segment is one
