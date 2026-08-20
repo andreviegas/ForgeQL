@@ -1080,17 +1080,32 @@ impl ColumnarStorage {
                 .segments()
                 .get(seg_idx)
                 .map_or(seg.row_count, |m| m.row_count);
-            if seg.name_prefix.is_empty() {
+            if seg.has_name_prefix_index() {
+                any_had_index = true;
+                match seg.name_prefix_rows(prefix) {
+                    Ok(Some(local_bm)) => {
+                        for local_row in local_bm {
+                            let _ = result.insert(seg_base + local_row);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        // An index that will not decode cannot prune: keep
+                        // every row of the segment a candidate, as for a
+                        // segment with no index at all.
+                        tracing::warn!(
+                            segment = %seg.content_id_hex(),
+                            "name_prefix index unreadable, not pruning: {e:#}"
+                        );
+                        for local_row in 0..row_count {
+                            let _ = result.insert(seg_base + local_row);
+                        }
+                    }
+                }
+            } else {
                 // No prefix index — include all rows from this segment.
                 for local_row in 0..row_count {
                     let _ = result.insert(seg_base + local_row);
-                }
-            } else {
-                any_had_index = true;
-                if let Some(local_bm) = seg.name_prefix.get(prefix) {
-                    for local_row in local_bm {
-                        let _ = result.insert(seg_base + local_row);
-                    }
                 }
             }
             seg_base = seg_base.saturating_add(row_count);
