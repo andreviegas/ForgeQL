@@ -6,6 +6,46 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.177.0] — 2026-08-20 — every counted GROUP BY answers what the scan answers
+
+### Fixed
+
+- The two older counted groupings returned numbers no row had been consulted
+  for. `GROUP BY file` counted whatever candidate set the index tiers proposed
+  and cleared the residual `WHERE` before delivering, so nothing was ever tested
+  against its own row: on a Zephyr checkout `WHERE name LIKE '%ab%' GROUP BY
+  file` reported 32,612 files where 11,099 hold a matching name, and gave its
+  top file 76,310 rows — more than that file's whole deduplicated row count of
+  67,595. It now admits one predicate, `fql_kind = '<value>'`, whose postings
+  are intersected with each segment's canonical rows at index build and are the
+  only tier that both verifies and deduplicates. No name tier is admitted at any
+  literal length, because nothing at query time can settle a candidate: the
+  canonical row set is stored as a per-segment count, not as a set. Those
+  queries are answered by the scan, which reads each row — slower than the wrong
+  answer was, and on a large enough corpus refusable by the result budget.
+
+- `GROUP BY fql_kind` dropped the rows whose kind is empty, which the kind
+  postings skip at build: 2,169 of 59,636 rows on this repository's own corpus,
+  41 groups where the scan finds 42. They are now the remainder — the canonical
+  total of the selected segments less the rows the kinds account for — and a
+  subtraction that cannot hold sends the query to the scan instead. Reading the
+  kind index is all-or-nothing for the same reason: skipping past an unreadable
+  entry would have reported those rows as carrying no kind.
+
+- Both routes now hand back a `HAVING` or `ORDER BY` naming a field a counted
+  group row does not carry, the test the enrichment grouping already applied.
+  `GROUP BY fql_kind HAVING lines >= 2` answered nothing against the scan's six
+  groups.
+
+### Notes
+
+- Six golden cases that pinned these as open defects now assert the behaviour,
+  and each also pins *which route* answered — a counted group row carries the
+  grouped value and its count and nothing else, where a scanned one is the first
+  row of its group and carries a name and a line. Without that a case cannot
+  tell a correct count from a correct count reached the other way, and would go
+  on passing if the counted path quietly died.
+
 ## [0.176.0] — 2026-08-19 — a GROUP BY the index already counted
 
 ### Added
