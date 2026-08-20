@@ -6,6 +6,37 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.178.0] — 2026-08-20 — the overlay is written as it is built, not held whole
+
+### Performance
+
+- The overlay build no longer holds every blob in memory until the end. Each is
+  written and dropped at the point the file's layout puts it, with the header
+  and its table of contents filled in last; the kind, trigram and enrichment
+  bitmaps stay Roaring until the write, so the per-bitmap serialised buffers and
+  the concatenated copies are gone. The trigram reduce folds one partial map per
+  worker instead of one per split, and the indexing thread pool is built per
+  index run rather than for the life of the process, so its stacks are released
+  when the run ends. Measured on a cold index of a 589,461-row corpus: peak RSS
+  1,065 MB → 826 MB, the overlay build's own peak 1.0 GiB → 826 MiB, and the
+  build itself 1,763 ms → 1,366 ms. **The overlay is byte-identical** — same
+  checksum from both writers on the same corpus — so nothing reindexes.
+
+- The incremental reindex runs on one worker instead of a pool. It parses files
+  in sequence, so the rest were idle.
+
+### Notes
+
+- The writer now refuses rather than producing a file it cannot vouch for: a
+  blob out of layout order, an unfinished table of contents, and — for every
+  index written before the payload it points into — a payload whose length
+  contradicts that index. All three refuse before the file is published, so the
+  previous overlay survives. That last one converts a silent wrong-answer mode
+  into a failed build.
+
+- The indexing pool now defaults to half the available cores, overridable with
+  `FORGEQL_INDEX_THREADS`.
+
 ## [0.177.0] — 2026-08-20 — every counted GROUP BY answers what the scan answers
 
 ### Fixed
