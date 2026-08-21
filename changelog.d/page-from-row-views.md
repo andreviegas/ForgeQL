@@ -51,5 +51,6 @@
   indexer emitted, and `name` is a grammar field on essentially every definition
   node. So essentially every code segment shadowed it — 308 of the 411 segments
   of this repository's own index, each excluded from the cheaper route for every
-  query. Only `usages`, `node_id` and `count` remain unreadable from a view,
+  query, and `name` was not the only such column: 211 of them carry a `path` one.
+  Only `usages`, `node_id` and `count` remain unreadable from a view,
   because a result row fills those in from outside its own columns.

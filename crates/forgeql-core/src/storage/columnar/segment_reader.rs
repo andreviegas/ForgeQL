@@ -433,16 +433,19 @@ impl<'a> SegRowRef<'a> {
 /// reads — that predicate falls through to the map on both readers — without
 /// changing what the ordering and the collapse key read, which is the struct.
 /// Treating the shadow as if it withheld the field cost far more than it
-/// saved, and the reason is structural rather than incidental: `extract_fields`
-/// (`ast/index/file_indexer/rows.rs`) copies EVERY tree-sitter grammar field of
-/// every emitted node into the row's map, and the builder turns each into an
-/// enrichment column. `name` is a grammar field on essentially every definition
-/// node — `function_item`, `struct_item`, `preproc_def`, `field_declaration` —
-/// so essentially every code segment shadows it: 308 of the 411 segments of
-/// this repository's index, each of them refused the cheap route for every
-/// query. It is not a property of macros, and not a fixed list: `path` is a
-/// grammar field in several grammars, and a grammar adding a field named after
-/// a struct-backed name would shadow that one too, silently.
+/// saved, and the reason is structural rather than incidental. A segment's
+/// enrichment columns are the enrichers' output PLUS every tree-sitter grammar
+/// field of every emitted node, which `extract_fields`
+/// (`ast/index/file_indexer/rows.rs`) copies wholesale into the row's map for
+/// the builder to turn into columns. `name` is what most grammars call a
+/// definition's identifier child, so essentially every code segment carries a
+/// `name` column: 308 of the 411 segments of this repository's index, each of
+/// them refused the cheap route for every query.
+///
+/// It is not a property of macros, and `name` is not the only one it has
+/// already happened to — 211 of those same segments carry a column called
+/// `path`. Nor is it a closed list: a grammar naming a field after a
+/// struct-backed name shadows that one too, and nothing announces it.
 pub(crate) const VIEW_CANNOT_ANSWER: &[&str] = &["node_id", "usages", "count"];
 
 /// Whether a row view ranks and keys `field` the way the row it would build

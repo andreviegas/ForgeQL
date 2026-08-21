@@ -143,27 +143,44 @@ fn the_row_bound_is_derived_from_the_memory_budget() {
 /// the docs say it costs.
 ///
 /// The size is read off the type rather than guessed at, so this cannot drift
-/// from the struct — but it CAN drift from the nine places that quote it in
-/// prose: `FIND_BYTES_PER_VIEW`'s own comment, `DEFAULT_FIND_MAX_VIEWS`,
-/// `doc/syntax.md`, `doc/architecture.md`, the four agent documents, and the
-/// changelog fragment, all of which say "48 bytes" and "about 44.7 million".
-/// The fragment is on that list deliberately: it is a live file in the tree
-/// until the integrator assembles it into `CHANGELOG.md`, so a number left
-/// stale there is published rather than merely wrong. Growing the view is
-/// legal; shipping it with those sentences still claiming the old number is
-/// not, and this is what says so.
+/// from the struct — but it CAN drift from the prose, in two separate ways that
+/// do not overlap.
+///
+/// The BYTE figure is quoted in nine places: `FIND_BYTES_PER_VIEW`'s own
+/// comment, `DEFAULT_FIND_MAX_VIEWS`, `doc/syntax.md`, `doc/architecture.md`,
+/// the four agent documents, and the changelog fragment, all of which say
+/// "48 bytes" and "about 44.7 million". The fragment is on that list
+/// deliberately: it is a live file in the tree until the integrator assembles
+/// it into `CHANGELOG.md`, so a number left stale there is published rather
+/// than merely wrong.
+///
+/// The RATIO against a built row is quoted in three more, and the byte figure
+/// appears in none of them, so nobody working the list above would open them:
+/// [`super::DEFAULT_FIND_MAX_ROWS`] ("a thirty-third of the size"),
+/// `page_from_row_views` ("about a thirty-third of its size") and
+/// `carried_row_budget_exceeded` ("roughly thirty times looser"). The last of
+/// those interpolates the byte constants and hand-writes the ratio, so it is
+/// half safe and half not — which is exactly the kind of site a shorter list
+/// would have discharged wrongly.
+///
+/// Growing the view is legal; shipping it with any of those twelve sentences
+/// still claiming the old number is not, and this is what says so.
 #[test]
 fn a_view_costs_what_the_scan_bound_prices_it_at() {
     assert_eq!(
         super::FIND_BYTES_PER_VIEW,
         48,
-        "a row view has changed size. Re-measure and update the figure in \
-         FIND_BYTES_PER_VIEW, DEFAULT_FIND_MAX_VIEWS, doc/syntax.md, \
-         doc/architecture.md, the four agent documents, and the changelog \
-         fragment changelog.d/page-from-row-views.md, which all quote it. The \
-         fragment counts: it is a live file until the integrator assembles it, \
-         so a stale number there ships into CHANGELOG.md. \
-         carried_row_budget_exceeded interpolates the constant and cannot drift."
+        "a row view has changed size. Two figures go stale, not one. The BYTE \
+         figure is quoted in FIND_BYTES_PER_VIEW, DEFAULT_FIND_MAX_VIEWS, \
+         doc/syntax.md, doc/architecture.md, the four agent documents, and the \
+         changelog fragment changelog.d/page-from-row-views.md — the fragment \
+         counts, because it is a live file until the integrator assembles it \
+         and a stale number there ships into CHANGELOG.md. The RATIO against a \
+         built row is quoted separately, and in places the byte figure is not: \
+         DEFAULT_FIND_MAX_ROWS ('a thirty-third of the size'), \
+         page_from_row_views ('about a thirty-third of its size') and \
+         carried_row_budget_exceeded ('roughly thirty times looser'), which \
+         interpolates the byte figures but hand-writes that ratio. Update both."
     );
     const {
         assert!(
