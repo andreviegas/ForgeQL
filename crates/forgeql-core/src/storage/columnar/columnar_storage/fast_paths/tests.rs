@@ -143,20 +143,27 @@ fn the_row_bound_is_derived_from_the_memory_budget() {
 /// the docs say it costs.
 ///
 /// The size is read off the type rather than guessed at, so this cannot drift
-/// from the struct — but it CAN drift from the figure quoted in
-/// `FIND_BYTES_PER_VIEW`'s own comment, in `DEFAULT_FIND_MAX_VIEWS`, in the
-/// refusal text and in four agent documents, all of which say "48 bytes" and
-/// "about 44.7 million". Growing the view is legal; shipping it with those
-/// sentences still claiming the old number is not, and this is what says so.
+/// from the struct — but it CAN drift from the nine places that quote it in
+/// prose: `FIND_BYTES_PER_VIEW`'s own comment, `DEFAULT_FIND_MAX_VIEWS`,
+/// `doc/syntax.md`, `doc/architecture.md`, the four agent documents, and the
+/// changelog fragment, all of which say "48 bytes" and "about 44.7 million".
+/// The fragment is on that list deliberately: it is a live file in the tree
+/// until the integrator assembles it into `CHANGELOG.md`, so a number left
+/// stale there is published rather than merely wrong. Growing the view is
+/// legal; shipping it with those sentences still claiming the old number is
+/// not, and this is what says so.
 #[test]
 fn a_view_costs_what_the_scan_bound_prices_it_at() {
     assert_eq!(
         super::FIND_BYTES_PER_VIEW,
         48,
         "a row view has changed size. Re-measure and update the figure in \
-         FIND_BYTES_PER_VIEW, DEFAULT_FIND_MAX_VIEWS, carried_row_budget_exceeded, \
-         doc/syntax.md, doc/architecture.md and the four agent documents, which \
-         all quote it"
+         FIND_BYTES_PER_VIEW, DEFAULT_FIND_MAX_VIEWS, doc/syntax.md, \
+         doc/architecture.md, the four agent documents, and the changelog \
+         fragment changelog.d/page-from-row-views.md, which all quote it. The \
+         fragment counts: it is a live file until the integrator assembles it, \
+         so a stale number there ships into CHANGELOG.md. \
+         carried_row_budget_exceeded interpolates the constant and cannot drift."
     );
     const {
         assert!(
@@ -328,10 +335,11 @@ fn choosing_by_row_view_picks_what_choosing_by_built_row_picks() {
 /// reported the field absent while the built row still answered from its own
 /// struct. It was cheaper to make the view read the struct's column: measured
 /// on this repository, 308 of 411 segments carry a column called `name` —
-/// one `#define` or `macro_rules!` gives a file's segment the macro enricher's
-/// `name` column — so the refusal took three quarters of every scan off the
-/// cheap route. That is also why the question is no longer asked of a segment
-/// at all.
+/// `extract_fields` writes every tree-sitter grammar field of every emitted
+/// node as an enrichment column, and `name` is a grammar field on essentially
+/// every definition node — so the refusal took three quarters of every scan off
+/// the cheap route. That is also why the question is no longer asked of a
+/// segment at all: nothing about which file a segment came from bears on it.
 ///
 /// Both earlier faults passed the whole suite. What found them was emptying the
 /// path's result and watching which tests changed — one pre-existing case, and
@@ -893,9 +901,11 @@ fn duplicates_collapse_before_the_bounded_choice_sheds_anything() {
 /// column reads the same value. Only `WHERE fql_kind = 42`, which reaches the
 /// map on a built row, reaches the shadow, and it reaches it on both readers.
 ///
-/// The cost of the old reading was not theoretical: in this repository 308 of
-/// 411 segments carry an enrichment column called `name`, one per file holding
-/// a `#define` or a `macro_rules!`, and every one of them was refused.
+/// The cost of the old reading was not theoretical, and its cause was not one
+/// enricher: `extract_fields` writes every tree-sitter grammar field of every
+/// emitted node as an enrichment column, and `name` is a grammar field on
+/// essentially every definition node, so 308 of the 411 segments of this
+/// repository's index carry one and every one of them was refused.
 #[test]
 fn a_segment_that_shadows_a_key_field_still_travels_as_views() {
     use crate::filter::ClauseTarget as _;

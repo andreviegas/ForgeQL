@@ -1397,11 +1397,21 @@ impl ColumnarStorage {
     /// collapsing its own duplicates is no longer the whole collapse and a row
     /// shed on rank might have been about to merge into a survivor.
     ///
-    /// It is deliberately not [`Self::trim_budget`], which is stricter on two
-    /// counts this route does not need: that one is the budget for a running
-    /// trim over rows that are already built, so it wants `k` small enough for
-    /// the window to be cheap and no `OFFSET`, neither of which bears on a
-    /// window of views.
+    /// It is deliberately not [`Self::trim_budget`], which carries two further
+    /// conditions — and they are not the same kind of condition, so they are
+    /// not dropped for the same reason.
+    ///
+    /// `k <= TOPK_THRESHOLD` is a COST guard: past it the running trim's window
+    /// is no longer cheap to hold in built rows. This route holds views, and has
+    /// its own bound on how many ([`carried_row_budget_exceeded`]), so it does
+    /// not need that one.
+    ///
+    /// `offset == 0` is a CORRECTNESS condition, and dropping it would be a bug
+    /// on the trim. That trim retains `topk_keep(limit)`, which simply does not
+    /// contain the rows a page starting at `OFFSET` needs. This route is sound
+    /// only because it bounds at `LIMIT + OFFSET` instead, as the paragraph
+    /// above argues — so nobody should read this as licence to relax
+    /// [`Self::topk_trim_for`], which would silently drop rows.
     fn view_page_bound(&self, clauses: &Clauses) -> Option<usize> {
         if !self.per_segment_collapse_is_whole() {
             return None;

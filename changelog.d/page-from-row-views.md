@@ -46,8 +46,10 @@
   now does so for a field whose name a segment's own enrichment column shares.
   It used to report such a field absent, which disqualified the entire segment
   from every route that ranks or keys rows before building them. That was not a
-  corner case: 308 of the 411 segments of this repository's index carry an
-  enrichment column called `name` — one for every file holding a macro
-  definition — and each of them was excluded from the cheaper route for every
+  corner case, and not an accident of one enricher: a file's enrichment columns
+  are, among other things, every tree-sitter grammar field of every node the
+  indexer emitted, and `name` is a grammar field on essentially every definition
+  node. So essentially every code segment shadowed it — 308 of the 411 segments
+  of this repository's own index, each excluded from the cheaper route for every
   query. Only `usages`, `node_id` and `count` remain unreadable from a view,
   because a result row fills those in from outside its own columns.

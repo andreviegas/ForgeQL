@@ -433,10 +433,16 @@ impl<'a> SegRowRef<'a> {
 /// reads — that predicate falls through to the map on both readers — without
 /// changing what the ordering and the collapse key read, which is the struct.
 /// Treating the shadow as if it withheld the field cost far more than it
-/// saved: in this repository 308 of 411 segments carry an enrichment column
-/// named `name`, because one `#define` or `macro_rules!` in a file gives that
-/// file's segment the macro enricher's `name` column, and every one of those
-/// segments was refused the cheap route for every query.
+/// saved, and the reason is structural rather than incidental: `extract_fields`
+/// (`ast/index/file_indexer/rows.rs`) copies EVERY tree-sitter grammar field of
+/// every emitted node into the row's map, and the builder turns each into an
+/// enrichment column. `name` is a grammar field on essentially every definition
+/// node — `function_item`, `struct_item`, `preproc_def`, `field_declaration` —
+/// so essentially every code segment shadows it: 308 of the 411 segments of
+/// this repository's index, each of them refused the cheap route for every
+/// query. It is not a property of macros, and not a fixed list: `path` is a
+/// grammar field in several grammars, and a grammar adding a field named after
+/// a struct-backed name would shadow that one too, silently.
 pub(crate) const VIEW_CANNOT_ANSWER: &[&str] = &["node_id", "usages", "count"];
 
 /// Whether a row view ranks and keys `field` the way the row it would build
