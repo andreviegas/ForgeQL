@@ -145,9 +145,10 @@ fn find_max_views() -> usize {
 ///
 /// Checked between segments, like the built-row bound, so the real peak is the
 /// bound plus one segment's views. It is reached by a page so large that the
-/// running trim's own window outgrows the budget, or by a single segment
-/// holding more rows than the budget on its own — the built bound cannot say
-/// either, because on this route no row has been built to count.
+/// running trim's own window outgrows the budget — not by one oversized
+/// segment, which the trim has already cut to `topk_keep(need)` immediately
+/// before this check. The built bound cannot say it, because on this route no
+/// row has been built to count.
 fn carried_row_budget_exceeded(max_views: usize) -> anyhow::Error {
     anyhow::anyhow!(
         "FIND carried more than {max_views} matching rows before ORDER/LIMIT — \
@@ -1810,6 +1811,18 @@ impl ColumnarStorage {
     /// [`ColumnarStorage::materialize_all`] for why a per-segment collapse is
     /// the whole collapse, and for the one workspace shape where it is not and
     /// the trim stays off instead.
+    ///
+    /// **`OFFSET` is a correctness condition here, not a cost one, and it is
+    /// the one condition [`Self::view_page_bound_for`] may drop.** This trim
+    /// retains `topk_keep(limit)` — the k best it has seen — and nothing more,
+    /// so under an `OFFSET` the rows the page actually wants are among the ones
+    /// it has been discarding, and the page comes back short with nothing to
+    /// say it did. The view route may page an offset only because it carries
+    /// `limit + offset` views rather than `limit`, which is what puts the
+    /// wanted rows inside the window at all. Relaxing this line to match that
+    /// one, without also carrying the offset, silently drops rows;
+    /// `the_trim_declines_an_offset_where_the_view_bound_carries_it` asks both
+    /// of the same clauses so the two readings sit side by side.
     fn topk_trim_for(clauses: &Clauses) -> Option<usize> {
         if clauses.group_by.is_none()
             && clauses.offset.unwrap_or(0) == 0

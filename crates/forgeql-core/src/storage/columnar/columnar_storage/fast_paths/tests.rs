@@ -671,6 +671,34 @@ fn a_view_reads_every_field_as_the_row_it_builds() {
 /// back to building millions of rows to deliver twenty. What found exactly that
 /// during development was a panic inside the route, on a real corpus; this is
 /// the same question asked where the suite can keep asking it.
+/// The one condition the view bound may drop that the running trim may not.
+///
+/// Both are asked of the same clauses here, because the pair is the whole
+/// argument: the view route carries `limit + offset` views, so the rows an
+/// `OFFSET` pages to are inside its window; the trim retains `topk_keep(limit)`
+/// and nothing more, so those same rows are the ones it has been discarding.
+/// Relaxing the trim to match the bound — the obvious tidy-up on reading the
+/// two side by side — returns a short page and says nothing about it.
+#[test]
+fn the_trim_declines_an_offset_where_the_view_bound_carries_it() {
+    let offset_page = Clauses {
+        limit: Some(20),
+        offset: Some(100),
+        ..Default::default()
+    };
+    assert_eq!(
+        ColumnarStorage::view_page_bound_for(&offset_page),
+        Some(120),
+        "the view route carries the offset as rows it must hold"
+    );
+    assert_eq!(
+        ColumnarStorage::topk_trim_for(&offset_page),
+        None,
+        "and the trim declines the same clauses, because it keeps only the k \
+         best it has seen — the rows an OFFSET wants are the ones it dropped"
+    );
+}
+
 #[test]
 fn the_view_route_opens_for_a_plain_bounded_scan_and_closes_where_it_must() {
     let (_tmp, seg) = ranked_segment();

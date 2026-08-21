@@ -1001,11 +1001,16 @@ A view is 48 bytes against about 1,600 for the row it stands for, so the same
 2 GiB expresses about 44.7 million of them — which is why the bound a bounded
 page now meets is the one on what it delivers rather than the one on what it
 searches. That route wants no `GROUP BY` and no `HAVING`, no two segments of the
-index built from one source path, and every field the `WHERE` and the `ORDER BY`
-name answerable from a segment's own columns — which `usages`, `node_id` and
-`count` never are, since a built row fills those in from outside its columns,
-and which no `MATCHES`/`NOT MATCHES` operator is, whatever field it names, a
-regex being compiled once for a batch of built rows rather than once per row.
+index built from one source path, and two conditions that are not the same
+condition. Every field the `WHERE` names must be answerable from the columns of
+each segment the query selects — and no `MATCHES`/`NOT MATCHES` operator is,
+whatever field it names, a regex being compiled once for a batch of built rows
+rather than once per row. The `ORDER BY` field asks less: it need only be one a
+row view reads the same way the row it would build reads it, which is every field
+except `usages`, `node_id` and `count`, since a built row fills those three in
+from outside its columns. A field a segment simply does not carry is not a bar to
+ordering on it — both readings agree it is absent — which is what makes
+ordering on an enrichment field reachable at all.
 Where it declines, a running top-K trim over built rows still holds the working
 set to a few thousand rows for `k` no greater than 1000 with no `OFFSET`, no
 `GROUP BY` and no `HAVING`; and where neither applies, every matching row is
