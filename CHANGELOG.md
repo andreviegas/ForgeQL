@@ -6,6 +6,56 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.180.0] — 2026-08-21 — a page is chosen from row views, and only the page is built
+
+### Performance
+
+- A bounded `FIND symbols` built a result row for every row it matched and then
+  threw almost all of them away. It now carries 48-byte views of the segment
+  columns through the residual `WHERE`, the duplicate collapse, the ordering and
+  the page cut, and builds a result row only for the `LIMIT` + `OFFSET` that
+  survive. Every segment is still read, tested and counted, and `total` is still
+  the number of rows that matched.
+
+  On a 3.06M-symbol corpus: `FIND symbols IN 'drivers/**' LIMIT 5000` fell from
+  4,317 ms and 1,365 MB of private heap to 411 ms and 142 MB, against a 131 MB
+  floor for an open index — so the query's own heap went from 1,234 MB to 11 MB.
+  `FIND symbols WHERE fql_kind = 'if'` fell from 463 ms to 55 ms.
+
+- Two shapes that were outside every bound are now inside one. A `LIMIT` above
+  1,000 and a `LIMIT` beside an `OFFSET` could not arm the running trim over
+  built rows, so both materialised the whole answer to deliver a page; both now
+  carry `LIMIT` + `OFFSET` views instead. Queries no view can page — a
+  `GROUP BY`, a `HAVING`, a regular-expression predicate, an ordering or
+  predicate naming `usages`, `node_id` or `count`, or an index with two segments
+  over one source path — build every matching row as before, and are refused by
+  the same budget.
+
+### Fixed
+
+- A row view reported a field absent whenever a segment happened to carry an
+  enrichment column of the same name, which disqualified that whole segment from
+  every route that ranks or keys rows before building them. A built row answers
+  those names from its own struct fields and never from its enrichment map, so a
+  view reading the same fixed column now agrees with it. The old reading was
+  expensive: 308 of the 411 segments of this repository's own index carry an
+  enrichment column called `name` — one for every file holding a macro
+  definition, since `name` is what most grammars call a definition's identifier
+  child — and each was excluded from the cheaper route for every query.
+
+### Notes
+
+- The result budget now bounds two things with two defaults out of the same
+  2 GiB: the rows a scan carries (about 44.7 million row views at 48 bytes) and
+  the rows it builds for delivery (about 1.34 million at about 1,600).
+  `FORGEQL_FIND_MAX_ROWS` overrides both, in rows, and each refusal says which
+  bound it is.
+
+- Whether an `ORDER BY` can ride a view is now a property of the field rather
+  than of a segment: any field except `usages`, `node_id` and `count`, which a
+  built row fills in from outside its own columns. A field a segment does not
+  carry is not a bar — both readings agree it is absent.
+
 ## [0.179.0] — 2026-08-21 — a golden run refuses to answer for another tree
 
 ### Fixed
