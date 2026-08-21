@@ -1287,12 +1287,11 @@ fn apply_clauses_order_by_tiebreaker_is_name() {
 /// `order_cmp` must consult nothing beyond the ORDER BY field and the
 /// tie-breakers it publishes in [`ORDER_TIE_BREAKERS`].
 ///
-/// The column-ranked page in `ColumnarStorage::topk_rows_of_segment` ranks
-/// segment row views rather than built rows, and decides a segment is eligible
-/// by asking whether it can answer that published list. A tie-breaker added to
-/// the comparator but not to the list would leave that path ranking by fewer
-/// fields than the rows are finally sorted by, which is a wrong page and a
-/// silent one.
+/// The page `ColumnarStorage::page_from_row_views` cuts ranks segment row views
+/// rather than built rows, and decides a query is eligible by asking whether a
+/// view answers that published list. A tie-breaker added to the comparator but
+/// not to the list would leave that path ranking by fewer fields than the rows
+/// are finally sorted by, which is a wrong page and a silent one.
 ///
 /// So: two rows agreeing on every listed field and differing in every other
 /// field of the row must compare equal.

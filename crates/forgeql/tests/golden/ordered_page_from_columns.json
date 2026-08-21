@@ -1,10 +1,10 @@
 {
  "suite": "ordered_page_from_columns",
- "description": "An ORDER BY ... LIMIT page is now chosen from a segment's stored columns where it can be, and only the winners are built into result rows. That is a cost change and must never be an answer change, so these cases pin the two routes against each other on one corpus. Two ask for the same ordering, one at a limit above the top-K threshold where no ranking is armed and one below it where the columns choose, and the smaller page must be a prefix of the larger. Two more cover the exclusions: a predicate deferred past materialisation, and an ordering by a field a row view is not allowed to see. Read the limit of all four honestly. Every one of them checks an ANSWER, and this change is defined not to move answers, so none of them can tell a column-ranked page that has silently stopped happening from one that is working. That was measured, not assumed: disabling the ranking outright leaves one pre-existing case in the whole suite red, and disabling the deferred-predicate exclusion leaves every case green. The mechanisms are pinned in fast_paths/tests.rs, which does go red; what these cases add is that the two routes agree on a real corpus, which no tempdir fixture can say.",
+ "description": "A page is now chosen from the segments' stored columns and only the winners are built into result rows. That is a cost change and must never be an answer change, so these cases pin the two routes against each other on one corpus: an ordinary bounded page, and the same answer forced onto the route that builds as it goes by an operator no row view can evaluate. Two more cover the exclusions: an ordering by a field a row view is not allowed to see, and a page cut past an OFFSET, which the older trim over built rows never bounded at all. Read their limit honestly. Every one of them checks an ANSWER, and this change is defined not to move answers, so none of them can tell a column-chosen page that has silently stopped happening from one that is working. That was measured, not assumed: disabling the ranking outright leaves one pre-existing case in the whole suite red, and disabling the deferred-predicate exclusion leaves every case green. The mechanisms are pinned in fast_paths/tests.rs, which does go red; what these cases add is that the two routes agree on a real corpus, which no tempdir fixture can say.",
  "cases": [
   {
    "name": "the_answer_this_suite_measures_against",
-   "description": "Ground truth on the built path. A limit above TOPK_THRESHOLD (1000) leaves no top-K armed, so every matching row is built and sorted whole. Seven functions in this corpus exceed 150 lines, in this order by size. Every case below asks for a prefix of these.",
+   "description": "The whole ordered answer, at a limit past its own size so that nothing is shed. Seven functions in this corpus exceed 150 lines, in this order by size, and every case below asks for a prefix of these. It is not a built-path control and no longer claims to be: a page is cut from row views at any limit, so a limit above TOPK_THRESHOLD only means the trim over built rows is not what bounds it. The built-path control is the regex case below.",
    "use": "forgeql-pub.frozen",
    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE lines > 150 ORDER BY lines DESC LIMIT 1001",
    "assert": {
@@ -34,7 +34,7 @@
   },
   {
    "name": "the_running_trim_inside_the_column_ranked_page",
-   "description": "The one case here whose page is chosen from the columns. ORDER BY lines is admitted even on the many segments holding no lines column at all, because a view and the row it would build both report that field as absent and rank identically on it -- that admission is what makes the route reachable, and gating it on answerability instead left it taken by almost nothing. The candidate set is every function in the corpus. Not every segment ranks: the route also needs more matching rows in the segment than the trim's own threshold, and functions are spread thin enough that a minority of files clear it -- on the sibling workspace, 56 of 298 function-bearing files hold more than k * TOPK_OVER_FETCH = 20, which is about a fifth of the files and about half the rows. Those files pick their contribution before building it; the rest build what they matched, as before. The answer must be the same five rows in the same order as the built-path case above.",
+   "description": "The ordinary bounded page, cut from the columns end to end. ORDER BY lines is admitted even on the many segments holding no lines column at all, because a view and the row it would build both report that field as absent and rank identically on it -- that admission is what makes the route reachable, and gating it on answerability instead left it taken by almost nothing. The candidate set is every function in the corpus, and every one of them travels as a 48-byte row view: filtered, collapsed, ranked and cut to five, with five result rows built at the end. It used to be per segment and conditional -- a segment had to hold more matching rows than the trim's own threshold before it would rank rather than build, so on the sibling workspace 56 of 298 function-bearing files cleared it and the rest built what they matched. That per-segment route still exists and still narrows the built path where a predicate keeps a query off this one. The answer must be the same five rows in the same order as the whole ordered answer above.",
    "use": "forgeql-pub.frozen",
    "fql": "FIND symbols WHERE fql_kind = 'function' ORDER BY lines DESC LIMIT 5",
    "assert": {
@@ -61,6 +61,46 @@
      { "name": "new", "line": 26 },
      { "name": "new", "line": 32 },
      { "name": "new", "line": 34 }
+    ]
+   }
+  },
+  {
+   "name": "the_same_page_when_a_regex_keeps_it_off_the_view_route",
+   "description": "The built route answering the page an earlier case answers from views, over the same rows. `name MATCHES '^'` matches every name -- the empty pattern anchors at position 0 of any string -- so the row set is untouched and the operator alone changes the route: a regular expression is compiled once for a batch of built rows rather than once per row, so it waits for built rows on every segment and no page can be cut ahead of it. This is the built-path control the LIMIT 1001 case used to be, and the pair is the only cross-route claim writable from the agent side: a golden case cannot list a frozen corpus's page, so 'the two routes return the same rows' is pinned by construction -- the same clauses reach the engine -- plus the rows named here.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name MATCHES '^' ORDER BY lines DESC LIMIT 5",
+
+   "assert": {
+    "row_count": 5,
+
+    "rows": [
+
+     { "name": "golden_values", "line": 422 },
+
+     { "name": "find_symbols_prefilter", "line": 297 },
+
+     { "name": "sms_combinatorial", "line": 1380 },
+
+     { "name": "collect_nodes", "line": 358 },
+
+     { "name": "commit_promotes_segments_and_builds_new_overlay", "line": 3722 }
+    ]
+   }
+  },
+  {
+   "name": "a_page_past_an_offset_is_still_cut_from_the_columns",
+   "description": "An OFFSET disarms the trim over built rows -- shedding on rank is unsound while a skip is still to come -- so this shape used to build every matching row. A page cut from views carries LIMIT + OFFSET of them instead, because the skip runs downstream, after a session's uncommitted rows have been merged in, and a dirty row landing ahead of the window shifts which persistent rows fall inside it. These are rows three and four of the whole ordered answer above.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' WHERE lines > 150 ORDER BY lines DESC LIMIT 2 OFFSET 2",
+
+   "assert": {
+    "row_count": 2,
+
+    "rows": [
+
+     { "name": "sms_combinatorial", "line": 1380 },
+
+     { "name": "collect_nodes", "line": 358 }
     ]
    }
   }

@@ -855,11 +855,17 @@ fn an_enrichment_column_named_after_a_struct_field_disables_only_that_field() {
         );
     }
 
-    // And why the shadowed name is withheld at all. A built row reads `name`
-    // from its struct for a string operator, but a NUMERIC one falls through to
-    // the enrichment map and finds the shadow column there, while the row view
-    // answers from the fixed column or not at all. Filtering that predicate
-    // early would drop a row the built-row filter keeps.
+    // And why the shadowed name is withheld from THIS reader at all. A built
+    // row reads `name` from its struct for a string operator, but a NUMERIC one
+    // falls through to the enrichment map and finds the shadow column there,
+    // while `SegRowRef` answers from the fixed column or not at all. Filtering
+    // that predicate early would drop a row the built-row filter keeps.
+    //
+    // `RowView`, the reader that ranks and keys a row rather than filtering it,
+    // mirrors the built row on both operators instead and is not withheld — see
+    // `a_view_reads_every_field_as_the_row_it_builds`. The two readers are
+    // deliberately different: declining a predicate costs a later filter,
+    // declining an ordering costs the whole route.
     let cross_type = predicate("name", CompareOp::Eq, PredicateValue::Number(77));
     assert!(
         crate::filter::eval_predicate(&built[0], &cross_type),

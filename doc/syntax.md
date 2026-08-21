@@ -985,33 +985,49 @@ in every MCP response via the `line_budget` metadata field. Budget files are per
 to `.budgets/{source}@{branch}.json` under the ForgeQL data directory. Expired files
 are auto-deleted on the next `USE` via `sweep_expired()`.
 
-**Result budget:** one `FIND symbols` may materialise about 1.34 million result
+**Result budget:** one `FIND symbols` may **build** about 1.34 million result
 rows — a 2 GiB budget divided by the working cost of a row, plus the one segment
 being materialised when it trips, since the bound is tested once per segment
 rather than once per row. Past that the query is **refused, never truncated**: a
 partial answer that does not announce itself is the silent false negative the
 completeness guarantee exists to prevent, so the error names the remedy instead
 — narrow the scan with `IN 'path/**'` or a more selective `WHERE`.
-`LIMIT k` also completes, with or without an `ORDER BY`: every segment is still
-scanned, but a running top-K trim holds the working set to a few thousand rows,
-so the answer is the true top k over the whole corpus. With no `ORDER BY` the
-ordering is the `(name, line, path, fql_kind)` tie-break the pipeline sorts by
-anyway, so a bare `LIMIT k` asks for the k smallest rows under it rather than
-for the first k the scan reaches. That tie-break ends in `fql_kind`, completing
-the duplicate-collapse key, so two rows the answer tells apart never compare
-equal: the page is fully decided by the ordering, on every run and at every `k`.
-That path needs `k` no greater than 1000, no `OFFSET`, no
-`GROUP BY` and no `HAVING`; outside that gate nothing is trimmed, every matching
-row is materialised — unless the ascending name stream claims the clause-free
-shape (no `WHERE`, no `IN`/`EXCLUDE`, unique source paths, the asked-for rows
-within the result budget; a session's uncommitted edits are merged into the
-stream from their own sorted name indexes rather than declining it), which
-reads `limit + offset` keys of the name index instead, and unless the grouping is
-one the index counts rather than scans — `GROUP BY fql_kind`, `GROUP BY file`,
+`LIMIT k` usually completes instead, at any `k`, with or without an `ORDER BY`
+and with or without an `OFFSET`, because the page is chosen over compact row
+views read from the segment columns and only `LIMIT + OFFSET` rows are ever
+built: every segment is still scanned, tested and counted, so the answer is the
+true page over the whole corpus with a `total` counting every row that matched.
+A view is 48 bytes against about 1,600 for the row it stands for, so the same
+2 GiB expresses about 44.7 million of them — which is why the bound a bounded
+page now meets is the one on what it delivers rather than the one on what it
+searches. That route wants no `GROUP BY` and no `HAVING`, no two segments of the
+index built from one source path, and every field the `WHERE` and the `ORDER BY`
+name answerable from a segment's own columns — which `usages`, `node_id` and
+`count` never are, since a built row fills those in from outside its columns,
+and which no `MATCHES`/`NOT MATCHES` operator is, whatever field it names, a
+regex being compiled once for a batch of built rows rather than once per row.
+Where it declines, a running top-K trim over built rows still holds the working
+set to a few thousand rows for `k` no greater than 1000 with no `OFFSET`, no
+`GROUP BY` and no `HAVING`; and where neither applies, every matching row is
+built and this budget is what refuses the scan.
+With no `ORDER BY` the ordering is the `(name, line, path, fql_kind)` tie-break
+the pipeline sorts by anyway, so a bare `LIMIT k` asks for the k smallest rows
+under it rather than for the first k the scan reaches. That tie-break ends in
+`fql_kind`, completing the duplicate-collapse key, so two rows the answer tells
+apart never compare equal: the page is fully decided by the ordering, on every
+run and at every `k`.
+Outside all of that nothing is trimmed and every matching row is materialised —
+unless the ascending name stream claims the clause-free shape (no `WHERE`, no
+`IN`/`EXCLUDE`, unique source paths, the asked-for rows within the result
+budget; a session's uncommitted edits are merged into the stream from their own
+sorted name indexes rather than declining it), which reads `limit + offset` keys
+of the name index instead, and unless the grouping is one the index counts
+rather than scans — `GROUP BY fql_kind`, `GROUP BY file`,
 and a `GROUP BY` on an enrichment field the segments post per value, each under
 the gates named below, none of which materialises a row at all —
 and the scan can be refused where the old fetch cap
-let it complete with a wrong answer. A `HAVING` is deliberately excluded — it runs after the
+let it complete with a wrong answer. A `HAVING` is deliberately excluded from every
+page chosen before the whole answer is in hand — it runs after the
 page is cut, so a query carrying one is refused here rather than answered from a
 page chosen before the predicate ran. The same is true where two segments of the
 index were built from one source path: a segment collapsing its own duplicates

@@ -4,7 +4,7 @@
  "cases": [
   {
    "name": "the_answer_this_suite_measures_against",
-   "description": "Ground truth. A limit above TOPK_THRESHOLD (1000) arms no top-K, so every matching row is built and nothing is shed or truncated: seven functions in this corpus exceed 150 lines. Every total below is this seven.",
+   "description": "Ground truth. Seven functions in this corpus exceed 150 lines, and every total below is this seven. It reaches that answer over row views, like almost every case here: a page is now cut from views whatever its limit, so a limit above TOPK_THRESHOLD no longer means every matching row is built -- it means the built-row trim is not what bounds it. What the limit still buys is that nothing is shed or truncated, since 1001 is past the answer's own size.",
    "use": "forgeql-pub.frozen",
    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE lines > 150 ORDER BY lines DESC LIMIT 1001",
    "assert": {
@@ -24,7 +24,7 @@
   },
   {
    "name": "the_running_trim_counts_what_it_sheds",
-   "description": "The same seven rows at LIMIT 1, which puts K * TOPK_OVER_FETCH at four and so does arm the trim: the working set passes four while the segments are still being read and is cut back to two, three times over. Those discarded rows never reach the clause pipeline, so the pipeline's own count cannot see them and the trim has to hand back how many it dropped. Without that the answer here reads as four rows, or two — the size of a window nobody asked for. The rows are distinct because duplicates are collapsed before anything sheds; that is what makes them countable at all.",
+   "description": "The same seven rows at LIMIT 1, which puts K * TOPK_OVER_FETCH at four and so does arm the shedding: the working set passes four while the segments are still being read and is cut back, and then cut once more to the one row the page holds. Those discarded rows never reach the clause pipeline, so the pipeline's own count cannot see them and the scan has to hand back how many it dropped. Without that the answer here reads as four rows, or two, or one — the size of a window nobody asked for. The shedding runs over row views on this query and over built rows where a predicate keeps it off them, with one comparator and one count between the two, which the case below holds it to. The rows are distinct because duplicates are collapsed before anything sheds; that is what makes them countable at all.",
    "use": "forgeql-pub.frozen",
    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE lines > 150 ORDER BY lines DESC LIMIT 1",
    "assert": {
@@ -74,12 +74,35 @@
   },
   {
    "name": "the_default_page_under_a_predicate_rides_the_running_trim",
-   "description": "The same default page through the pipeline: a WHERE declines the name streams, so the bound arms the running top-K trim at twenty. Every row is still read and counted; only twenty are held. Same total as every other case on this corpus.",
+   "description": "The same default page through the pipeline: a WHERE declines the name streams, so the bound cuts the page from row views instead. Every row is still read and counted; twenty are built. Same total as every other case on this corpus.",
    "use": "forgeql-pub.frozen",
    "fql": "FIND symbols WHERE line >= 1",
+
    "assert": {
     "row_count": 20,
     "total": 59636
+   }
+  },
+  {
+   "name": "the_same_total_when_a_regex_keeps_the_query_off_the_view_route",
+   "description": "The same seven-row answer counted by the route that builds as it goes. `name MATCHES '^'` matches every name -- the empty pattern anchors at position 0 of any string -- so the rows are exactly the ground truth's, and the operator is what changes the route: a regular expression is compiled once for a batch of built rows rather than once per row, so it is deferred past materialisation on every segment and no page can be cut from views ahead of it. The pair is the only cross-route claim this suite can make from the agent side. A golden case cannot list a frozen corpus's page, so 'the two routes return the same rows' is pinned by construction -- the same clauses reach the engine -- plus these counts; what does go red when the routes disagree is the unit suite in fast_paths/tests.rs.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' WHERE lines > 150 WHERE name MATCHES '^' ORDER BY lines DESC LIMIT 1",
+
+   "assert": {
+    "row_count": 1,
+    "total": 7
+   }
+  },
+  {
+   "name": "an_offset_page_counts_the_answer_it_came_from",
+   "description": "An OFFSET never armed the running trim over built rows -- shedding on rank is unsound while a skip is still to come -- so this shape used to build every matching row. It rides views now, which carry LIMIT + OFFSET of them because the skip runs downstream, after a session's uncommitted rows have been merged in. Two rows delivered, and the count is still the whole answer.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' WHERE lines > 150 ORDER BY lines DESC LIMIT 2 OFFSET 2",
+
+   "assert": {
+    "row_count": 2,
+    "total": 7
    }
   }
  ]

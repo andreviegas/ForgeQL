@@ -13,7 +13,9 @@ use crate::result::SymbolMatch;
 use crate::storage::FindPage;
 
 use super::super::overlay::{Overlay, RowPtr};
-use super::super::segment_reader::{SegRowRef, SegmentReader};
+use super::super::segment_reader::{
+    RowView, SegRowRef, SegmentReader, ranks_field_like_a_built_row,
+};
 use super::ColumnarStorage;
 use super::query::find::dedupe_symbol_matches;
 
@@ -67,16 +69,23 @@ const FIND_BYTES_PER_ROW: usize = 1_600;
 /// nor the total.
 /// Outside those gates the scan is still what answers.
 ///
-/// **What this bound covers.** Every path that builds a `FIND` result row set
+/// **What this bound covers.** Every path that BUILDS a `FIND` result row set
 /// reads it: the on-disk `FIND symbols` scan in
-/// [`ColumnarStorage::materialize_all`] — tested there after each segment is
-/// appended, so the real peak is the budget plus the one segment being
-/// materialised — the name-ordered stream, which declines to the scan rather
-/// than stream past it, the union of a session's uncommitted rows into that
-/// scan, the `FIND usages` site list on both backends, and the legacy
-/// in-memory backend's own scan. `FIND files` is outside it and needs no bound
-/// of its own: it pages at the standard 20-row `FIND` default with an honest
-/// `total`, so its response is bounded by the page rather than by the workspace.
+/// [`ColumnarStorage::materialize_all`] — on the route that builds as it goes,
+/// tested after each segment is appended, so the real peak is the budget plus
+/// the one segment being materialised; on the route that chooses its page from
+/// row views first, tested once over the chosen page, so the bound is reached
+/// before the memory is spent rather than after — the name-ordered stream,
+/// which declines to the scan rather than stream past it, the union of a
+/// session's uncommitted rows into that scan, the `FIND usages` site list on
+/// both backends, and the legacy in-memory backend's own scan. `FIND files` is
+/// outside it and needs no bound of its own: it pages at the standard 20-row
+/// `FIND` default with an honest `total`, so its response is bounded by the
+/// page rather than by the workspace.
+///
+/// What it does not cover is the rows a scan CARRIES while it chooses which to
+/// build. Those are row views, a thirty-third of the size, and
+/// [`DEFAULT_FIND_MAX_VIEWS`] bounds them out of the same 2 GiB.
 const DEFAULT_FIND_MAX_ROWS: usize = FIND_ROW_BUDGET_BYTES / FIND_BYTES_PER_ROW;
 
 /// Row budget for [`ColumnarStorage::materialize_all`], read per query.
@@ -90,6 +99,69 @@ pub(in crate::storage) fn find_max_rows() -> usize {
         Some(n) => n,
         None => DEFAULT_FIND_MAX_ROWS,
     }
+}
+
+/// The cost of one [`RowView`] — the whole cost, not a working figure.
+///
+/// A view owns nothing: its name points into the segment's mapping and every
+/// other field is a reference, an index or a line number. So unlike
+/// [`FIND_BYTES_PER_ROW`], which has to guess at the heap a `String` and a
+/// `HashMap` reach for and is re-measured when the row grows a field, this one
+/// is read straight off the type and cannot drift from it.
+///
+/// Measured at 48 bytes on this target, which is about a thirty-third of a
+/// built row; `a_view_costs_what_the_scan_bound_prices_it_at` fails if that
+/// changes, so the figure quoted here and in the agent docs is checked rather
+/// than remembered.
+const FIND_BYTES_PER_VIEW: usize = std::mem::size_of::<RowView<'static>>();
+
+/// Default hard bound on the row VIEWS one `FIND` carries at once.
+///
+/// The same memory budget as [`DEFAULT_FIND_MAX_ROWS`], divided by what a
+/// carried row costs rather than what a built one costs — about 44.7 million
+/// against 1.34 million. That is the whole point of choosing a page before
+/// building it: the scan is bounded by what it holds, which is now a view, and
+/// the built bound is left to bound what is delivered.
+///
+/// `FORGEQL_FIND_MAX_ROWS` overrides both, in rows, because both count rows —
+/// one the rows a scan carries, the other the rows it builds from them. The
+/// defaults differ because the bytes per row differ.
+const DEFAULT_FIND_MAX_VIEWS: usize = FIND_ROW_BUDGET_BYTES / FIND_BYTES_PER_VIEW;
+
+/// View budget for [`ColumnarStorage::page_from_row_views`], read per query.
+/// `FORGEQL_FIND_MAX_ROWS` overrides the default; `0` disables the bound.
+fn find_max_views() -> usize {
+    match std::env::var("FORGEQL_FIND_MAX_ROWS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+    {
+        Some(0) => usize::MAX,
+        Some(n) => n,
+        None => DEFAULT_FIND_MAX_VIEWS,
+    }
+}
+
+/// The refusal raised when the views a scan carries would not fit.
+///
+/// Checked between segments, like the built-row bound, so the real peak is the
+/// bound plus one segment's views. It is reached by a page so large that the
+/// running trim's own window outgrows the budget, or by a single segment
+/// holding more rows than the budget on its own — the built bound cannot say
+/// either, because on this route no row has been built to count.
+fn carried_row_budget_exceeded(max_views: usize) -> anyhow::Error {
+    anyhow::anyhow!(
+        "FIND carried more than {max_views} matching rows before ORDER/LIMIT — \
+         about {} GiB of row views, which is the budget in force. A row view is \
+         {FIND_BYTES_PER_VIEW} bytes against about {FIND_BYTES_PER_ROW} for the \
+         row it would build, so this bound is roughly thirty times looser than \
+         the one on rows built for delivery, and a scan reaching it is asking \
+         for a page no host will hold either. Narrow the scan — IN 'path/**', \
+         or a more selective WHERE — or ask for a smaller page: this route \
+         carries LIMIT + OFFSET rows, so the bound moves with what you asked \
+         for. Every segment is still read, tested and counted. \
+         FORGEQL_FIND_MAX_ROWS overrides the bound in rows; 0 disables it.",
+        max_views.saturating_mul(FIND_BYTES_PER_VIEW) / (1024 * 1024 * 1024)
+    )
 }
 
 /// Working figure for the cost of one candidate row ID in the per-segment
@@ -156,41 +228,52 @@ const fn topk_keep(k: usize) -> usize {
     if over > k { over } else { k }
 }
 
-/// The refusal raised when a `FIND` would spend more than the row budget.
+/// The refusal raised when a `FIND` would spend more than the row budget on
+/// rows it BUILDS.
 ///
-/// There is one check, between segments in the accumulation loop, counting
-/// rows already built. Choosing a segment's contribution from its columns does
-/// not add a second: a segment admitted to that route contributes at most `2k`
-/// rows, so it can only make the count this bound watches smaller.
+/// One check per route. On the scan that builds as it goes it sits between
+/// segments in the accumulation loop, counting rows already built. On the
+/// route that chooses a page from row views it sits once, over the chosen
+/// page, before a row of it is built — the same bound in the same currency,
+/// reached before the memory is spent rather than after. Choosing a segment's
+/// contribution from its columns adds neither: a segment admitted to that
+/// route contributes at most `2k` rows, so it can only make the count this
+/// bound watches smaller.
 ///
-/// It bounds the rows a scan **builds**, not the row IDs it holds to build
-/// them from. Those have their own, much larger bound in
-/// [`row_id_budget_exceeded`], because a candidate costs four bytes and a
-/// materialised row about four hundred times that.
+/// It bounds the rows a scan **builds**. What a scan **carries** while it
+/// chooses them has its own, much looser bound in
+/// [`carried_row_budget_exceeded`], and the candidate row IDs it holds to
+/// carry them from a looser one still in [`row_id_budget_exceeded`] — a
+/// candidate costs four bytes, a carried row forty-eight, and a materialised
+/// row about four hundred times the first.
 pub(in crate::storage) fn row_budget_exceeded(max_rows: usize) -> anyhow::Error {
     anyhow::anyhow!(
-        "FIND materialised more than {max_rows} rows before \
-         ORDER/GROUP/LIMIT — about {} GiB of result rows, which is \
-         the budget in force. Narrow the scan — IN 'path/**', or a \
-         more selective WHERE. A LIMIT k also completes, with or \
-         without an ORDER BY, because a running top-K trim holds the \
-         working set to a few thousand rows: every segment is still \
-         read, tested and counted, so the answer is the true top k, a \
-         full page of it, and a `total` counting every row that \
-         matched. It needs k <= 1000, no OFFSET, no GROUP BY and no \
-         HAVING — a HAVING runs after the page is cut, so the trim is \
-         not armed alongside one and the scan is refused here \
-         instead, as it is where two segments of this index were \
-         built from one source path and a segment collapsing its own \
-         duplicates is no longer the whole collapse. One shape is \
-         counted differently: ORDER BY name, with at most an fql_kind \
-         equality beside it, no IN or EXCLUDE and no uncommitted \
-         edits in the session, is what the name index streams k rows \
-         at a time, and that route reports k as its total — it hands \
-         the query back to the full scan whenever its page would be \
-         short, so the same query is sometimes counted honestly and \
-         sometimes not. FORGEQL_FIND_MAX_ROWS overrides the bound in \
-         rows; 0 disables it.",
+        "FIND would build more than {max_rows} result rows — about {} GiB \
+         of them, which is the budget in force. Narrow the scan — IN \
+         'path/**', or a more selective WHERE. A LIMIT usually completes \
+         instead, at any k, with or without an ORDER BY and with or without \
+         an OFFSET, because the page is chosen over row views read from the \
+         segment columns and only LIMIT + OFFSET rows are ever built: every \
+         segment is still read, tested and counted, so the answer is the \
+         true page, a full one, and a total counting every row that \
+         matched. That route wants no GROUP BY and no HAVING — a HAVING \
+         runs after the page is cut — no two segments of this index built \
+         from one source path, and every field the WHERE and the ORDER BY \
+         name answerable from a segment's own columns, which usages, \
+         node_id and count never are and which no regex operator is, \
+         whatever field it names. Where it declines, a running top-K trim \
+         over built rows still holds the working set to a few thousand rows \
+         for k <= 1000 with no OFFSET, no GROUP BY and no HAVING, and where \
+         neither applies this refusal is what is left — as it is where two \
+         segments of this index were built from one source path and a \
+         segment collapsing its own duplicates is no longer the whole \
+         collapse. One shape is counted differently: ORDER BY name, with at \
+         most an fql_kind equality beside it, no IN or EXCLUDE and no \
+         uncommitted edits in the session, is what the name index streams k \
+         rows at a time, and that route reports k as its total — it hands \
+         the query back to the full scan whenever its page would be short, \
+         so the same query is sometimes counted honestly and sometimes not. \
+         FORGEQL_FIND_MAX_ROWS overrides the bound in rows; 0 disables it.",
         max_rows.saturating_mul(FIND_BYTES_PER_ROW) / (1024 * 1024 * 1024)
     )
 }
@@ -216,17 +299,35 @@ pub(in crate::storage) fn usages_budget_exceeded(sites: usize, max_rows: usize) 
     )
 }
 
+/// Whether this predicate has to wait for a built row on this segment.
+///
+/// The one definition of "late", so the split below and the whole-query gate
+/// that asks whether a scan may carry views at all cannot answer it
+/// differently. A predicate waits when [`SegmentReader::answers_field`]
+/// declines its field — `usages`, which is stamped from the workspace overlay
+/// only after materialisation; `node_id`, which is built during it; `count`,
+/// which GROUP BY assigns later still; a struct-backed name this segment
+/// shadows with an enrichment column; or a field no column of this segment
+/// holds — and also when the operator is a regex, because
+/// `apply_where_predicates` compiles the pattern once for a whole batch while
+/// a per-row evaluation would recompile it for every row.
+fn predicate_waits_for_a_built_row(
+    seg: &SegmentReader,
+    predicate: &crate::ir::Predicate,
+    has_path: bool,
+) -> bool {
+    matches!(predicate.op, CompareOp::Matches | CompareOp::NotMatches)
+        || !seg.answers_field(crate::field_tiers::canonical(&predicate.field), has_path)
+}
+
 /// Split a segment's residual `WHERE` into the predicates a row view answers
 /// from the columns and the ones that have to wait for materialised rows.
 ///
 /// The split is by construction, so every predicate is in exactly one half and
-/// none can be lost between them. A predicate lands on the late side when
-/// [`SegmentReader::answers_field`] declines its field — `usages`, which is
-/// stamped from the workspace overlay only after materialisation; `node_id`,
-/// which is built during it; a struct-backed name this segment shadows with an enrichment column; or a field no column of this segment holds — and
-/// also when the operator is a regex, because `apply_where_predicates`
-/// compiles the pattern once for a whole batch while a per-row evaluation
-/// would recompile it for every row.
+/// none can be lost between them. Which half a predicate lands in is
+/// [`predicate_waits_for_a_built_row`] and nothing else, so a caller that
+/// gates on that function ahead of the scan is asking the same question this
+/// answers row by row.
 fn split_seg_predicates<'p>(
     seg: &SegmentReader,
     predicates: &'p [crate::ir::Predicate],
@@ -238,125 +339,117 @@ fn split_seg_predicates<'p>(
     let mut early = Vec::new();
     let mut late = Vec::new();
     for predicate in predicates {
-        let field = crate::field_tiers::canonical(&predicate.field);
-        if matches!(predicate.op, CompareOp::Matches | CompareOp::NotMatches)
-            || !seg.answers_field(field, has_path)
-        {
+        if predicate_waits_for_a_built_row(seg, predicate, has_path) {
             late.push(predicate.clone());
         } else {
-            early.push((field, predicate));
+            early.push((crate::field_tiers::canonical(&predicate.field), predicate));
         }
     }
     (early, late)
 }
 
-/// Whether one segment can rank its own rows the way the rows it builds will be
-/// sorted.
+/// Whether an ordering can be applied to row views at all.
 ///
 /// A comparator consults more than the ORDER BY field: every
 /// [`crate::filter::ORDER_TIE_BREAKERS`] entry has to rank the same on a row
 /// view as on the row that view would build, or the ranking is not the same
-/// ranking.
+/// ranking. [`ranks_field_like_a_built_row`] is what decides that for one
+/// field, and the tie-breakers are all outside its exclusion set, so in
+/// practice this is a question about the ORDER BY field alone — asked over the
+/// whole list anyway, so that adding a tie-breaker a view cannot answer cannot
+/// slip past.
 ///
-/// `SegmentReader::ranks_field_like_a_built_row` is what decides that, and it is
-/// deliberately not `answers_field`. A field no column of this segment holds is
-/// absent on the view and absent on the built row alike, and `order_cmp` ranks
-/// by that absence identically on both — whereas a predicate on such a field
-/// genuinely cannot be decided early, which is what `answers_field` is for.
-/// Gating ordering on answerability instead declines nearly every real query,
-/// since most segments carry no column for any given enrichment field.
+/// It is a property of the query and not of any segment. It used to be per
+/// segment, because a view withheld a struct-backed name an enrichment column
+/// shadowed while the built row still answered it, and one such segment among
+/// thirteen was enough to switch the route off for a whole workspace. A view
+/// now reads what the built row reads, so nothing about a particular segment
+/// bears on this.
 ///
-/// This says nothing about the residual `WHERE`; that is a property of the rows
-/// a segment matched rather than of the segment, and the caller checks it.
-fn segment_ranks_from_columns(seg: &SegmentReader, order_field: &str) -> bool {
+/// It says nothing about the residual `WHERE`; that is a property of the rows a
+/// segment matched rather than of the ordering, and the caller checks it.
+fn ordering_travels_on_views(order_field: &str) -> bool {
     std::iter::once(order_field)
         .chain(crate::filter::ORDER_TIE_BREAKERS.iter().copied())
-        .all(|field| seg.ranks_field_like_a_built_row(field, true))
+        .all(ranks_field_like_a_built_row)
 }
 
-/// Whether two of a segment's rows carry the same Stage 4 key.
+/// The field a page is ranked by: the ORDER BY field where one is written,
+/// `name` where none is.
 ///
-/// Read from the stored columns, so no row has to be built to answer it. The
-/// path half of the key is the segment's own for both rows and cannot differ.
-fn same_row_key(seg: &SegmentReader, source_path: &Path, a: u32, b: u32) -> bool {
-    let left = SegRowRef {
-        seg,
-        row: a,
-        source_path: Some(source_path),
-    };
-    let right = SegRowRef {
-        seg,
-        row: b,
-        source_path: Some(source_path),
-    };
-    left.str_value("name") == right.str_value("name")
-        && left.str_value("fql_kind") == right.str_value("fql_kind")
-        && left.num_value("line") == right.num_value("line")
+/// With no ORDER BY the comparator is the tie-breakers alone and `name` is the
+/// first of them, so naming it here asks exactly what the ranking will do.
+/// Written once because two callers ask it — the segment that chooses its own
+/// contribution, and the whole-query gate that decides whether a scan may rank
+/// views at all — and a gate keyed on a different field from the ranking is
+/// not a gate.
+fn order_field_of(clauses: &Clauses) -> &str {
+    clauses.order_by.as_ref().map_or("name", |order_by| {
+        crate::field_tiers::canonical(&order_by.field)
+    })
 }
 
-/// A hash of one row's Stage 4 key, read from the stored columns.
-fn row_key_hash(seg: &SegmentReader, source_path: &Path, row: u32) -> u64 {
-    use std::hash::{Hash as _, Hasher as _};
-
-    let view = SegRowRef {
-        seg,
-        row,
-        source_path: Some(source_path),
-    };
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    view.str_value("name").hash(&mut hasher);
-    view.str_value("fql_kind").hash(&mut hasher);
-    view.num_value("line").hash(&mut hasher);
-    hasher.finish()
+/// Whether every row of this segment can travel as a [`RowView`] under these
+/// clauses — collapsed, ranked and paged without ever being built.
+///
+/// The one thing left that is a property of a *segment*: every residual
+/// predicate has to be answerable from this segment's columns. One that is not
+/// would leave rows the query excludes in the set being ranked, and a page cut
+/// from that set is short by however many the filter over built rows then
+/// removes, with nothing in the reply to say so.
+///
+/// The collapse needs no admission of its own. Its key is
+/// [`RowView::collapse_key`] — `name`, `fql_kind`, `line` — three fixed columns
+/// every segment has, read by the view exactly as the built row reads them.
+/// Whether the ORDER BY can travel is a property of the query, not of any
+/// segment: see [`ordering_travels_on_views`].
+fn segment_rows_can_travel_as_views(
+    seg: &SegmentReader,
+    predicates: &[crate::ir::Predicate],
+) -> bool {
+    !predicates
+        .iter()
+        .any(|predicate| predicate_waits_for_a_built_row(seg, predicate, true))
 }
 
 /// Collapse the rows a segment holds more than once, without building any.
 ///
 /// One file's row table can already carry two rows agreeing on `(name,
 /// fql_kind, path, line)`, which is the key the pass over built rows collapses
-/// on. Doing it here instead lets a bounded top-K choose among rows that are
-/// all going to survive, so it can no longer discard a row that belonged in
-/// the answer in favour of one that was about to collapse into another.
+/// on. Doing it here instead lets a bounded page choose among rows that are all
+/// going to survive, so it can no longer discard a row that belonged in the
+/// answer in favour of one that was about to collapse into another.
 ///
-/// The admission test is [`SegmentReader::answers_field`] and NOT the weaker
-/// [`SegmentReader::ranks_field_like_a_built_row`] the ordering uses, and the
-/// difference runs the other way. Ranking needs the view and the built row
-/// only to AGREE, so a field neither holds ranks the same on both. A key needs
-/// the view to be RIGHT: a field the view reports absent while the built row
-/// fills it in would file two different rows under one key and drop one of
-/// them. Returns `None` where any key field is not answerable — the caller
-/// then keeps every row and leaves the collapse to the pass over built rows,
-/// which is slower and never wrong.
+/// It cannot decline. The key is [`RowView::collapse_key`] — `name`,
+/// `fql_kind`, `line` — read from three fixed columns every segment has, by a
+/// view that resolves them exactly as the row it would build resolves them.
+/// `the_column_key_and_the_built_row_key_agree_on_every_pair` pins that on a
+/// segment whose enrichment column shadows one of the three, which is the case
+/// that used to make this return nothing.
 ///
-/// The hash only groups candidates; membership is decided by comparing the
+/// The hash only groups candidates; membership is decided by comparing the key
 /// fields, so a collision costs a comparison and never a row.
-fn dedupe_rows_of_segment(
-    seg: &SegmentReader,
-    source_path: &Path,
-    rows: &RoaringBitmap,
-) -> Option<RoaringBitmap> {
-    if !["name", "fql_kind", "line"]
-        .iter()
-        .all(|field| seg.answers_field(field, true))
-    {
-        return None;
-    }
-
-    let mut kept = RoaringBitmap::new();
-    let mut under_hash: HashMap<u64, Vec<u32>> = HashMap::new();
-    for row in rows {
-        let hash = row_key_hash(seg, source_path, row);
+///
+/// Views are the input and the output because the caller has them already or is
+/// about to make them: a view resolves the name once, and the key reads that
+/// name, so keying a segment through views costs one read of each name rather
+/// than one per key comparison.
+fn dedupe_views_of_segment(views: Vec<RowView<'_>>) -> Vec<RowView<'_>> {
+    let mut kept: Vec<RowView<'_>> = Vec::with_capacity(views.len());
+    let mut under_hash: HashMap<u64, Vec<usize>> = HashMap::new();
+    for view in views {
+        let hash = view.collapse_key_hash();
         let seen = under_hash.entry(hash).or_default();
         if seen
             .iter()
-            .any(|&earlier| same_row_key(seg, source_path, earlier, row))
+            .any(|&earlier| kept[earlier].collapse_key() == view.collapse_key())
         {
             continue;
         }
-        seen.push(row);
-        let _ = kept.insert(row);
+        seen.push(kept.len());
+        kept.push(view);
     }
-    Some(kept)
+    kept
 }
 
 /// One segment's rows narrowed to what survives everything testable before a
@@ -379,6 +472,20 @@ struct NarrowedSegment<'a> {
     rows: RoaringBitmap,
     /// Predicates no row view could answer, still to run on the built rows.
     late: Vec<crate::ir::Predicate>,
+}
+
+impl<'a> NarrowedSegment<'a> {
+    /// A view of every row that survived, in row order.
+    ///
+    /// Only sound where nothing is left in `late`: a view carries no answer to
+    /// a predicate still to run, so a caller ranking or paging these while
+    /// `late` is non-empty is ranking rows the query excludes.
+    fn views(&self) -> Vec<RowView<'a>> {
+        self.rows
+            .iter()
+            .map(|row| RowView::of(self.seg, Some(self.source_path), row))
+            .collect()
+    }
 }
 
 impl ColumnarStorage {
@@ -1201,49 +1308,53 @@ impl ColumnarStorage {
 
     /// Stage 3 — turn the surviving row IDs into result rows.
     ///
-    /// Segment by segment: narrow to the rows worth building, build them,
-    /// collapse that segment's duplicates, then trim the accumulated working
-    /// set. A segment whose ordering its own columns can answer picks its
-    /// contribution *before* building it
-    /// ([`Self::topk_rows_of_segment`]); every other segment builds what it
-    /// matched, as it always did. Both feed the same running trim, with one
-    /// comparator and one pair of constants between them, so which of the two
-    /// a segment takes changes the work and not the rows.
+    /// Two routes answer this, and they answer it identically.
     ///
-    /// **Every segment is read.** Nothing here stops the loop: a `LIMIT`
-    /// bounds what is delivered, and therefore what is built, never what is
-    /// searched. That is what makes the second return value meaningful — how
-    /// many rows were shed on rank alone. Those rows matched and were
+    /// Where every row the query selects can be filtered, keyed and ranked from
+    /// its segment's own columns, the whole scan travels as row views and only
+    /// the page is ever built ([`Self::page_from_row_views`]). Where any row
+    /// cannot — a predicate that has to wait for a built row, an ordering by a
+    /// field only a built row carries — the scan builds as it goes
+    /// ([`Self::page_from_built_rows`]), a segment at a time, with the running
+    /// trim holding the working set down. [`Self::view_page_bound`] and
+    /// [`Self::every_row_can_travel_as_a_view`] are the whole of that choice.
+    ///
+    /// The two share the comparator, the collapse key, the over-fetch constants
+    /// and the shed accounting, so which one answers changes the work and never
+    /// the rows.
+    ///
+    /// **Every segment is read on both.** Nothing here stops the loop: a
+    /// `LIMIT` bounds what is delivered, and therefore what is built, never
+    /// what is searched. That is what makes the second return value meaningful
+    /// — how many rows were shed on rank alone. Those rows matched and were
     /// distinct, so they belong to the size of the answer even though no page
     /// can hold them; without the count the caller would report the retained
     /// window as the `total`, which is neither the page nor the answer.
     ///
-    /// The collapse before the trim is what makes that count mean anything.
+    /// The collapse before the shedding is what makes that count mean anything.
     /// Two rows carry the same `(name, fql_kind, path, line)` only if they
     /// carry the same path, and a path belongs to one segment unless two
     /// segments were built from it — so where that does not happen the
-    /// per-segment pass IS the whole collapse, nothing the trim discards was
-    /// about to merge into a survivor, and no row is counted twice. Where it
-    /// does happen the trim is not armed at all rather than shed on an
-    /// incomplete collapse, and such a scan is refused by the row budget where
-    /// it would once have been answered wrongly.
+    /// per-segment pass IS the whole collapse, nothing shed was about to merge
+    /// into a survivor, and no row is counted twice. Where it does happen
+    /// neither route sheds at all rather than shed on an incomplete collapse,
+    /// and such a scan is refused by the row budget where it would once have
+    /// been answered wrongly.
     pub(super) fn materialize_all(
         &self,
         by_segment: &HashMap<u32, RoaringBitmap>,
         clauses: &Clauses,
     ) -> anyhow::Result<(Vec<SymbolMatch>, usize)> {
-        // The candidate set is bounded before anything is built from it. On a
-        // scan the trim below keeps to a few thousand built rows, the row IDs
-        // are what the query actually holds, and nothing else was watching
-        // them.
+        // The candidate set is bounded before anything is built from it, and
+        // before either route is chosen. On a scan the working set below keeps
+        // to a few thousand rows or views, the row IDs are what the query
+        // actually holds, and nothing else was watching them.
         let max_row_ids = find_max_row_ids();
         let candidates: u64 = by_segment.values().map(RoaringBitmap::len).sum();
         if candidates > u64::try_from(max_row_ids).unwrap_or(u64::MAX) {
             return Err(row_id_budget_exceeded(candidates, max_row_ids));
         }
 
-        let seg_order = self.ordered_segments(by_segment);
-        let topk_trim = self.trim_budget(clauses);
         // Residual WHERE runs per segment so non-matching rows never
         // accumulate.  `count` is excluded: it is only assigned by GROUP BY
         // in Stage 5, so no materialised row carries it yet.
@@ -1253,6 +1364,211 @@ impl ColumnarStorage {
             .filter(|p| p.field != "count")
             .cloned()
             .collect();
+
+        if let Some(need) = self.view_page_bound(clauses)
+            && ordering_travels_on_views(order_field_of(clauses))
+            && self.every_row_can_travel_as_a_view(by_segment, &seg_predicates)
+            && let Some(page) =
+                self.page_from_row_views(by_segment, clauses, &seg_predicates, need)?
+        {
+            return Ok(page);
+        }
+
+        self.page_from_built_rows(by_segment, clauses, &seg_predicates)
+    }
+
+    /// How many rows a page cut from row views has to carry, or `None` where a
+    /// page cannot be chosen before its rows are built.
+    ///
+    /// `LIMIT + OFFSET`, because the rows `OFFSET` skips are still rows the
+    /// page needs: the skip runs downstream, after a session's uncommitted rows
+    /// have been merged in, and a dirty row landing ahead of the window shifts
+    /// which persistent rows fall inside it. Keeping `LIMIT + OFFSET` of them
+    /// is enough whatever the overlay adds — no persistent row ranked past that
+    /// can reach the page, since `LIMIT + OFFSET` better ones already precede
+    /// it — and keeping fewer would make a dirty session answer a query
+    /// differently from a clean one on the same bytes.
+    ///
+    /// `None` where `GROUP BY` or `HAVING` is written: `GROUP BY` assigns a
+    /// `count` no view can carry, and `HAVING` runs after the page is cut, so
+    /// anything shed before it is a row that might have qualified. `None` too
+    /// with no `LIMIT` at all — there is no page to cut to — and where two
+    /// segments were built from one source path, because there a segment
+    /// collapsing its own duplicates is no longer the whole collapse and a row
+    /// shed on rank might have been about to merge into a survivor.
+    ///
+    /// It is deliberately not [`Self::trim_budget`], which is stricter on two
+    /// counts this route does not need: that one is the budget for a running
+    /// trim over rows that are already built, so it wants `k` small enough for
+    /// the window to be cheap and no `OFFSET`, neither of which bears on a
+    /// window of views.
+    fn view_page_bound(&self, clauses: &Clauses) -> Option<usize> {
+        if !self.per_segment_collapse_is_whole() {
+            return None;
+        }
+        Self::view_page_bound_for(clauses)
+    }
+
+    /// [`Self::view_page_bound`] asking only about the clauses.
+    ///
+    /// Split for the same reason [`Self::topk_trim_for`] is: the workspace
+    /// condition belongs to the caller that owns the overlay, and a callee
+    /// reaching for this one directly would cut a page under exactly the
+    /// workspace shape the other half exists to exclude.
+    fn view_page_bound_for(clauses: &Clauses) -> Option<usize> {
+        if clauses.group_by.is_some() || !crate::filter::no_having_after_paging(clauses) {
+            return None;
+        }
+        clauses
+            .limit?
+            .checked_add(clauses.offset.unwrap_or(0))
+            .filter(|need| *need > 0)
+    }
+
+    /// Whether every segment this query selects can hand it row views.
+    ///
+    /// Asked once, over the whole candidate set, and answered from the segment
+    /// headers alone — no row is read to decide it. The set it enumerates is
+    /// exactly the set the scan will read: `by_segment` after Stage 2 has
+    /// pruned it, which is where path globs, dirty shadows and zone maps have
+    /// already removed whatever cannot contribute. A segment missing a reader
+    /// contributes nothing to either route and so cannot close the gate.
+    ///
+    /// Only the residual `WHERE` is left to ask about here. Whether the
+    /// ordering can travel is a property of the query
+    /// ([`ordering_travels_on_views`]) and the collapse can always travel, so
+    /// this is the whole of what a *segment* still decides.
+    ///
+    /// It is a whole-query question because the accumulated working set is a
+    /// whole-query object: one segment that cannot answer a predicate would put
+    /// rows the query excludes into a window everything else is ranked against.
+    /// [`Self::topk_rows_of_segment`] asks the same question per segment, which
+    /// is what still narrows the other route where this one declines.
+    fn every_row_can_travel_as_a_view(
+        &self,
+        by_segment: &HashMap<u32, RoaringBitmap>,
+        seg_predicates: &[crate::ir::Predicate],
+    ) -> bool {
+        by_segment.keys().all(|&seg_idx| {
+            self.segments()
+                .get(seg_idx as usize)
+                .is_none_or(|seg| segment_rows_can_travel_as_views(seg, seg_predicates))
+        })
+    }
+
+    /// Stage 3 over row views: choose the page from the segment columns, then
+    /// build only the rows that made it.
+    ///
+    /// The loop is the same loop as [`Self::page_from_built_rows`] with the
+    /// currency changed — same segment order, same per-segment collapse, same
+    /// comparator, same over-fetch, same shed accounting — so the retained
+    /// window is the same window at every step. What is not the same is that
+    /// nothing is materialised inside it: a `SymbolMatch` costs about a
+    /// thirty-third of its size as a view, and on a scan matching millions of
+    /// rows to deliver twenty, the rows that are never built are almost all of
+    /// them.
+    ///
+    /// Usage counts are stamped on the page rather than on every row that
+    /// reached it, which is sound only because `usages` can never be a view
+    /// field: [`predicate_waits_for_a_built_row`] defers any predicate naming
+    /// it and [`ordering_travels_on_views`] refuses any ordering by it, so
+    /// nothing before delivery on this route has looked at one.
+    ///
+    /// `Ok(None)` hands the query back to the built route unanswered. The gate
+    /// has already promised every segment can travel, so this is a
+    /// contradiction rather than a decline — but a contradiction that returns
+    /// rows the query excludes is worse than one that costs a second pass.
+    fn page_from_row_views(
+        &self,
+        by_segment: &HashMap<u32, RoaringBitmap>,
+        clauses: &Clauses,
+        seg_predicates: &[crate::ir::Predicate],
+        need: usize,
+    ) -> anyhow::Result<Option<(Vec<SymbolMatch>, usize)>> {
+        let max_views = find_max_views();
+        let keep = topk_keep(need);
+        let trim_at = need.saturating_mul(TOPK_OVER_FETCH);
+
+        let mut kept: Vec<RowView<'_>> = Vec::new();
+        // Rows that matched, were distinct, and were shed on rank rather than
+        // kept. The caller adds them to `total`. This loop has no early exit,
+        // because a `LIMIT` bounds what is delivered and never what is
+        // searched.
+        let mut shed = 0usize;
+        for seg_idx in self.ordered_segments(by_segment) {
+            let Some(narrowed) =
+                self.narrow_one_segment(seg_idx, by_segment, clauses, seg_predicates)
+            else {
+                continue;
+            };
+            if !narrowed.late.is_empty() {
+                return Ok(None);
+            }
+            kept.extend(dedupe_views_of_segment(narrowed.views()));
+
+            if kept.len() > trim_at {
+                let before = kept.len();
+                kept = collect_top_k(std::mem::take(&mut kept), keep, |a, b| {
+                    order_cmp(a, b, clauses)
+                });
+                shed = shed.saturating_add(before.saturating_sub(kept.len()));
+            }
+
+            // Hard memory bound on what the scan CARRIES, checked between
+            // segments like the built route's bound on what it builds, so the
+            // real peak is the bound plus one segment's views.
+            if kept.len() > max_views {
+                return Err(carried_row_budget_exceeded(max_views));
+            }
+        }
+
+        // The final cut: the running trim over-fetches so it does not fire on
+        // every segment, and what it leaves behind is a window, not a page.
+        if kept.len() > need {
+            let before = kept.len();
+            kept = collect_top_k(kept, need, |a, b| order_cmp(a, b, clauses));
+            shed = shed.saturating_add(before.saturating_sub(kept.len()));
+        }
+
+        // The same bound the built route enforces, in the same currency,
+        // reached before the memory is spent rather than after.
+        let max_rows = find_max_rows();
+        if kept.len() > max_rows {
+            return Err(row_budget_exceeded(max_rows));
+        }
+
+        let mut results: Vec<SymbolMatch> = Vec::with_capacity(kept.len());
+        for view in &kept {
+            // A view that will not build is a row that would go missing from a
+            // page reported as complete; hand the query back rather than
+            // deliver a short one.
+            let Some(row) = view.materialize() else {
+                return Ok(None);
+            };
+            results.push(row);
+        }
+        self.stamp_usage_counts_with(self.usage_stamper().as_deref(), &mut results);
+
+        Ok(Some((results, shed)))
+    }
+
+    /// Stage 3 building as it goes: a segment at a time, with a running trim
+    /// over the rows already built.
+    ///
+    /// What answers wherever [`Self::page_from_row_views`] cannot — a predicate
+    /// that has to wait for a built row, an ordering by a field only a built
+    /// row carries, a `GROUP BY`, a `HAVING`, two segments over one source
+    /// path. Individual segments still choose their contribution from their
+    /// columns where they can ([`Self::topk_rows_of_segment`]); the rest build
+    /// what they matched.
+    fn page_from_built_rows(
+        &self,
+        by_segment: &HashMap<u32, RoaringBitmap>,
+        clauses: &Clauses,
+        seg_predicates: &[crate::ir::Predicate],
+    ) -> anyhow::Result<(Vec<SymbolMatch>, usize)> {
+        let seg_order = self.ordered_segments(by_segment);
+        let topk_trim = self.trim_budget(clauses);
         let max_rows = find_max_rows();
         // One correction for the whole scan: on a session with dirty rows the
         // usage counts are stamped per segment, and fetching the table per
@@ -1268,7 +1584,7 @@ impl ColumnarStorage {
         let mut shed = 0usize;
         for seg_idx in seg_order {
             let Some(narrowed) =
-                self.narrow_one_segment(seg_idx, by_segment, clauses, &seg_predicates)
+                self.narrow_one_segment(seg_idx, by_segment, clauses, seg_predicates)
             else {
                 continue;
             };
@@ -1322,12 +1638,13 @@ impl ColumnarStorage {
     /// The rows of one segment worth building for a bounded top-K, chosen
     /// before any of them is built.
     ///
-    /// Building a row is the dominant cost of an ordered scan, and on an
-    /// `ORDER BY … LIMIT k` most rows a segment contributes are discarded by the
-    /// trim moments after they are built. Here the ranking runs on
-    /// [`SegRowRef`]s — the stored columns read in place — with the same
-    /// [`order_cmp`] that sorts the built rows, and only the survivors are
-    /// handed on to be built.
+    /// This is [`Self::page_from_row_views`] narrowed to a single segment, and
+    /// it is what still narrows the built route where that one declines: a
+    /// query with a predicate one segment cannot answer takes the built route
+    /// whole, and every *other* segment of it can still choose its own
+    /// contribution here. The ranking runs on [`RowView`]s — the stored columns
+    /// read in place — with the same [`order_cmp`] that sorts the built rows,
+    /// and only the survivors are handed on to be built.
     ///
     /// The threshold and the retained size are the trim's own, so the rows this
     /// sheds are rows the trim would have shed on the very next statement. The
@@ -1357,18 +1674,14 @@ impl ColumnarStorage {
     ///   nothing would have been shed yet;
     /// - a residual `WHERE` still has to run against this segment's built rows,
     ///   so a row discarded on rank alone might be the one that survives it;
-    /// - the segment cannot rank an ordering field the way its built rows would
-    ///   (see [`segment_ranks_from_columns`]);
-    /// - the segment cannot key its own rows from its columns, so it cannot
-    ///   collapse them before choosing (see [`dedupe_rows_of_segment`]).
+    /// - the ordering names a field a row view cannot answer as the row it
+    ///   would build (see [`ordering_travels_on_views`]).
     ///
-    /// The decision is per segment, and that is not a detail. Made once for the
-    /// whole query it would be hostage to the worst segment in the corpus: a
-    /// single segment carrying an enrichment column named `name` or `path`
-    /// withholds those fields from a row view, and one such segment among
-    /// thirteen was enough to switch this off for every query in a real
-    /// workspace. A segment that cannot rank its own rows now only builds its
-    /// own rows.
+    /// The last of those is per query, not per segment. It used to be per
+    /// segment: a view withheld a struct-backed name an enrichment column
+    /// shadowed, and one such segment among thirteen was enough to switch the
+    /// route off for a whole workspace. A view now reads what the built row
+    /// reads, so no segment is excluded for what its columns are called.
     ///
     /// Beside the rows it returns how many it shed, which the caller adds to
     /// the answer's size. Those rows are distinct — the collapse ran first —
@@ -1387,41 +1700,22 @@ impl ColumnarStorage {
         if narrowed.rows.len() <= trim_at as u64 {
             return None;
         }
-        // With no explicit ORDER BY the comparator is the tie-breakers alone,
-        // and `segment_ranks_from_columns` already requires every one of them,
-        // so naming `name` here adds nothing to what it checks.
-        let order_field = clauses
-            .order_by
-            .as_ref()
-            .map_or("name", |o| crate::field_tiers::canonical(&o.field));
-        if !segment_ranks_from_columns(narrowed.seg, order_field) {
+        if !ordering_travels_on_views(order_field_of(clauses)) {
             return None;
         }
 
         // Collapse first, choose second. Choosing first would let this shed a
         // row that belonged in the answer to keep one that was about to
         // collapse into another survivor — the whole reason the pass over
-        // built rows was too late to be the only one. A segment that cannot
-        // key its own rows from its columns declines the route entirely
-        // rather than rank a set it cannot collapse.
-        let rows = dedupe_rows_of_segment(narrowed.seg, narrowed.source_path, &narrowed.rows)?;
+        // built rows was too late to be the only one.
+        let rows = dedupe_views_of_segment(narrowed.views());
         let keep = topk_keep(k);
-        let shed = usize::try_from(rows.len())
-            .unwrap_or(usize::MAX)
-            .saturating_sub(keep);
+        let shed = rows.len().saturating_sub(keep);
 
-        let views: Vec<SegRowRef<'_>> = rows
-            .iter()
-            .map(|row| SegRowRef {
-                seg: narrowed.seg,
-                row,
-                source_path: Some(narrowed.source_path),
-            })
-            .collect();
         Some((
-            collect_top_k(views, keep, |a, b| order_cmp(a, b, clauses))
-                .into_iter()
-                .map(|view| view.row)
+            collect_top_k(rows, keep, |a, b| order_cmp(a, b, clauses))
+                .iter()
+                .map(RowView::row)
                 .collect(),
             shed,
         ))

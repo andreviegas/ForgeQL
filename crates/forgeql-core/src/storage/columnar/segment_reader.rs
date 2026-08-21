@@ -382,9 +382,14 @@ pub(crate) struct SegRowRef<'a> {
     pub(crate) source_path: Option<&'a Path>,
 }
 
-impl SegRowRef<'_> {
+impl<'a> SegRowRef<'a> {
     /// The row's value for the canonical clause field `field`, as a string.
-    pub(crate) fn str_value(&self, field: &str) -> Option<&str> {
+    ///
+    /// The lifetime is the segment's, not the borrow of this view: every
+    /// string it yields lives in the mapping, so a caller may resolve one once
+    /// and carry it while the view itself goes out of scope. [`RowView`] is
+    /// that caller.
+    pub(crate) fn str_value(&self, field: &str) -> Option<&'a str> {
         match self.seg.row_field(field, self.source_path.is_some()) {
             RowField::Name => Some(self.seg.name_of(self.row)),
             RowField::FqlKind => non_empty(self.seg.fql_kind_of(self.row)),
@@ -409,6 +414,183 @@ impl SegRowRef<'_> {
             | RowField::Path
             | RowField::Unanswerable => None,
         }
+    }
+}
+
+/// The clause fields a row view cannot answer as the row it would build.
+///
+/// Every other field a built row reports, it reports from a column of the
+/// segment the row came from, so a view reading that column reads the same
+/// value. These three do not come from a column at all: `usages` is stamped
+/// from the workspace overlay after materialisation, `node_id` is derived from
+/// the row's ordinal as the row is built, and `count` is assigned later still
+/// by GROUP BY.
+///
+/// **A same-named enrichment column is not on this list, and used to be.** A
+/// built row answers `name`, `node_kind`, `fql_kind`, `language`, `path` and
+/// `node_id` from its own struct fields and never from its enrichment map, so
+/// a segment carrying a column called `name` changes what `WHERE name = 42`
+/// reads — that predicate falls through to the map on both readers — without
+/// changing what the ordering and the collapse key read, which is the struct.
+/// Treating the shadow as if it withheld the field cost far more than it
+/// saved: in this repository 308 of 411 segments carry an enrichment column
+/// named `name`, because one `#define` or `macro_rules!` in a file gives that
+/// file's segment the macro enricher's `name` column, and every one of those
+/// segments was refused the cheap route for every query.
+pub(crate) const VIEW_CANNOT_ANSWER: &[&str] = &["node_id", "usages", "count"];
+
+/// Whether a row view ranks and keys `field` the way the row it would build
+/// ranks and keys it.
+///
+/// A property of the field, not of the segment: [`RowView`] resolves every
+/// field exactly as [`crate::result::SymbolMatch`] resolves it — struct-backed
+/// names from the fixed columns the built row is filled from, everything else
+/// from the enrichment column the built row's map is filled from — so the only
+/// fields the two can disagree on are the ones no column holds at all.
+///
+/// It is deliberately not [`SegmentReader::answers_field`], which is the
+/// conservative question a *predicate* asks: that one may decline where it is
+/// unsure, because a declined predicate is merely run later. An ordering that
+/// declines where it should not is not merely slower — it takes the whole page
+/// off the route.
+pub(crate) fn ranks_field_like_a_built_row(field: &str) -> bool {
+    !VIEW_CANNOT_ANSWER.contains(&field)
+}
+
+/// One segment row carried through the duplicate collapse, the ordering and
+/// the page cut without building the [`SymbolMatch`] it stands for.
+///
+/// **It reads what the built row will read.** Each arm below mirrors the
+/// matching arm of `impl ClauseTarget for SymbolMatch`, against the same
+/// columns `materialize_one_row` fills that row from: the six struct-backed
+/// names from their fixed columns, and every other name from the enrichment
+/// column the row's map would be filled from. `a_view_reads_every_field_as_the_row_it_builds`
+/// pins the two against each other field by field, including on a segment
+/// whose enrichment column shadows a struct-backed name. The exceptions are
+/// [`VIEW_CANNOT_ANSWER`], and a caller must gate on them rather than read
+/// them.
+///
+/// `name` and `line` are resolved once, when the view is made, because
+/// [`crate::filter::order_cmp`] consults `name` on every pair it compares and
+/// `line` on every pair whose names tie. Reading either through the mapping
+/// costs an index into the column plus a UTF-8 validation of the bytes, and
+/// paying that per comparison instead of per row is the shape that made a
+/// mapping-backed reader 12% slower than a heap-backed one on scans until the
+/// segment column names were interned: a byte range into a mapping is free to
+/// store and not free to read, so it must not sit on a per-comparison path.
+///
+/// It still owns nothing — `name` points into the segment's mapping — so a
+/// view costs exactly its own size and no heap, which is why
+/// [`crate::storage::columnar::columnar_storage::fast_paths`] can price the
+/// scan bound from `size_of` alone. The fields are private so the two resolved
+/// once can only be filled by [`Self::of`].
+pub(crate) struct RowView<'a> {
+    seg: &'a SegmentReader,
+    /// Path of the file the segment was built from, as the caller spells it.
+    source_path: Option<&'a Path>,
+    /// The fixed name column at this row — what the built row's `name` is.
+    name: &'a str,
+    /// Row index within the segment.
+    row: u32,
+    /// The fixed line column at this row, with `0` standing for absent, which
+    /// is how the built row spells it too.
+    line: u32,
+}
+
+impl<'a> RowView<'a> {
+    /// The view of row `row` of `seg`.
+    pub(crate) fn of(seg: &'a SegmentReader, source_path: Option<&'a Path>, row: u32) -> Self {
+        Self {
+            seg,
+            source_path,
+            name: seg.name_of(row),
+            row,
+            line: seg.line_of(row),
+        }
+    }
+
+    /// Row index within its segment.
+    pub(crate) const fn row(&self) -> u32 {
+        self.row
+    }
+
+    /// Path of the file this row's segment was built from.
+    pub(crate) const fn source_path(&self) -> Option<&'a Path> {
+        self.source_path
+    }
+
+    /// The row's value for the canonical clause field `field`, as a string —
+    /// arm for arm what `impl ClauseTarget for SymbolMatch` would answer on the
+    /// row this view stands for.
+    ///
+    /// `node_kind` is `None` because segments do not store it and the built row
+    /// leaves it `None`; `node_id` is `None` because a view cannot know it, and
+    /// is in [`VIEW_CANNOT_ANSWER`] for that reason rather than answered here.
+    pub(crate) fn str_value(&self, field: &str) -> Option<&'a str> {
+        match field {
+            "name" => Some(self.name),
+            "node_kind" | "node_id" => None,
+            "fql_kind" => non_empty(self.seg.fql_kind_of(self.row)),
+            "language" => non_empty(self.seg.language_of(self.row)),
+            "path" => self.source_path.and_then(Path::to_str),
+            other => self.enrichment(other),
+        }
+    }
+
+    /// The row's value for the canonical clause field `field`, as a number —
+    /// arm for arm what a built row would answer.
+    ///
+    /// The fallback reads the enrichment column and NOT [`Self::str_value`],
+    /// because that is what the built row does: its `field_num` goes straight
+    /// to the enrichment map for any name outside its own three, so on a
+    /// segment whose column shadows a struct-backed name the two readers must
+    /// both find the shadow here and both find the struct there.
+    pub(crate) fn num_value(&self, field: &str) -> Option<i64> {
+        match field {
+            "usages" | "count" => None,
+            "line" => (self.line != 0).then(|| i64::from(self.line)),
+            other => self.enrichment(other)?.parse().ok(),
+        }
+    }
+
+    /// This row's value in the enrichment column named `field`, or `None` where
+    /// the segment has no such column — which is also when the built row's map
+    /// would not carry it, the map being filled from these same columns.
+    fn enrichment(&self, field: &str) -> Option<&'a str> {
+        self.seg
+            .extra_col_range(field)
+            .and_then(|range| self.seg.opt_str_in(range, self.row))
+    }
+
+    /// The duplicate-collapse key of this row, read from the fixed columns.
+    ///
+    /// `(name, fql_kind, line)` — the path half of the Stage 4 key is the
+    /// segment's own for every row it holds and so cannot tell two of them
+    /// apart. All three are fixed columns of every segment and all three are
+    /// what the built row is filled from, so this key and the key the pass over
+    /// built rows collapses on are the same key on every segment.
+    pub(crate) fn collapse_key(&self) -> (&'a str, Option<&'a str>, u32) {
+        (self.name, self.str_value("fql_kind"), self.line)
+    }
+
+    /// A hash of [`Self::collapse_key`], for grouping candidates before they
+    /// are compared. A collision costs a comparison and never a row.
+    pub(crate) fn collapse_key_hash(&self) -> u64 {
+        use std::hash::{Hash as _, Hasher as _};
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.collapse_key().hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Build the result row this view stands for.
+    ///
+    /// `None` where the view carries no path, which is the one thing a built
+    /// row cannot be given after the fact — its `node_id` and `rev` are
+    /// derived from it.
+    pub(crate) fn materialize(&self) -> Option<SymbolMatch> {
+        let path = self.source_path?;
+        self.seg.materialize_one_row(self.row, path)
     }
 }
 
@@ -1423,36 +1605,6 @@ impl SegmentReader {
     /// filter that runs on the built rows.
     pub(crate) fn answers_field(&self, field: &str, has_path: bool) -> bool {
         !matches!(self.row_field(field, has_path), RowField::Unanswerable)
-    }
-
-    /// Whether a row view over this segment *ranks* `field` the way the row it
-    /// would build ranks it.
-    ///
-    /// Weaker than [`Self::answers_field`] on purpose, and the difference is
-    /// the whole point. Filtering needs a field to be *answerable*: a predicate
-    /// that cannot be decided from the columns has to wait for a row. Ordering
-    /// needs something else — that the two readers *agree* — and two readers
-    /// can agree on a field neither of them answers. `order_cmp` treats an
-    /// absent value as a value, so a segment that simply does not carry an
-    /// enrichment column ranks its rows by the same absence the built rows
-    /// would report, because a built row's enrichment map is filled from these
-    /// same columns and will not carry it either.
-    ///
-    /// What they do *not* agree on is a field the built row fills in from
-    /// somewhere these columns are not. Those are exactly the struct-backed
-    /// names: `usages` arrives from the workspace overlay after materialisation,
-    /// `node_id` is derived from the row's ordinal as the row is built, `count`
-    /// is assigned later still by GROUP BY, and any of the rest that an
-    /// enrichment column has shadowed reads as absent here while the built row
-    /// still reports its own struct field. Every one of those would have a row
-    /// view ranking by nothing where the built row ranks by something.
-    ///
-    /// Gating ordering on `answers_field` instead is not merely conservative,
-    /// it is close to fatal: on a real corpus most segments carry no column for
-    /// any given enrichment field, so a whole-query gate built on it declines
-    /// nearly every query and the cheaper path never runs.
-    pub(crate) fn ranks_field_like_a_built_row(&self, field: &str, has_path: bool) -> bool {
-        self.answers_field(field, has_path) || !STRUCT_BACKED_FIELDS.contains(&field)
     }
 
     /// Look up a string-pool entry by ID.

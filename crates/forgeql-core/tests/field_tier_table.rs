@@ -218,14 +218,18 @@ impl Shape {
 /// against `filter/impls.rs` by hand, and the one place a missing result shape
 /// would go unnoticed.
 ///
-/// Two implementations there are deliberately absent. `CommitRow` is a git
+/// Three implementations there are deliberately absent. `CommitRow` is a git
 /// listing, not a queryable row shape. `SegRowRef` is a segment row viewed in
-/// place, used only to test a residual `WHERE` before the row is built: it is
-/// never validated against, and it is crate-private, so a test outside the
-/// crate cannot name it. What matters about it is not which names it declares
-/// but that it answers them exactly as the `SymbolMatch` it stands in for —
-/// pinned by `a_row_view_answers_a_prefilterable_predicate_as_the_built_row_does`
-/// in `storage::columnar::segment_reader::tests`.
+/// place, used only to test a residual `WHERE` before the row is built, and
+/// `RowView` is the same row carried through the collapse, the ordering and the
+/// page cut: neither is ever validated against, and both are crate-private, so
+/// a test outside the crate cannot name them. What matters about them is not
+/// which names they declare but that they answer them exactly as the
+/// `SymbolMatch` they stand in for — pinned by
+/// `a_row_view_answers_a_prefilterable_predicate_as_the_built_row_does` in
+/// `storage::columnar::segment_reader::tests` and by
+/// `a_view_reads_every_field_as_the_row_it_builds` in
+/// `storage::columnar::columnar_storage::fast_paths::tests`.
 fn row_shapes() -> Vec<Shape> {
     vec![
         Shape::of::<SymbolMatch>(),

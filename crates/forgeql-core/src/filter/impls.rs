@@ -370,3 +370,33 @@ impl ClauseTarget for crate::storage::columnar::segment_reader::SegRowRef<'_> {
         self.source_path
     }
 }
+
+/// A segment row carried without building it, with its ranked fields cached.
+///
+/// It answers every field the reader above answers, because it asks that
+/// reader for everything it did not resolve when it was made — and what it did
+/// resolve, it resolved through the same reader. The two field lists are taken
+/// from that impl rather than restated, so a field admitted to one is admitted
+/// to the other by construction.
+impl ClauseTarget for crate::storage::columnar::segment_reader::RowView<'_> {
+    const ROW: &'static str =
+        <crate::storage::columnar::segment_reader::SegRowRef<'static> as ClauseTarget>::ROW;
+    const STR_FIELDS: &'static [&'static str] =
+        <crate::storage::columnar::segment_reader::SegRowRef<'static> as ClauseTarget>::STR_FIELDS;
+    const NUM_FIELDS: &'static [&'static str] =
+        <crate::storage::columnar::segment_reader::SegRowRef<'static> as ClauseTarget>::NUM_FIELDS;
+    const OPEN_FIELDS: bool =
+        <crate::storage::columnar::segment_reader::SegRowRef<'static> as ClauseTarget>::OPEN_FIELDS;
+
+    fn field_str(&self, field: &str) -> Option<&str> {
+        self.str_value(field)
+    }
+
+    fn field_num(&self, field: &str) -> Option<i64> {
+        self.num_value(field)
+    }
+
+    fn path(&self) -> Option<&Path> {
+        self.source_path()
+    }
+}

@@ -139,6 +139,53 @@ fn the_row_bound_is_derived_from_the_memory_budget() {
     );
 }
 
+/// The bound on views is derived from the same budget, and a view costs what
+/// the docs say it costs.
+///
+/// The size is read off the type rather than guessed at, so this cannot drift
+/// from the struct — but it CAN drift from the figure quoted in
+/// `FIND_BYTES_PER_VIEW`'s own comment, in `DEFAULT_FIND_MAX_VIEWS`, in the
+/// refusal text and in four agent documents, all of which say "48 bytes" and
+/// "about 44.7 million". Growing the view is legal; shipping it with those
+/// sentences still claiming the old number is not, and this is what says so.
+#[test]
+fn a_view_costs_what_the_scan_bound_prices_it_at() {
+    assert_eq!(
+        super::FIND_BYTES_PER_VIEW,
+        48,
+        "a row view has changed size. Re-measure and update the figure in \
+         FIND_BYTES_PER_VIEW, DEFAULT_FIND_MAX_VIEWS, carried_row_budget_exceeded, \
+         doc/syntax.md, doc/architecture.md and the four agent documents, which \
+         all quote it"
+    );
+    const {
+        assert!(
+            super::FIND_BYTES_PER_VIEW < super::FIND_BYTES_PER_ROW,
+            "a view that cost as much as the row it stands for would make \
+             choosing a page before building it pointless"
+        );
+        assert!(
+            super::DEFAULT_FIND_MAX_VIEWS > super::DEFAULT_FIND_MAX_ROWS,
+            "the two bounds share a budget and differ only in what a row costs \
+             on each side of it, so the carried one must be the looser"
+        );
+    }
+
+    let spend = super::DEFAULT_FIND_MAX_VIEWS * super::FIND_BYTES_PER_VIEW;
+    assert!(
+        spend <= super::FIND_ROW_BUDGET_BYTES,
+        "the view bound authorises {spend} bytes against a budget of {}",
+        super::FIND_ROW_BUDGET_BYTES
+    );
+    let one_more = (super::DEFAULT_FIND_MAX_VIEWS + 1) * super::FIND_BYTES_PER_VIEW;
+    assert!(
+        one_more > super::FIND_ROW_BUDGET_BYTES,
+        "one view more than the bound still fits the budget, so the bound is \
+         not derived from it: {one_more} <= {}",
+        super::FIND_ROW_BUDGET_BYTES
+    );
+}
+
 /// A segment whose rows disagree on every field a query might order by, so a
 /// top-K over them is a real choice and not a prefix of the stored order.
 ///
@@ -220,24 +267,20 @@ fn choosing_by_row_view_picks_what_choosing_by_built_row_picks() {
             ..Default::default()
         };
         assert!(
-            segment_ranks_from_columns(&seg, field),
-            "the fixture must be eligible for the view path, or this test \
+            ordering_travels_on_views(field),
+            "the ordering must be eligible for the view path, or this test \
              compares the built path with itself"
         );
 
         for k in [1_usize, 3, 5] {
-            let views: Vec<SegRowRef<'_>> = all
+            let views: Vec<RowView<'_>> = all
                 .iter()
-                .map(|row| SegRowRef {
-                    seg: &seg,
-                    row,
-                    source_path: Some(source_path),
-                })
+                .map(|row| RowView::of(&seg, Some(source_path), row))
                 .collect();
             let by_view: Vec<(String, Option<usize>)> =
                 collect_top_k(views, k, |a, b| order_cmp(a, b, &clauses))
                     .iter()
-                    .filter_map(|view| seg.materialize_one_row(view.row, source_path))
+                    .filter_map(RowView::materialize)
                     .map(|row| (row.name, row.line))
                     .collect();
 
@@ -265,8 +308,8 @@ fn choosing_by_row_view_picks_what_choosing_by_built_row_picks() {
     }
 }
 
-/// A segment is admitted to the column-ranked path only when it can rank by
-/// every field the comparator reads.
+/// An ordering rides row views only when a view ranks by every field the
+/// comparator reads.
 ///
 /// Each rejection here is a wrong answer the gate is holding back rather than a
 /// missed optimisation: `usages` is a stale zero in the column while the real
@@ -277,42 +320,65 @@ fn choosing_by_row_view_picks_what_choosing_by_built_row_picks() {
 /// The gate was first written on `answers_field` — the predicate that decides
 /// whether a WHERE can run early — and a field no column holds fails that. On a
 /// real corpus most segments hold no column for any given enrichment field, so
-/// that version admitted almost nothing. It was also decided once for the whole
-/// query rather than per segment, which made it hostage to the worst segment
-/// present: a single segment carrying enrichment columns named `name` and
-/// `path` withheld those fields from a row view, and that one segment switched
-/// the path off for every query in the workspace. Both faults passed the whole
-/// suite. What found them was emptying the path's result and watching which
-/// tests changed — one pre-existing case, and none of the ones written for it —
-/// and then panicking inside the path to tell "never reached" apart from
-/// "reached and overridden". Absence ranks the same on both sides, so it is
-/// admitted, and this case is what says so.
+/// that version admitted almost nothing.
+///
+/// The admission of a *shadowed* struct-backed name is the third half, and it
+/// was the expensive one. The gate used to refuse a segment carrying an
+/// enrichment column named `name` or `path`, on the ground that the view
+/// reported the field absent while the built row still answered from its own
+/// struct. It was cheaper to make the view read the struct's column: measured
+/// on this repository, 308 of 411 segments carry a column called `name` —
+/// one `#define` or `macro_rules!` gives a file's segment the macro enricher's
+/// `name` column — so the refusal took three quarters of every scan off the
+/// cheap route. That is also why the question is no longer asked of a segment
+/// at all.
+///
+/// Both earlier faults passed the whole suite. What found them was emptying the
+/// path's result and watching which tests changed — one pre-existing case, and
+/// none of the ones written for it — and then panicking inside the path to tell
+/// "never reached" apart from "reached and overridden".
 #[test]
-fn a_segment_that_cannot_rank_its_own_rows_is_kept_off_the_view_path() {
-    let (_tmp, seg) = ranked_segment();
-
-    assert!(segment_ranks_from_columns(&seg, "line"));
-    assert!(segment_ranks_from_columns(&seg, "param_count"));
+fn an_ordering_that_cannot_be_ranked_on_views_is_kept_off_the_view_path() {
+    assert!(ordering_travels_on_views("line"));
+    assert!(ordering_travels_on_views("param_count"));
     assert!(
-        segment_ranks_from_columns(&seg, "has_doc"),
-        "no column here holds has_doc, so the view ranks every row by its \
-         absence and so does every row it would build. Agreeing on nothing is \
+        ordering_travels_on_views("has_doc"),
+        "no column of a segment need hold has_doc: the view ranks such a row by \
+         its absence and so does the row it would build. Agreeing on nothing is \
          still agreeing, and rejecting this case is what would leave the whole \
          path dead on a real corpus, where most segments carry no column for \
          any given enrichment field"
     );
+    assert!(
+        ordering_travels_on_views("name"),
+        "name is a fixed column of every segment and the built row is filled \
+         from it, so ordering by it rides views even where an enrichment column \
+         shares the name -- which is the majority of segments in this repository"
+    );
 
     assert!(
-        !segment_ranks_from_columns(&seg, "usages"),
+        !ordering_travels_on_views("usages"),
         "the usages column is a stale zero the workspace count replaces after \
          materialisation, so the view reports it absent -- not zero -- where the \
          built row reports the real count"
     );
     assert!(
-        !segment_ranks_from_columns(&seg, "node_id"),
+        !ordering_travels_on_views("node_id"),
         "the node handle is derived from the row's ordinal as the row is built, \
          so the view would rank by nothing where the built row ranks by a handle"
     );
+    assert!(
+        !ordering_travels_on_views("count"),
+        "count is assigned by GROUP BY after the page is chosen"
+    );
+
+    for field in crate::storage::columnar::segment_reader::VIEW_CANNOT_ANSWER {
+        assert!(
+            !ordering_travels_on_views(field),
+            "{field} is published as a field a view cannot answer, so no \
+             ordering by it may ride one"
+        );
+    }
 }
 
 /// A residual predicate that only a built row can answer keeps the segment
@@ -473,99 +539,212 @@ fn the_two_row_builders_build_the_same_row() {
 /// silently rank by less.
 #[test]
 fn the_view_path_gate_covers_every_published_tie_breaker() {
-    let (_tmp, seg) = ranked_segment();
     for field in crate::filter::ORDER_TIE_BREAKERS {
         assert!(
-            seg.answers_field(field, true),
-            "{field} is published as a tie-breaker but this segment cannot \
-             answer it, so the gate would admit a ranking that reads it from \
-             the built row only"
-        );
-        assert_eq!(
-            seg.answers_field(field, true),
-            seg.ranks_field_like_a_built_row(field, true),
-            "every tie-breaker is a struct-backed name, so the two predicates \
-             must coincide on it. That is what keeps the relaxation honest: \
-             admitting a field no column holds must not also admit a \
-             struct-backed name a column has shadowed, which reads as absent \
-             on the view while the built row still reports its own field"
+            ranks_field_like_a_built_row(field),
+            "{field} is published as a tie-breaker but a row view cannot rank \
+             by it, so the gate would admit a ranking that reads it from the \
+             built row only"
         );
     }
-    assert!(
-        !seg.answers_field("path", false),
-        "with no source path there is nothing to answer `path` with, which is \
-         why the gate asks with has_path = true"
-    );
+    for field in crate::storage::columnar::segment_reader::VIEW_CANNOT_ANSWER {
+        assert!(
+            !crate::filter::ORDER_TIE_BREAKERS.contains(field),
+            "{field} is both a published tie-breaker and a field a view cannot \
+             answer, which would leave no ordering able to ride a view at all"
+        );
+    }
 }
 
-/// Every field the gate admits must read the same on a row view as on the row
+/// Every field a row view answers must read the same on the view as on the row
 /// that view would build.
 ///
-/// `segment_ranks_from_columns` is a promise about two readers; this checks
-/// the promise against the readers rather than restating it. The page-level
-/// test above would catch a divergence only where it happens to change the
-/// ranking, which a field that ties on every fixture row never does — so a
-/// divergence could sit in `language` or `path` indefinitely and surface on a
-/// corpus instead.
+/// The whole design rests on that sentence, so this checks it against the two
+/// readers rather than restating it, on every column each fixture holds and on
+/// the struct-backed names besides. The page-level test above would catch a
+/// divergence only where it happens to change the ranking, which a field that
+/// ties on every fixture row never does — so a divergence could sit in
+/// `language` or `path` indefinitely and surface on a corpus instead.
 ///
-/// The list deliberately includes `has_doc`, which no column here holds: that
-/// field is admitted precisely because both sides report absence, and it is the
-/// admission the gate turns on.
+/// The list deliberately includes `has_doc`, which no column here holds: a view
+/// and a built row both report it absent, and that agreement is what lets an
+/// ordering by an enrichment column ride a view at all.
+///
+/// It runs over the shadowed fixture as well, and that is the case that cost a
+/// measurement round. A segment carrying an enrichment column named `fql_kind`
+/// or `name` used to be refused the view path outright, on the ground that the
+/// view reported the field absent while the built row answered from its own
+/// struct. The view now reads the same fixed column the built row is filled
+/// from, and `WHERE name = 42` — the one operator that reaches the shadow on a
+/// built row — reaches it on the view too, which is what the numeric half of
+/// this loop pins.
 #[test]
-fn every_admitted_field_reads_the_same_on_a_view_as_on_the_row_it_builds() {
+fn a_view_reads_every_field_as_the_row_it_builds() {
     use crate::filter::ClauseTarget as _;
 
-    let (_tmp, seg) = ranked_segment();
-    let source_path = Path::new("src/ranked.rs");
-    let all: RoaringBitmap = (0..seg.row_count).collect();
-    let built = seg.materialize_rows(&all, Some(source_path));
-
-    for field in [
-        "name",
-        "line",
-        "path",
-        "fql_kind",
-        "language",
-        "param_count",
-        "has_doc",
+    let plain = ranked_segment();
+    let shadowed = shadowed_kind_segment();
+    for (label, (_tmp, seg), source_path) in [
+        ("plain", plain, Path::new("src/ranked.rs")),
+        ("shadowed", shadowed, Path::new("src/shadowed.rs")),
     ] {
-        assert!(
-            seg.ranks_field_like_a_built_row(field, true),
-            "{field} is not admitted, so this loop would be checking a field \
-             the gate never lets through"
-        );
-        for (row, built_row) in all.iter().zip(&built) {
-            let view = SegRowRef {
-                seg: &seg,
-                row,
-                source_path: Some(source_path),
-            };
-            assert_eq!(
-                view.field_str(field),
-                built_row.field_str(field),
-                "row {row}: {field} reads differently as a string on the view \
-                 and on the row it builds"
-            );
-            assert_eq!(
-                view.field_num(field),
-                built_row.field_num(field),
-                "row {row}: {field} reads differently as a number on the view \
-                 and on the row it builds"
-            );
-        }
-    }
+        let all: RoaringBitmap = (0..seg.row_count).collect();
+        let built = seg.materialize_rows(&all, Some(source_path));
 
-    // And the counterpart: a field the gate refuses is refused because the two
-    // readers really do disagree, not out of caution. `usages` is the one that
-    // matters most, since ORDER BY usages is a documented recipe.
-    assert!(!seg.ranks_field_like_a_built_row("usages", true));
-    let view = SegRowRef {
-        seg: &seg,
-        row: 0,
-        source_path: Some(source_path),
+        // Every column this segment holds, plus every name a built row answers
+        // from its own struct, plus one no column holds anywhere.
+        let mut fields: Vec<String> = seg
+            .enrichment_columns()
+            .map(|(name, _)| name.to_owned())
+            .collect();
+        for name in ["name", "node_kind", "fql_kind", "language", "path", "line"] {
+            if !fields.iter().any(|f| f == name) {
+                fields.push(name.to_owned());
+            }
+        }
+        fields.push("has_doc".to_owned());
+
+        for field in &fields {
+            assert!(
+                ranks_field_like_a_built_row(field),
+                "{label}: {field} is not admitted, so this loop would be \
+                 checking a field the gate never lets through"
+            );
+            for (row, built_row) in all.iter().zip(&built) {
+                let view = RowView::of(&seg, Some(source_path), row);
+                assert_eq!(
+                    view.field_str(field),
+                    built_row.field_str(field),
+                    "{label} row {row}: {field} reads differently as a string \
+                     on the view and on the row it builds"
+                );
+                assert_eq!(
+                    view.field_num(field),
+                    built_row.field_num(field),
+                    "{label} row {row}: {field} reads differently as a number \
+                     on the view and on the row it builds"
+                );
+            }
+        }
+
+        // And the counterpart: a field the gate refuses is refused because the
+        // two readers really do disagree, not out of caution. `usages` is the
+        // one that matters most, since ORDER BY usages is a documented recipe.
+        assert!(!ranks_field_like_a_built_row("usages"));
+        let view = RowView::of(&seg, Some(source_path), 0);
+        assert_eq!(view.field_num("usages"), None);
+        assert_eq!(built[0].field_num("usages"), Some(0));
+    }
+}
+
+/// The whole-query gate opens for the shapes the memory win depends on, and
+/// closes for each shape that would move an answer.
+///
+/// A golden case cannot see this. Both routes answer the same query with the
+/// same rows by construction, which is the point — so a regression that quietly
+/// stops taking the view route leaves every golden green while every scan goes
+/// back to building millions of rows to deliver twenty. What found exactly that
+/// during development was a panic inside the route, on a real corpus; this is
+/// the same question asked where the suite can keep asking it.
+#[test]
+fn the_view_route_opens_for_a_plain_bounded_scan_and_closes_where_it_must() {
+    let (_tmp, seg) = ranked_segment();
+    let paged = |limit: Option<usize>| Clauses {
+        limit,
+        ..Default::default()
     };
-    assert_eq!(view.field_num("usages"), None);
-    assert_eq!(built[0].field_num("usages"), Some(0));
+
+    assert_eq!(
+        ColumnarStorage::view_page_bound_for(&paged(Some(20))),
+        Some(20),
+        "a bare LIMIT is the shape a default FIND arrives as, and it is the \
+         whole reason this route exists"
+    );
+    assert_eq!(
+        ColumnarStorage::view_page_bound_for(&Clauses {
+            limit: Some(20),
+            offset: Some(100),
+            ..Default::default()
+        }),
+        Some(120),
+        "OFFSET rows are still rows the page needs: the skip runs downstream, \
+         after uncommitted rows have been merged in"
+    );
+    assert_eq!(
+        ColumnarStorage::view_page_bound_for(&paged(Some(5_000))),
+        Some(5_000),
+        "the bound is what the caller asked for and not the running trim's \
+         threshold, so a page above TOPK_THRESHOLD rides views where the trim \
+         over built rows will not arm"
+    );
+
+    assert_eq!(
+        ColumnarStorage::view_page_bound_for(&paged(None)),
+        None,
+        "with no LIMIT there is no page to cut to"
+    );
+    assert_eq!(
+        ColumnarStorage::view_page_bound_for(&Clauses {
+            limit: Some(20),
+            group_by: Some(GroupBy::Field("fql_kind".to_owned())),
+            ..Default::default()
+        }),
+        None,
+        "GROUP BY assigns a count no view can carry"
+    );
+    assert_eq!(
+        ColumnarStorage::view_page_bound_for(&Clauses {
+            limit: Some(20),
+            having_predicates: vec![predicate(
+                "lines",
+                CompareOp::Gt,
+                PredicateValue::Number(10)
+            )],
+            ..Default::default()
+        }),
+        None,
+        "HAVING runs after the page is cut, so anything shed before it might \
+         have qualified"
+    );
+
+    // The segment half. A predicate a row view answers leaves the route open;
+    // one that has to wait for a built row closes it, and closing it is what
+    // keeps a page from being cut over rows the query excludes.
+    assert!(segment_rows_can_travel_as_views(
+        &seg,
+        &[predicate(
+            "param_count",
+            CompareOp::Gt,
+            PredicateValue::Number(4)
+        )]
+    ));
+    assert!(segment_rows_can_travel_as_views(
+        &seg,
+        &[predicate("line", CompareOp::Gte, PredicateValue::Number(1))]
+    ));
+    assert!(
+        !segment_rows_can_travel_as_views(
+            &seg,
+            &[predicate(
+                "usages",
+                CompareOp::Gt,
+                PredicateValue::Number(0)
+            )]
+        ),
+        "usages is stamped after materialisation, so no view can test it"
+    );
+    assert!(
+        !segment_rows_can_travel_as_views(
+            &seg,
+            &[Predicate {
+                field: "name".to_owned(),
+                op: CompareOp::Matches,
+                value: crate::ir::PredicateValue::String("^a".to_owned()),
+            }]
+        ),
+        "a regex is compiled once for a batch of built rows and would be \
+         recompiled per row here, so it waits whatever field it names"
+    );
 }
 
 /// A segment holding the same row more than once, with the duplicates sorting
@@ -703,34 +882,65 @@ fn duplicates_collapse_before_the_bounded_choice_sheds_anything() {
     );
 }
 
-/// A segment that shadows a tie-break-and-key field builds all of its rows.
+/// A segment that shadows a tie-break-and-key field stays ON the view path.
 ///
-/// The two admission tests are distinct — ranking needs the view and the built
-/// row only to AGREE, so a field neither holds is fine; a key needs the view
-/// to be RIGHT, because a field the view withholds while the built row carries
-/// it files two different rows under one key and drops one of them. A shadowed
-/// `fql_kind` fails both at once now that it is a published tie-breaker: the
-/// view would rank by the shadow where the built row sorts by its own field,
-/// and the collapse would key on it — so ranking and collapsing both decline,
-/// and every row is built first.
+/// This case used to assert the opposite, and reversing it is the substance of
+/// the change. An enrichment column named `fql_kind` was taken to withhold the
+/// field from a row view, so such a segment was refused both the ranking and
+/// the collapse and built every row it matched. It withholds nothing: a built
+/// row answers `fql_kind` from its own struct field, filled from the fixed kind
+/// column, and never from its enrichment map — so a view reading that same
+/// column reads the same value. Only `WHERE fql_kind = 42`, which reaches the
+/// map on a built row, reaches the shadow, and it reaches it on both readers.
+///
+/// The cost of the old reading was not theoretical: in this repository 308 of
+/// 411 segments carry an enrichment column called `name`, one per file holding
+/// a `#define` or a `macro_rules!`, and every one of them was refused.
 #[test]
-fn a_segment_that_cannot_key_its_own_rows_stays_off_the_view_path() {
+fn a_segment_that_shadows_a_key_field_still_travels_as_views() {
+    use crate::filter::ClauseTarget as _;
+
     let (_tmp, seg) = shadowed_kind_segment();
     let source_path = Path::new("src/shadowed.rs");
     let rows: RoaringBitmap = (0..seg.row_count).collect();
 
     assert!(
-        !segment_ranks_from_columns(&seg, "line"),
-        "fql_kind is a published tie-breaker, so a segment that shadows it \
-         cannot rank its own rows the way the built rows will sort"
-    );
-    assert!(
         !seg.answers_field("fql_kind", true),
-        "an enrichment column named fql_kind shadows the struct-backed field"
+        "an enrichment column named fql_kind shadows the struct-backed field, \
+         which is the shape this case is about — a predicate on it still waits \
+         for a built row"
     );
     assert!(
-        dedupe_rows_of_segment(&seg, source_path, &rows).is_none(),
-        "a key field the view withholds must decline the collapse, not guess"
+        ordering_travels_on_views("line"),
+        "fql_kind is a published tie-breaker, and shadowing it no longer stops \
+         a view from ranking by it"
+    );
+
+    let built = seg.materialize_rows(&rows, Some(source_path));
+    for (row, built_row) in rows.iter().zip(&built) {
+        let view = RowView::of(&seg, Some(source_path), row);
+        assert_eq!(
+            view.collapse_key(),
+            (
+                built_row.field_str("name").unwrap_or(""),
+                built_row.field_str("fql_kind"),
+                u32::try_from(built_row.field_num("line").unwrap_or(0)).unwrap_or(0),
+            ),
+            "row {row}: the view keys this row differently from the row it builds"
+        );
+    }
+
+    let views: Vec<RowView<'_>> = rows
+        .iter()
+        .map(|row| RowView::of(&seg, Some(source_path), row))
+        .collect();
+    let mut by_built = built;
+    dedupe_symbol_matches(&mut by_built);
+    assert_eq!(
+        dedupe_views_of_segment(views).len(),
+        by_built.len(),
+        "the collapse over views and the collapse over built rows must agree on \
+         how many distinct rows this segment holds"
     );
 
     let clauses = Clauses {
@@ -747,15 +957,25 @@ fn a_segment_that_cannot_key_its_own_rows_stays_off_the_view_path() {
         rows,
         late: Vec::new(),
     };
-    assert!(
-        ColumnarStorage::topk_rows_of_segment(
-            &narrowed,
-            &clauses,
-            ColumnarStorage::topk_trim_for(&clauses)
-        )
-        .is_none(),
-        "a segment that cannot collapse its own rows must not choose among \
-         them either"
+    let (chosen, shed) = ColumnarStorage::topk_rows_of_segment(
+        &narrowed,
+        &clauses,
+        ColumnarStorage::topk_trim_for(&clauses),
+    )
+    .expect(
+        "this segment used to be refused the view path outright for shadowing \
+         fql_kind, and building all twelve of its rows to deliver two is what \
+         that cost",
+    );
+    assert_eq!(
+        chosen.iter().collect::<Vec<_>>(),
+        vec![0, 1, 2, 3],
+        "ORDER BY line ASC LIMIT 2 retains topk_keep(2) = 4 rows, and on this \
+         fixture those are lines 1 to 4"
+    );
+    assert_eq!(
+        shed, 8,
+        "the other eight matched and were distinct, so they belong to the total"
     );
 }
 
@@ -789,7 +1009,8 @@ fn the_column_key_and_the_built_row_key_agree_on_every_pair() {
                 && left.path == right.path
                 && left.line == right.line;
             assert_eq!(
-                same_row_key(&seg, source_path, a, b),
+                RowView::of(&seg, Some(source_path), a).collapse_key()
+                    == RowView::of(&seg, Some(source_path), b).collapse_key(),
                 by_built_row,
                 "rows {a} and {b} are the same row on one reading and not on \
                  the other"

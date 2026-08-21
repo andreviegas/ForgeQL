@@ -763,9 +763,12 @@ pub(crate) const ORDER_TIE_BREAKERS: &[&str] = &["name", "line", "path", "fql_ki
 /// This is the single source-of-truth comparator shared by:
 /// - the full sort in `apply_clauses` (step 6), and
 /// - the bounded top-K path (`collect_top_k`), and
-/// - the running trim in `ColumnarStorage::materialize_all`, which applies it
-///   to built rows, and to `SegRowRef` views of rows not yet built when
-///   `ColumnarStorage::topk_rows_of_segment` ranks a segment from its columns.
+/// - the page a `FIND symbols` scan chooses in
+///   `ColumnarStorage::page_from_row_views`, which applies it to `RowView`s of
+///   rows not yet built, and the running trim in
+///   `ColumnarStorage::page_from_built_rows`, which applies it to built rows
+///   and — through `ColumnarStorage::topk_rows_of_segment` — to views again
+///   when a segment chooses its own contribution.
 ///
 /// Returning [`Ordering::Less`] means `a` sorts *before* `b` (i.e. `a` is
 /// the "better" row that should appear first in the output).
