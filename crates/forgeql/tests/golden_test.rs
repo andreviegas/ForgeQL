@@ -832,6 +832,35 @@ fn build_trial(
 fn main() {
     let args = Arguments::from_args();
 
+    // `env!` bakes this crate directory in when the harness is COMPILED, and
+    // every agent on this machine builds into one shared target directory — so
+    // a `golden_test` binary compiled from another worktree can be handed to
+    // this one, and it would read the suites of that other worktree and report
+    // them as the result for this tree. A pass would then say nothing about the
+    // tree under test. Cargo runs a test with its package directory as the
+    // working directory, so the two paths agree exactly when the binary was
+    // built from the tree it is now testing; where they do not, refuse rather
+    // than answer for a tree nobody named.
+    //
+    // This is asked before the data directory below, not after: identity is a
+    // property of the binary and not of the corpus, so a foreign harness run
+    // with no corpus at all must still be refused rather than exit reporting a
+    // skip it was never entitled to report.
+    if let (Ok(running_in), Ok(built_from)) = (
+        std::env::current_dir().and_then(|p| p.canonicalize()),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).canonicalize(),
+    ) {
+        assert!(
+            running_in == built_from,
+            "golden harness was built from {} but is running in {} — a shared \
+             build directory handed this tree a binary from another worktree, \
+             which reads the suites of that worktree. Rebuild in this tree \
+             before trusting the result.",
+            built_from.display(),
+            running_in.display()
+        );
+    }
+
     let Ok(dir) = std::env::var("FORGEQL_DATA_DIR") else {
         eprintln!("[golden] SKIP — FORGEQL_DATA_DIR not set");
         return;
