@@ -36,12 +36,14 @@ impl ForgeQLEngine {
         // so a bare `FIND symbols` on a three-million-symbol corpus materialised
         // rows up to the 2 GiB row budget and was then refused, to show twenty.
         // Handing the engine that same cap as a LIMIT arms the paths an explicit
-        // `LIMIT k` already takes: the running top-K trim and the name-stream
-        // fast paths, which read and count every matching row but hold only the
-        // page.  The rows are the same, because `apply_ordering` sorts by the
-        // same `(name, line, path, fql_kind)` order the trim ranks with before
-        // the page is cut; and `total` is the same, because both routes count
-        // rather than truncate.  GROUP BY and HAVING keep the clauses as written:
+        // `LIMIT k` already takes: the name-stream fast paths, the page cut from
+        // row views, and the running top-K trim over built rows where that page
+        // declines — every one of which reads and counts every matching row and
+        // holds only the page.  The rows are the same, because `apply_ordering`
+        // sorts by the same `(name, line, path, fql_kind)` order those routes
+        // rank with before the page is cut; and `total` is the same, because
+        // they all count rather than truncate.
+        // GROUP BY and HAVING keep the clauses as written:
         // grouped rows are aggregates already cut by their own LIMIT, and a
         // HAVING runs after the page is cut, so a bound injected under either
         // would change the answer rather than the memory.

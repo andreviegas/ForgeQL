@@ -1,8 +1,16 @@
-//! `FORGEQL_FIND_MAX_ROWS` and `FORGEQL_FIND_MAX_ROW_IDS` — the two hard
-//! budgets a `FIND` is held to: the rows it materialises, and the candidate row
-//! IDs it holds to materialise them from. They are separate numbers because
-//! they are separate costs — about 1,600 bytes against four — and a query can
-//! be inside one and past the other.
+//! `FORGEQL_FIND_MAX_ROWS` and `FORGEQL_FIND_MAX_ROW_IDS` — the three hard
+//! budgets a `FIND` is held to: the rows it builds, the rows it carries as
+//! views while it chooses which to build, and the candidate row IDs it holds to
+//! carry them from. They are separate numbers because they are separate costs —
+//! about 1,600 bytes, 48, and four — and a query can be inside one and past
+//! another.
+//!
+//! Two of the three share a variable. `FORGEQL_FIND_MAX_ROWS` overrides both
+//! the built bound and the carried one, in rows, because both count rows; only
+//! the default differs, since the bytes per row do. So a case that asserts a
+//! refusal merely names the knob cannot tell which bound it tripped, and the
+//! probes below assert the wording that separates them: "would build more than"
+//! against "carried more than".
 //!
 //! Both are read from the process environment, and the workspace denies
 //! `unsafe` (so no `std::env::set_var`).  Each driver test therefore re-invokes
@@ -158,9 +166,16 @@ fn row_budget_probe() {
     match std::env::var("FORGEQL_FIND_MAX_ROWS").as_deref() {
         Ok("1") => {
             let err = result.expect_err("a cap of 1 must refuse a whole-index scan");
+            let text = err.to_string();
             assert!(
-                err.to_string().contains("FORGEQL_FIND_MAX_ROWS"),
+                text.contains("FORGEQL_FIND_MAX_ROWS"),
                 "error should name the knob: {err}"
+            );
+            assert!(
+                text.contains("would build more than"),
+                "one knob drives two bounds, so naming it is not enough: this \
+                 query writes no LIMIT, so no page can be cut from row views \
+                 and the refusal must be the one on rows BUILT: {err}"
             );
         }
         Ok("0") | Err(_) => {
@@ -180,6 +195,84 @@ fn row_budget_refuses_oversized_scans_and_zero_disables() {
     let run = |cap: Option<&str>| {
         let mut cmd = std::process::Command::new(&exe);
         let _ = cmd.args(["--exact", "row_budget_probe", "--ignored"]);
+        match cap {
+            Some(v) => {
+                let _ = cmd.env("FORGEQL_FIND_MAX_ROWS", v);
+            }
+            None => {
+                let _ = cmd.env_remove("FORGEQL_FIND_MAX_ROWS");
+            }
+        }
+        let out = cmd.output().expect("spawn probe");
+        assert!(
+            out.status.success(),
+            "probe with cap {cap:?} failed:\n{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    run(Some("1"));
+    run(Some("0"));
+    run(None);
+}
+
+/// The third bound: the rows a scan CARRIES while it chooses which to build,
+/// driven by the same knob out of the same budget.
+///
+/// A written `LIMIT` opens the route that cuts a page from row views, and that
+/// route is refused while it still holds views — before a row is built — so
+/// this query never reaches the bound the case above trips. Both refusals name
+/// `FORGEQL_FIND_MAX_ROWS`, because one variable drives both, so a case
+/// asserting only the knob's name would pass on either and tell them apart on
+/// neither. What separates them is the wording, and that is what is asserted.
+#[test]
+#[ignore = "driver-invoked probe; behaviour depends on FORGEQL_FIND_MAX_ROWS"]
+fn carried_budget_probe() {
+    let (_tmp, storage) = single_segment_cpp_storage();
+    let clauses = Clauses {
+        limit: Some(2),
+        ..Clauses::default()
+    };
+    let result = storage.find_symbols(&clauses, std::path::Path::new("."));
+
+    match std::env::var("FORGEQL_FIND_MAX_ROWS").as_deref() {
+        Ok("1") => {
+            let err = result.expect_err("a cap of 1 must refuse a scan that carries more");
+            let text = err.to_string();
+            assert!(
+                text.contains("FORGEQL_FIND_MAX_ROWS"),
+                "error should name the knob: {err}"
+            );
+            assert!(
+                text.contains("carried more than"),
+                "this page is cut from row views, so it is refused while it \
+                 holds views and never builds a row: the refusal must be the \
+                 carried one: {err}"
+            );
+            assert!(
+                !text.contains("would build more than"),
+                "the refusal on rows BUILT reached a query that built none: {err}"
+            );
+        }
+        Ok("0") | Err(_) => {
+            let page = result.expect("scan must pass without an effective cap");
+            assert_eq!(
+                page.rows.len(),
+                2,
+                "without a cap the page is the LIMIT the caller wrote"
+            );
+        }
+        Ok(other) => panic!("unexpected probe configuration: {other}"),
+    }
+}
+
+/// Run the carried-bound probe in a child process for each knob state.
+#[test]
+fn the_carried_budget_refuses_before_a_row_is_built_and_zero_disables() {
+    let exe = std::env::current_exe().expect("current_exe");
+    let run = |cap: Option<&str>| {
+        let mut cmd = std::process::Command::new(&exe);
+        let _ = cmd.args(["--exact", "carried_budget_probe", "--ignored"]);
         match cap {
             Some(v) => {
                 let _ = cmd.env("FORGEQL_FIND_MAX_ROWS", v);

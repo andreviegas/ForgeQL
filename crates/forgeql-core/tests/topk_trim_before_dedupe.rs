@@ -21,10 +21,14 @@
 //!
 //! What makes it pass is the stream declining a page it cannot fill: a stream
 //! that stopped at its own limit and then lost rows to a collapse hands the
-//! query back to the pipeline, which reads every segment. The trim and the
-//! per-segment bounded choice collapse before they shed as well, and the
-//! sibling case below covers the trim directly by ordering on a field no
-//! stream serves.
+//! query back to the pipeline, which reads every segment. Every chooser inside
+//! that pipeline collapses before it sheds as well — the page cut from row
+//! views, the running trim over built rows, and the per-segment bounded choice
+//! — and the two sibling cases below cover the first two directly, one by
+//! ordering on a field no stream serves and the other by adding an operator no
+//! row view can evaluate. Keep both: the first of them used to reach the built
+//! route and stopped when the view route learned to take it, which is this
+//! file's own failure mode happening a second time.
 //!
 //! The last two cases are about the one workspace shape in which collapsing
 //! first is still not enough. Two segments built from one source path hold
@@ -41,7 +45,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use forgeql_core::ast::lang::LanguageRegistry;
-use forgeql_core::ir::{Clauses, OrderBy, SortDirection};
+use forgeql_core::ir::{Clauses, CompareOp, OrderBy, Predicate, PredicateValue, SortDirection};
 use forgeql_core::storage::StorageEngine;
 use forgeql_core::storage::columnar::overlay::Overlay;
 use forgeql_core::storage::columnar::{
@@ -315,15 +319,20 @@ fn order_by_limit_returns_a_full_page_of_distinct_rows() {
 }
 
 /// The same shape ordered on a field no name stream serves, so it reaches the
-/// pipeline and the two trims that shed on rank.
+/// scan rather than the index.
 ///
 /// The duplicates share line 1 and every distinct row is at 100 or above, so
 /// an ascending order on `line` puts the group that collapses at the front
 /// exactly as an ascending order on `name` does — but `ORDER BY line` has no
-/// index stream behind it, so the query is answered by `materialize_all`, the
-/// per-segment bounded choice picks this segment's contribution from its row
-/// IDs, and the running trim cuts the accumulated set. Both collapse first.
-/// Remove either collapse and the retained window fills with rows that are
+/// index stream behind it, so the query is answered by `materialize_all`.
+///
+/// **Which route inside it has moved, and the sibling below is why that
+/// matters.** This case used to reach the scan that builds as it goes and its
+/// per-segment bounded choice. It now satisfies the whole-query view gate — a
+/// LIMIT, no GROUP BY, no HAVING, unique source paths, an ordering a view can
+/// rank and no predicate at all — so the page is collapsed, ranked and cut
+/// entirely over row views and only `LIMIT` rows are ever built. What it pins
+/// is that collapse. Remove it and the retained window fills with rows that are
 /// one row, and this page comes back holding one.
 #[test]
 fn ordering_on_a_field_no_stream_serves_still_returns_a_full_page() {
@@ -358,6 +367,64 @@ fn ordering_on_a_field_no_stream_serves_still_returns_a_full_page() {
         DISTINCT + 1,
         "the count beside the page is the size of the answer, so the rows the \
          trim shed on rank are in it and the ones that collapsed are not"
+    );
+}
+
+/// The same shape kept off the row-view route, so the collapse the scan that
+/// BUILDS AS IT GOES performs is what has to hold the page open.
+///
+/// `name MATCHES '_'` matches every name this fixture emits — the duplicates
+/// are `aaa_duplicate` and the distinct rows `zzz_distinct_NNN` — so the row
+/// set is exactly the case above's, and the operator alone changes the route: a
+/// regular expression is compiled once for a batch of built rows rather than
+/// once per row, so it waits for built rows on every segment and no page can be
+/// cut from views ahead of it.
+///
+/// Without this case the file reaches `page_from_built_rows` nowhere. The case
+/// above used to, and stopped when the whole-query view gate opened — so
+/// deleting the `dedupe_symbol_matches` that runs before the running trim sheds
+/// would leave every other case here green. That is the same failure this
+/// file's own header records against an earlier version of itself, one route
+/// later: a suite kept passing while the mechanism it was written for stopped
+/// being reached, and only varying one clause separated them.
+#[test]
+fn a_page_the_view_route_cannot_cut_is_still_collapsed_before_it_sheds() {
+    let (_tmp, storage) = storage_with_duplicate_heavy_head(DUPS, DISTINCT);
+
+    let clauses = Clauses {
+        order_by: Some(OrderBy {
+            field: "line".to_owned(),
+            direction: SortDirection::Asc,
+        }),
+        where_predicates: vec![Predicate {
+            field: "name".to_owned(),
+            op: CompareOp::Matches,
+            value: PredicateValue::String("_".to_owned()),
+        }],
+        limit: Some(LIMIT),
+        ..Clauses::default()
+    };
+    let page = storage
+        .find_symbols(&clauses, Path::new("."))
+        .expect("find_symbols");
+    let names: Vec<&str> = page.iter().map(|r| r.name.as_str()).collect();
+
+    assert_eq!(
+        page.rows.len(),
+        LIMIT,
+        "the built route returned a short page: {names:?}"
+    );
+    let unique: HashSet<&str> = names.iter().copied().collect();
+    assert_eq!(
+        unique.len(),
+        LIMIT,
+        "the page must hold {LIMIT} distinct rows, got {names:?}"
+    );
+    assert_eq!(
+        page.total,
+        DISTINCT + 1,
+        "the two routes must count the same answer: the rows shed on rank are \
+         in it and the ones that collapsed are not"
     );
 }
 

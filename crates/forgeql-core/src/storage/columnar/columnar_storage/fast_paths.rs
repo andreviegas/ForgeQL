@@ -218,11 +218,11 @@ fn row_id_budget_exceeded(candidates: u64, max_row_ids: usize) -> anyhow::Error 
     )
 }
 
-/// How many rows the running top-K trim retains once it fires.
+/// How many rows a chooser that sheds on rank retains once it fires.
 ///
-/// Written once because the trim runs in two places — over built rows, and over
-/// row views before any row is built — and a page chosen by two different
-/// retained sizes is two different pages.
+/// Written once because three callers ask it — the page cut from row views, the
+/// running trim over built rows, and the per-segment bounded choice — and a
+/// page chosen by two different retained sizes is two different pages.
 const fn topk_keep(k: usize) -> usize {
     let over = k.saturating_mul(TOPK_OVER_FETCH / 2);
     if over > k { over } else { k }

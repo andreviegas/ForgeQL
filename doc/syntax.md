@@ -1038,9 +1038,9 @@ early: duplicate rows are collapsed *after* the name-index streams, so where
 enough rows agreeing on `name`, `fql_kind`, path and line sit inside the window
 a stream read, its page could come back shorter than `k`. A stream now declines
 such a page and hands the query to the full scan, so the shape survives only as
-the reason that hand-back exists. Neither trim carries it — the running one and
-the bounded choice a segment makes over its own row IDs both collapse duplicates
-before they shed anything, which
+the reason that hand-back exists. No other site carries it — the page cut from
+row views, the running trim over built rows and the bounded choice a segment
+makes over its own rows all collapse duplicates before they shed anything, which
 `crates/forgeql-core/tests/topk_trim_before_dedupe.rs` now enforces rather than
 reproduces.
 
@@ -1058,7 +1058,10 @@ double-count — the streams decline and the full scan answers. A bare `LIMIT k`
 with no `ORDER BY` rides the same ascending stream, since the default ordering
 starts with `name`, so the shortest orientation query reads `k` keys of the
 name index rather than every row of the corpus. `FORGEQL_FIND_MAX_ROWS`
-overrides the bound in rows and `0` disables it.
+overrides both bounds, in rows, and `0` disables them: one variable, because
+both count rows, and two defaults, because a row costs about 1,600 bytes once
+built and 48 while it is only carried. Setting it therefore tightens the carried
+bound by about 33x more than it tightens the built one.
 
 Separately, the candidate row IDs a scan holds before it builds anything have
 their own bound — about 537 million, the same 2 GiB against four bytes a row ID

@@ -744,13 +744,16 @@ pub(crate) const TOPK_THRESHOLD: usize = 1_000;
 /// The fields [`order_cmp`] falls back to when the ORDER BY field ties, in the
 /// order it consults them.
 ///
-/// A caller that wants to reproduce this ordering *without* building rows —
-/// `ColumnarStorage::topk_rows_of_segment` chooses a page from segment columns
-/// read in place — needs every one of these answerable as well as the ORDER BY
-/// field itself. The list lives beside the comparator so that adding a
-/// tie-breaker cannot leave such a caller ordering by fewer fields than the
-/// rows are finally sorted by; `order_cmp_consults_only_the_listed_fields`
-/// fails if the two drift apart.
+/// A caller reproducing this ordering *without* building rows needs every one
+/// of these answerable from a row view, as well as the ORDER BY field itself.
+/// Two do: `ColumnarStorage::page_from_row_views` cuts a whole page that way,
+/// and `ColumnarStorage::topk_rows_of_segment` picks one segment's contribution
+/// that way where the first declines. The list lives beside the comparator so
+/// that adding a tie-breaker cannot leave either of them ordering by fewer
+/// fields than the rows are finally sorted by;
+/// `order_cmp_consults_only_the_listed_fields` fails if the two drift apart,
+/// and `the_view_path_gate_covers_every_published_tie_breaker` fails if a
+/// tie-breaker is added that a view cannot answer at all.
 pub(crate) const ORDER_TIE_BREAKERS: &[&str] = &["name", "line", "path", "fql_kind"];
 
 /// Compare two [`ClauseTarget`] items according to the ORDER BY clause in
@@ -862,10 +865,12 @@ fn dot_brace_min_len(pattern: &str) -> Option<usize> {
 
 /// Whether no `HAVING` predicate remains to run after a page has been cut.
 ///
-/// Anything that bounds a page before the whole answer is in hand — the
-/// name-index streams, which stop reading at `limit + offset` rows, and the
-/// two running top-K trims, which read everything but shed on rank — is
-/// correct only while nothing filters afterwards.
+/// Every site that bounds a page before the whole answer is in hand — the
+/// name-index streams, which stop reading at `limit + offset` rows; the page
+/// `ColumnarStorage::page_from_row_views` cuts from row views; and the two
+/// choosers that shed on rank over built rows, the running trim and the
+/// per-segment bounded choice — is correct only while nothing filters
+/// afterwards.
 /// `HAVING` runs in Stage 5, after all of them, so letting one fire alongside a
 /// `HAVING` turns the answer into "the first N by the ordering, minus those that
 /// fail" instead of "the first N by the ordering that pass". The qualifying rows

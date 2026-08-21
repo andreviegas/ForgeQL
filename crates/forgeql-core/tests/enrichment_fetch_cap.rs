@@ -1,7 +1,9 @@
 //! Regression test for the enrichment fetch-cap early-exit bug.
 //!
 //! The cap this is named after no longer exists — a `LIMIT` now bounds only
-//! what is delivered, and the running top-K trim bounds the working set — so
+//! what is delivered, and every site that bounds a page before the whole answer
+//! is in hand bounds the working set instead: the page cut from row views, the
+//! running top-K trim over built rows, and the per-segment bounded choice — so
 //! the case can no longer fail the way it once did. It is kept because what it
 //! asserts is the invariant, not the mechanism: a `LIMIT 1` whose only
 //! matching row lives in the last segment read must still return that row.
