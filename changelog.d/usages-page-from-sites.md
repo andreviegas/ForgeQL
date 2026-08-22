@@ -9,7 +9,9 @@
   view answers every clause field exactly as the row built from it does, which
   a test in `crates/forgeql-core/src/storage/mod.rs` holds it to, and the
   `crates/forgeql-core/tests/usages_file_groups.rs` suite pins the page itself.
-  `total` is still every site that matched.
+  `total` is still every site that matched under the default page; under
+  `GROUP BY` it counts groups rather than sites, and an explicit `LIMIT` clips
+  it, both as before this change.
 
   What did **not** move: the site list itself is still held whole and still
   bounded by the row budget, because a cut that selects whole files out of a

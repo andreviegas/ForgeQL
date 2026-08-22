@@ -235,9 +235,14 @@ impl ForgeQLEngine {
             .engine_for(backend)?
             .find_usages(of, &engine_clauses, &root, bound)?;
 
-        // `total` is the true site count even under an explicit LIMIT — the
-        // number a rename campaign measures its progress against.  FIND symbols
-        // still reports a LIMIT-capped total; the divergence is deliberate.
+        // `total` is the true site count — the number a rename campaign measures
+        // its progress against — under the default page, which truncates below
+        // after this line rather than before it. Two shapes qualify that, and
+        // both flow through this same line: under `GROUP BY` it counts groups
+        // and not sites, and an explicit `LIMIT` clips it, because a grouped
+        // page is built and cut by `apply_clauses` before the count is taken.
+        // FIND symbols still reports a LIMIT-capped total; that divergence is
+        // deliberate.
         let total = page.total;
         let mut results = page.rows;
         let withheld = page.withheld;
