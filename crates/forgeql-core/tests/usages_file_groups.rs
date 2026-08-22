@@ -7,6 +7,12 @@
 //! contract — whole file groups, ordered by their first site, every site of a
 //! selected file returned, a `total` that stays the true site count, and a
 //! `FOUND` set that arms only when no file was dropped.
+//!
+//! They also pin where the cap is applied, not only what it produces.  The
+//! backend is handed the file bound and cuts the page from the site list, so a
+//! site in a file nobody will see is never built into a row.  Take the bound
+//! away from the backend and every case here that expects fewer rows than
+//! `total` fails, which is what stops the cut drifting back to the caller.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 

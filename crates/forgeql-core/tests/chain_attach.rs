@@ -941,17 +941,20 @@ fn a_derived_chain_answers_every_verb_like_a_full_build_of_the_commit() {
     // FIND usages — a name whose sites moved (rename), grew (edit) and
     // appeared (new file).
     for name in ["factorial", "bar"] {
-        let (c, c_note) = chained
-            .find_usages(name, &all, root)
+        let c = chained
+            .find_usages(name, &all, root, None)
             .expect("chained usages");
-        let (f, f_note) = full.find_usages(name, &all, root).expect("full usages");
-        assert!(!f.is_empty(), "no usage sites for {name}");
+        let f = full
+            .find_usages(name, &all, root, None)
+            .expect("full usages");
+        assert!(!f.rows.is_empty(), "no usage sites for {name}");
         assert_eq!(
-            projected(&c),
-            projected(&f),
+            projected(&c.rows),
+            projected(&f.rows),
             "FIND usages OF {name} differs"
         );
-        assert_eq!(c_note, f_note);
+        assert_eq!(c.total, f.total, "FIND usages OF {name} total differs");
+        assert_eq!(c.unread, f.unread);
     }
 
     // FIND files — indexed and non-indexed, path and size.

@@ -6,7 +6,7 @@ use std::path::Path;
 use roaring::RoaringBitmap;
 
 use crate::ast::trigram::TRIGRAM_WIDTH;
-use crate::filter::{ClauseTarget as _, apply_clauses, apply_clauses_counted};
+use crate::filter::{ClauseTarget as _, apply_clauses_counted};
 use crate::ir::{Clauses, CompareOp, GroupBy, PredicateValue};
 use crate::result::SymbolMatch;
 use crate::storage::FindPage;
@@ -341,7 +341,8 @@ impl ColumnarStorage {
         name: &str,
         clauses: &Clauses,
         root: &Path,
-    ) -> anyhow::Result<(Vec<SymbolMatch>, Option<String>)> {
+        bound: Option<crate::storage::UsageBound>,
+    ) -> anyhow::Result<crate::storage::UsagePage> {
         // BUG-006 U2: read the per-segment usage postings written at index
         // time (`usages_fst` / `usages_postings`, ENRICH_VER 23) instead of
         // the definitions name-FST, which only ever yielded definition rows.
@@ -353,20 +354,6 @@ impl ColumnarStorage {
         // a `role` so the two are told apart and filtered separately. A usage
         // site is `code`, tagged here rather than stored, because a posting in
         // the usages blob can be nothing else.
-        let occurrence_row = |path: &Path, line: u32, role: &str| SymbolMatch {
-            name: name.to_string(),
-            node_kind: None,
-            fql_kind: None,
-            language: None,
-            path: Some(path.to_path_buf()),
-            line: Some(usize::try_from(line).unwrap_or(usize::MAX)),
-            usages_count: None,
-            fields: HashMap::from([("role".to_owned(), role.to_owned())]),
-            count: None,
-            node_id: None,
-            // A usage site is a line, not a node: no handle, so no rev.
-            rev: None,
-        };
 
         // A name written only in the identifier alphabet is matched token-exact.
         // A name carrying anything else — a path, a dotted name, a fragment — is
@@ -456,12 +443,21 @@ impl ColumnarStorage {
             ));
         }
 
-        let mut results: Vec<SymbolMatch> = sites
+        // The page is cut from the sites, so a site outside it is never built.
+        // Every one of them was still read, matched and counted: `LIMIT` bounds
+        // what is delivered and never what is searched.
+        let views: Vec<crate::storage::SiteView<'_>> = sites
             .iter()
-            .map(|(path, line, role)| occurrence_row(path, *line, role))
+            .map(|(path, line, role)| crate::storage::SiteView {
+                name,
+                path,
+                line: usize::try_from(*line).unwrap_or(usize::MAX),
+                role: Some(role),
+            })
             .collect();
-        apply_clauses(&mut results, clauses);
-        Ok((results, hint))
+        Ok(crate::storage::usage_page_from_sites(
+            views, clauses, bound, hint,
+        ))
     }
 
     /// Every stored usage token containing `needle`, plus `needle` itself.

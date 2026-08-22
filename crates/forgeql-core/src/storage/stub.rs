@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::{ast::index::IndexStats, ir::Clauses, result::SymbolMatch, workspace::Workspace};
+use crate::{ast::index::IndexStats, ir::Clauses, workspace::Workspace};
 
 use super::{FindPage, StorageEngine, SymbolLocation};
 
@@ -44,8 +44,9 @@ impl StorageEngine for StubColumnarStorage {
         _name: &str,
         _clauses: &Clauses,
         _root: &Path,
-    ) -> Result<(Vec<SymbolMatch>, Option<String>)> {
-        Ok((vec![], None))
+        _bound: Option<crate::storage::UsageBound>,
+    ) -> Result<crate::storage::UsagePage> {
+        Ok(crate::storage::UsagePage::default())
     }
 
     fn resolve_symbol(

@@ -254,7 +254,8 @@ impl StorageEngine for LegacyMemoryStorage {
         name: &str,
         clauses: &Clauses,
         root: &Path,
-    ) -> Result<(Vec<SymbolMatch>, Option<String>)> {
+        bound: Option<crate::storage::UsageBound>,
+    ) -> Result<crate::storage::UsagePage> {
         let index = self
             .table
             .as_ref()
@@ -273,23 +274,19 @@ impl StorageEngine for LegacyMemoryStorage {
                 ),
             );
         }
-        let mut results: Vec<SymbolMatch> = sites
+        // The page is cut from the sites, so a site outside it is never built.
+        let views: Vec<crate::storage::SiteView<'_>> = sites
             .iter()
             .filter(|site| {
                 helpers::passes_glob_filter(index.strings.paths.get(site.path_id), clauses, root)
             })
-            .map(|site| SymbolMatch {
-                name: name.to_string(),
-                node_kind: None,
-                fql_kind: None,
-                language: None,
-                path: Some(index.strings.paths.get(site.path_id).to_path_buf()),
-                line: Some(site.line),
-                usages_count: None,
-                fields: std::collections::HashMap::new(),
-                count: None,
-                node_id: None,
-                rev: None,
+            .map(|site| crate::storage::SiteView {
+                name,
+                path: index.strings.paths.get(site.path_id),
+                line: site.line,
+                // This backend tags no role, so the row it builds carries an
+                // empty map and both readers miss on `role` alike.
+                role: None,
             })
             .collect();
 
@@ -300,9 +297,10 @@ impl StorageEngine for LegacyMemoryStorage {
             ..clauses.clone()
         };
 
-        prefilter::validate_order_by_field(&remaining, &results, &configs)?;
-        crate::filter::apply_clauses(&mut results, &remaining);
-        Ok((results, None))
+        prefilter::validate_order_by_field(&remaining, &views, &configs)?;
+        Ok(crate::storage::usage_page_from_sites(
+            views, &remaining, bound, None,
+        ))
     }
 
     // ---- symbol resolution (used by SHOW paths) ------------------------

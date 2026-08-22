@@ -21,10 +21,14 @@ use crate::{
 
 use super::stamps::{stamp_error_counts, stamp_member_handles, stamp_path_handles};
 
-/// The page a `FIND files` without `LIMIT` serves — the standard FIND
-/// default. The total stays honest, so truncation is visible and `OFFSET`
-/// pages the rest; an unbounded listing of a large workspace is how a
-/// session wedges.
+/// The page a `FIND files` without `LIMIT` serves. The total stays honest, so
+/// truncation is visible and `OFFSET` pages the rest; an unbounded listing of a
+/// large workspace is how a session wedges.
+///
+/// It is deliberately a constant here rather than the session's `find_limit`:
+/// this readout is a static function with no session to read one from. The two
+/// numbers agree today, so a deployment that retunes `find_limit` moves every
+/// other verb's default page and leaves this one at twenty.
 const FIND_FILES_DEFAULT_LIMIT: usize = 20;
 
 impl ForgeQLEngine {

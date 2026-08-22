@@ -148,11 +148,11 @@ fn the_row_bound_is_derived_from_the_memory_budget() {
 ///
 /// The BYTE figure is quoted in nine places: `FIND_BYTES_PER_VIEW`'s own
 /// comment, `DEFAULT_FIND_MAX_VIEWS`, `doc/syntax.md`, `doc/architecture.md`,
-/// the four agent documents, and the changelog fragment, all of which say
-/// "48 bytes" and "about 44.7 million". The fragment is on that list
-/// deliberately: it is a live file in the tree until the integrator assembles
-/// it into `CHANGELOG.md`, so a number left stale there is published rather
-/// than merely wrong.
+/// the four agent documents, and the changelog, all of which say "48 bytes"
+/// and "about 44.7 million". The changelog is one site with two spellings: a
+/// live fragment in `changelog.d/` before the release that carries it, and the
+/// assembled entry in `CHANGELOG.md` after — a number left stale in either is
+/// published rather than merely wrong, so check for both.
 ///
 /// The RATIO against a built row is quoted in three more, and the byte figure
 /// appears in none of them, so nobody working the list above would open them:
@@ -173,9 +173,9 @@ fn a_view_costs_what_the_scan_bound_prices_it_at() {
         "a row view has changed size. Two figures go stale, not one. The BYTE \
          figure is quoted in FIND_BYTES_PER_VIEW, DEFAULT_FIND_MAX_VIEWS, \
          doc/syntax.md, doc/architecture.md, the four agent documents, and the \
-         changelog fragment changelog.d/page-from-row-views.md — the fragment \
-         counts, because it is a live file until the integrator assembles it \
-         and a stale number there ships into CHANGELOG.md. The RATIO against a \
+         changelog — as a live fragment under changelog.d/ before the release \
+         that carries it, and as the assembled entry in CHANGELOG.md after; \
+         a stale number in either is published. The RATIO against a \
          built row is quoted separately, and in places the byte figure is not: \
          DEFAULT_FIND_MAX_ROWS ('a thirty-third of the size'), \
          page_from_row_views ('about a thirty-third of its size') and \

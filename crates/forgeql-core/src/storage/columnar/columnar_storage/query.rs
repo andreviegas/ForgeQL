@@ -72,7 +72,8 @@ impl StorageEngine for ColumnarStorage {
         name: &str,
         clauses: &Clauses,
         root: &Path,
-    ) -> Result<(Vec<SymbolMatch>, Option<String>)> {
+        bound: Option<crate::storage::UsageBound>,
+    ) -> Result<crate::storage::UsagePage> {
         // An occurrence row is a line, not a node: it carries no node_kind at
         // all, and none of the other refused names either, so the same refusal
         // `FIND symbols` gives has to be given here rather than letting the
@@ -87,7 +88,7 @@ impl StorageEngine for ColumnarStorage {
         self.reject_unknown_where_fields(clauses)?;
         self.reject_unknown_order_by_field(clauses)?;
         self.reject_unknown_group_by_field(clauses)?;
-        self.find_usages_impl(name, clauses, root)
+        self.find_usages_impl(name, clauses, root, bound)
     }
 
     fn indexed_files(&self) -> Option<Vec<crate::result::FileEntry>> {

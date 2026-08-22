@@ -426,6 +426,130 @@ impl<'a> IntoIterator for &'a mut FindPage {
         self.rows.iter_mut()
     }
 }
+
+/// One occurrence site, read as the row it would build.
+///
+/// `FIND usages` pages by whole files, and which files those are cannot be
+/// known until the residual `WHERE` and the `ORDER BY` have run. Running them
+/// over sites rather than over rows is what lets the sites nobody will see stay
+/// unbuilt: a site becomes a [`SymbolMatch`] only once it is inside the page.
+///
+/// Every arm of its `ClauseTarget` impl answers exactly what [`usage_row`]
+/// writes into the row built from the same site, so the filtering and the
+/// ordering here decide what the filtering and the ordering there would have
+/// decided. `role` is `None` on a backend that does not tag its sites, which is
+/// how the row it builds spells the same absence: an empty map.
+pub(crate) struct SiteView<'a> {
+    /// The queried name, which every occurrence row carries verbatim.
+    pub(crate) name: &'a str,
+    /// The file the site sits in.
+    pub(crate) path: &'a Path,
+    /// 1-based source line of the site.
+    pub(crate) line: usize,
+    /// The occurrence role, where the backend tags one.
+    pub(crate) role: Option<&'a str>,
+}
+
+/// The row a [`SiteView`] stands for.
+///
+/// One constructor for both backends, so the row and the view cannot drift
+/// apart in one of them.
+pub(crate) fn usage_row(site: &SiteView<'_>) -> SymbolMatch {
+    SymbolMatch {
+        name: site.name.to_string(),
+        node_kind: None,
+        fql_kind: None,
+        language: None,
+        path: Some(site.path.to_path_buf()),
+        line: Some(site.line),
+        usages_count: None,
+        fields: site.role.map_or_else(HashMap::new, |role| {
+            HashMap::from([("role".to_owned(), role.to_owned())])
+        }),
+        count: None,
+        node_id: None,
+        // A usage site is a line, not a node: no handle, so no rev.
+        rev: None,
+    }
+}
+
+/// The delivery bound a `FIND usages` page is cut to: **whole files**.
+///
+/// A usage site is one line of one file, and the question behind the query is
+/// "which files hold this name?", so `LIMIT` counts files and every site of a
+/// selected file is delivered. Cutting the site list at a row count instead
+/// would report a file as partly used and drop the rest of it with no marker.
+/// That is why this is not the row bound `FIND symbols` hands its engine: the
+/// two count different things, so they cannot share a gate.
+///
+/// Absent for a `GROUP BY`, whose rows are aggregates — one per group already,
+/// cut by its own `LIMIT` — and which assigns a `count` no site carries.
+#[derive(Debug, Clone, Copy)]
+pub struct UsageBound {
+    /// How many file groups the page renders.
+    pub files: usize,
+    /// How many file groups `OFFSET` skips before the page starts.
+    pub skip: usize,
+    /// How many site rows the page renders before it withholds whole files.
+    pub site_ceiling: usize,
+}
+
+/// One page of a `FIND usages` answer, with the size of the answer it was cut
+/// from and what the cut left out.
+///
+/// `total` is every site that matched and not the page's length — the number a
+/// rename campaign measures its progress against, true under an explicit
+/// `LIMIT` as well as under the default page. `withheld` says whether whole
+/// files were left out and why, so a partial listing is never a silent one.
+#[derive(Debug, Default)]
+pub struct UsagePage {
+    /// The sites this query renders.
+    pub rows: Vec<SymbolMatch>,
+    /// How many sites matched, before the file selection cut the page.
+    pub total: usize,
+    /// Which files matched but were not rendered, and why.
+    pub withheld: Option<crate::filter::Withheld>,
+    /// Files that exist and could not be read, reported as a count.
+    pub unread: Option<String>,
+}
+
+/// Cut a `FIND usages` page from the sites that matched.
+///
+/// With a bound, the clause pipeline and the file selection both run over the
+/// views, and only the sites inside the page are built. Without one — a
+/// `GROUP BY` — the rows are built first, because grouping assigns a `count` a
+/// site view has nowhere to put and returns one row per group in any case.
+pub(crate) fn usage_page_from_sites(
+    mut views: Vec<SiteView<'_>>,
+    clauses: &Clauses,
+    bound: Option<UsageBound>,
+    unread: Option<String>,
+) -> UsagePage {
+    let Some(bound) = bound else {
+        let mut rows: Vec<SymbolMatch> = views.iter().map(usage_row).collect();
+        crate::filter::apply_clauses(&mut rows, clauses);
+        let total = rows.len();
+        return UsagePage {
+            rows,
+            total,
+            withheld: None,
+            unread,
+        };
+    };
+
+    // The count is taken before the page is cut, and from the same pipeline the
+    // rows would have gone through: `total` means every matching site whether
+    // or not a file holding it was rendered.
+    let total = crate::filter::apply_clauses_counted(&mut views, clauses);
+    let selected =
+        crate::filter::take_file_groups(views, bound.skip, bound.files, bound.site_ceiling);
+    UsagePage {
+        rows: selected.rows.iter().map(usage_row).collect(),
+        total,
+        withheld: selected.withheld,
+        unread,
+    }
+}
 // -----------------------------------------------------------------------
 // -----------------------------------------------------------------------
 // StorageEngine trait
@@ -465,8 +589,11 @@ pub trait StorageEngine: Send + Sync + 'static {
 
     /// Execute a `FIND usages OF 'name'` query.
     ///
-    /// Applies glob filtering and the remaining clause pipeline internally.
-    /// Returns the full result set (no truncation).
+    /// Applies glob filtering and the remaining clause pipeline internally, and
+    /// cuts the page `bound` asks for — whole files, never a row count. With no
+    /// bound (`GROUP BY`) it returns the full result set. Either way
+    /// [`UsagePage::total`] counts every site that matched, so an explicit
+    /// `LIMIT` never makes the count agree with the page.
     ///
     /// **Complete over the files the workspace tracks**, which is what the
     /// columnar backend below implements; the legacy in-memory backend answers
@@ -520,18 +647,19 @@ pub trait StorageEngine: Send + Sync + 'static {
     /// character outside that alphabet is matched literally, so reading the
     /// files widens no name into a substring search.
     ///
-    /// The `Option<String>` beside the rows is not a budget or a ceiling: it
-    /// reports a specific thing that went wrong, how many files exist and could
-    /// not be read, so the sites they hold are known to be absent instead of
-    /// silently so. It carries the count and not the paths. A path the index
-    /// lists but the worktree no longer holds is not that case at all — it has
-    /// no bytes, so the answer over it is complete.
+    /// [`UsagePage::unread`] is not a budget or a ceiling: it reports a specific
+    /// thing that went wrong, how many files exist and could not be read, so the
+    /// sites they hold are known to be absent instead of silently so. It carries
+    /// the count and not the paths. A path the index lists but the worktree no
+    /// longer holds is not that case at all — it has no bytes, so the answer over
+    /// it is complete.
     fn find_usages(
         &self,
         name: &str,
         clauses: &Clauses,
         root: &Path,
-    ) -> Result<(Vec<SymbolMatch>, Option<String>)>;
+        bound: Option<UsageBound>,
+    ) -> Result<UsagePage>;
 
     /// Execute a FIND NODE id query.
     ///
@@ -818,7 +946,9 @@ pub(crate) fn row_to_location(row: &IndexRow, table: &SymbolTable) -> SymbolLoca
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{StorageEngine, SymbolLocation};
+    use super::{
+        SiteView, StorageEngine, SymbolLocation, UsageBound, usage_page_from_sites, usage_row,
+    };
     use crate::{
         ir::Clauses,
         storage::{
@@ -856,10 +986,116 @@ mod tests {
         let s = StubColumnarStorage;
         let clauses = Clauses::default();
         let root = Path::new("/tmp");
-        let results = s
-            .find_usages("foo", &clauses, root)
+        let page = s
+            .find_usages("foo", &clauses, root, None)
             .expect("should not error");
-        assert!(results.0.is_empty());
+        assert!(page.rows.is_empty());
+    }
+
+    /// A site view has to answer every clause field exactly as the row built
+    /// from it answers it, because `FIND usages` filters and orders the views
+    /// and then builds only the survivors: a field the two disagree on is a
+    /// missing result, not a slow one.
+    ///
+    /// The probe list is the row's own declared fields plus the one name an
+    /// occurrence row writes into its open map and one no row carries, so a
+    /// field added to the row without being added to the view fails here.
+    #[test]
+    fn a_site_view_reads_every_field_as_the_row_it_builds() {
+        use crate::filter::ClauseTarget as _;
+        use crate::result::SymbolMatch;
+
+        let probes: Vec<&str> = <SymbolMatch as crate::filter::ClauseTarget>::STR_FIELDS
+            .iter()
+            .chain(<SymbolMatch as crate::filter::ClauseTarget>::NUM_FIELDS)
+            .copied()
+            .chain(["role", "line", "lines", "naming", "no_such_field"])
+            .collect();
+
+        // A role that parses as a number as well as one that does not, and a
+        // backend that tags none at all.
+        for role in [Some("code"), Some("42"), None] {
+            let view = SiteView {
+                name: "needle",
+                path: Path::new("src/lib.rs"),
+                line: 7,
+                role,
+            };
+            let row = usage_row(&view);
+
+            for field in &probes {
+                assert_eq!(
+                    view.field_str(field),
+                    row.field_str(field),
+                    "field_str({field}) differs with role {role:?}"
+                );
+                assert_eq!(
+                    view.field_num(field),
+                    row.field_num(field),
+                    "field_num({field}) differs with role {role:?}"
+                );
+            }
+            assert_eq!(view.path(), row.path(), "path() differs");
+        }
+    }
+
+    /// The page is whole files and the count is every site, and the two are
+    /// independent: a site in a file the page does not render is still counted.
+    #[test]
+    fn a_bounded_page_renders_whole_files_and_still_counts_the_rest() {
+        let sites = [
+            (Path::new("a.rs"), 1),
+            (Path::new("a.rs"), 2),
+            (Path::new("b.rs"), 3),
+            (Path::new("c.rs"), 4),
+            (Path::new("c.rs"), 5),
+        ];
+        let views = || {
+            sites
+                .iter()
+                .map(|&(path, line)| SiteView {
+                    name: "needle",
+                    path,
+                    line,
+                    role: Some("code"),
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let page = usage_page_from_sites(
+            views(),
+            &Clauses::default(),
+            Some(UsageBound {
+                files: 2,
+                skip: 0,
+                site_ceiling: 1_000,
+            }),
+            None,
+        );
+        assert_eq!(page.rows.len(), 3, "two whole files, not two rows");
+        assert_eq!(page.total, 5, "every site counts, rendered or not");
+        assert_eq!(page.withheld, Some(crate::filter::Withheld::Limit));
+
+        // No files asked for: nothing is built, and the count is still the
+        // whole answer. This is the shape the zero-symbols hint queries with.
+        let counted = usage_page_from_sites(
+            views(),
+            &Clauses::default(),
+            Some(UsageBound {
+                files: 0,
+                skip: 0,
+                site_ceiling: 0,
+            }),
+            None,
+        );
+        assert!(counted.rows.is_empty());
+        assert_eq!(counted.total, 5);
+
+        // No bound at all: the whole set, and nothing withheld.
+        let whole = usage_page_from_sites(views(), &Clauses::default(), None, None);
+        assert_eq!(whole.rows.len(), 5);
+        assert_eq!(whole.total, 5);
+        assert_eq!(whole.withheld, None);
     }
 
     #[test]

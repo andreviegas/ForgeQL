@@ -1136,9 +1136,16 @@ tiers, so the peak can overshoot the bound by one tier's finds), and the
 in-memory backend's scan, trimmed or not — an armed trim holds the retained
 window to a few multiples of the `LIMIT`, which keeps any small page well
 clear of the budget and refuses a `LIMIT` so large that even its trimmed
-window outgrows it. `FIND files` carries none — and no longer needs one: it
-pages at the standard 20-row FIND default with an honest `total`, so its
-response size is bounded by the page, never by the workspace.
+window outgrows it. The `FIND usages` site list is the one place the budget
+still has to hold the whole answer, because the cut that follows selects whole
+files out of it and so cannot bound what is searched; what it no longer holds
+is a result row per site — the file selection runs over the sites and only the
+ones inside the page are built. `FIND files` carries no row budget: it does
+build a row per workspace entry before any clause runs, but that row is a file
+entry and the count is the workspace's file count rather than its symbol count,
+and its response is bounded by a 20-row page of its own with an honest `total`.
+That page is a constant rather than the configurable `find_limit` every other
+verb defaults to; the two agree unless a deployment retunes one of them.
 
 ---
 

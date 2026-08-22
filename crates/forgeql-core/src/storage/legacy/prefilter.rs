@@ -638,13 +638,11 @@ pub(super) fn find_symbols_prefilter(
 /// `FIND symbols WHERE has_assignment_in_condition = 'true' ORDER BY lines DESC`
 /// to work even when the result set contains symbol types (e.g. `if`) that
 /// don't carry the `lines` enrichment field themselves.
-pub(super) fn validate_order_by_field(
+pub(super) fn validate_order_by_field<T: crate::filter::ClauseTarget>(
     clauses: &Clauses,
-    results: &[SymbolMatch],
+    results: &[T],
     lang_configs: &[&LanguageConfig],
 ) -> Result<()> {
-    use crate::filter::ClauseTarget as _;
-
     const STATIC_FIELDS: &[&str] = &[
         "name",
         "fql_kind",

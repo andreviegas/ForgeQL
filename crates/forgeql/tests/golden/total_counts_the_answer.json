@@ -1,6 +1,6 @@
 {
  "suite": "total_counts_the_answer",
- "description": "`total` is how many rows matched, not how many the page holds. LIMIT bounds delivery; it is the only thing an agent has to tell a first page from a whole answer, and a total clipped to the page size says: this is all of it, about every first page. These cases pin the count against a ground truth taken at a limit high enough that nothing pages at all. Two mechanisms had to change for that and each has its own case: the clause pipeline now reports its size before OFFSET and LIMIT cut it, and the running top-K trim counts the rows it discards on rank. The name-index streams are the third mechanism: they answer from the per-segment deduplicated row counts stored at overlay build time, and their cases ask a five-row page to carry the size of the whole corpus. The segment fetch cap that used to be the other such place is gone: a bare LIMIT is now trimmed by the same running top-K as an ordered one, because the pipeline sorts by (name, line, path, fql_kind) even with no ORDER BY, and the four cases in clause_pipeline.json that pinned the cap are enforced rather than expected to fail. Both mechanisms were checked by mutation rather than assumed: with the trim's count disabled the same query reads '1 of 2 shown' through the built binary on the sibling workspace and '1 of 8 shown' with it on, against an unlimited answer of 8. What no case here can see is whether the collapse that now runs before the trim is reached at all, because it is defined not to move answers; that was measured separately with a panic in place -- one ordinary query collapsed 8 of 108 row ids inside a single segment, before any of them was built -- and it is pinned by the unit tests in fast_paths/tests.rs, which do go red.",
+ "description": "`total` is how many rows matched, not how many the page holds. LIMIT bounds delivery; it is the only thing an agent has to tell a first page from a whole answer, and a total clipped to the page size says: this is all of it, about every first page. These cases pin the count against a ground truth taken at a limit high enough that nothing pages at all. Two mechanisms had to change for that and each has its own case: the clause pipeline now reports its size before OFFSET and LIMIT cut it, and the running top-K trim counts the rows it discards on rank. The name-index streams are the third mechanism: they answer from the per-segment deduplicated row counts stored at overlay build time, and their cases ask a five-row page to carry the size of the whole corpus. The segment fetch cap that used to be the other such place is gone: a bare LIMIT is now trimmed by the same running top-K as an ordered one, because the pipeline sorts by (name, line, path, fql_kind) even with no ORDER BY, and the four cases in clause_pipeline.json that pinned the cap are enforced rather than expected to fail. Both mechanisms were checked by mutation rather than assumed: with the trim's count disabled the same query reads '1 of 2 shown' through the built binary on the sibling workspace and '1 of 8 shown' with it on, against an unlimited answer of 8. What no case here can see is whether the collapse that now runs before the trim is reached at all, because it is defined not to move answers; that was measured separately with a panic in place -- one ordinary query collapsed 8 of 108 row ids inside a single segment, before any of them was built -- and it is pinned by the unit tests in fast_paths/tests.rs, which do go red. The FIND usages cases are the same contract in a different unit: there LIMIT counts files, so a page and its total answer different questions by construction, and the cut is made by the backend over the site list rather than by the caller over built rows.",
  "cases": [
   {
    "name": "the_answer_this_suite_measures_against",
@@ -60,6 +60,46 @@
    "assert": {
     "row_count": 5,
     "total": 59636
+   }
+  },
+  {
+   "name": "the_usages_default_page_is_twenty_files_not_twenty_rows",
+   "description": "FIND usages pages by FILE. Thirty files of this corpus hold the name and the default page renders the first twenty of them whole -- ninety-eight sites -- while total stays the true site count across all thirty. The four cases here are what stops that cut drifting back to the caller: the file count, the OFFSET in files and the site ceiling are handed to the backend, which selects whole file groups over the site list and builds a result row only for the sites inside the page. Answer the query without that bound and the row counts below become the total.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND usages OF 'SymbolMatch'",
+   "assert": {
+    "row_count": 98,
+    "total": 172
+   }
+  },
+  {
+   "name": "an_explicit_usages_limit_counts_files_too",
+   "description": "Three files, every site of each, and the count unchanged. A row LIMIT would have returned three rows and reported a file as partly used with nothing to say it did; this is the unit that replaced it, and it is the reason FIND usages cannot take the row bound FIND symbols hands its engine.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND usages OF 'SymbolMatch' LIMIT 3",
+   "assert": {
+    "row_count": 24,
+    "total": 172
+   }
+  },
+  {
+   "name": "a_usages_predicate_is_answered_before_the_page_is_cut",
+   "description": "WHERE role = 'code' drops forty-nine of the hundred and seventy-two sites, and the total reports the hundred and twenty-three that survive rather than everything the name matched. The same three files come back whole, which is the point: the predicate runs over the sites, ahead of the file selection, so what it removes changes which files the page holds and not merely which rows inside them.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND usages OF 'SymbolMatch' WHERE role = 'code' LIMIT 3",
+   "assert": {
+    "row_count": 24,
+    "total": 123
+   }
+  },
+  {
+   "name": "an_offset_on_usages_skips_whole_files",
+   "description": "OFFSET is in files as well: skipping one and taking two lands on the second and third files, twelve sites between them, with the count still the whole answer. File order never changes, so a page and its successor partition the files rather than overlapping.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND usages OF 'SymbolMatch' LIMIT 2 OFFSET 1",
+   "assert": {
+    "row_count": 12,
+    "total": 172
    }
   },
   {

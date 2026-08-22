@@ -78,10 +78,17 @@ const FIND_BYTES_PER_ROW: usize = 1_600;
 /// before the memory is spent rather than after — the name-ordered stream,
 /// which declines to the scan rather than stream past it, the union of a
 /// session's uncommitted rows into that scan, the `FIND usages` site list on
-/// both backends, and the legacy in-memory backend's own scan. `FIND files` is
-/// outside it and needs no bound of its own: it pages at the standard 20-row
-/// `FIND` default with an honest `total`, so its response is bounded by the
-/// page rather than by the workspace.
+/// both backends, and the legacy in-memory backend's own scan. The `FIND
+/// usages` site list is bounded before its page is cut, because the cut selects
+/// whole files out of a computed answer and cannot bound what is searched.
+///
+/// `FIND files` is outside it and needs no bound of its own, but not for the
+/// reason a reader would assume from the sentence above. It does build a row
+/// for every workspace entry before any clause runs; what makes that safe is
+/// that the row is a `FileEntry` and the count is the workspace's file count,
+/// not its symbol count. Its page is separate too: `FIND_FILES_DEFAULT_LIMIT`
+/// is a constant of its own, so a deployment that retunes `find_limit` moves
+/// every other verb's default page and leaves this one at twenty.
 ///
 /// What it does not cover is the rows a scan CARRIES while it chooses which to
 /// build. Those are row views, a thirty-third of the size, and

@@ -523,7 +523,7 @@ fn dirty_union_rows_count_against_the_row_budget() {
 fn usages_budget_probe() {
     let (_tmp, storage) = single_segment_cpp_storage();
     let clauses = Clauses::default();
-    let result = storage.find_usages("int", &clauses, &fixtures_dir());
+    let result = storage.find_usages("int", &clauses, &fixtures_dir(), None);
 
     match std::env::var("FORGEQL_FIND_MAX_ROWS").as_deref() {
         Ok("1") => {
@@ -534,11 +534,11 @@ fn usages_budget_probe() {
             );
         }
         Ok("0") | Err(_) => {
-            let (rows, _hint) = result.expect("usages must answer without an effective cap");
+            let page = result.expect("usages must answer without an effective cap");
             assert!(
-                rows.len() > 1,
+                page.rows.len() > 1,
                 "fixture should hold several sites for 'int'; got {}",
-                rows.len()
+                page.rows.len()
             );
         }
         Ok(other) => panic!("unexpected probe configuration: {other}"),

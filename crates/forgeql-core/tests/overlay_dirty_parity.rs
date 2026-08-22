@@ -318,19 +318,19 @@ fn dirty_overlay_find_usages_shadows_and_unions() {
 
     // find_usages("SymbolA") must return empty — shadowed.
     let usages_a = storage
-        .find_usages("SymbolA", &clauses, &root)
+        .find_usages("SymbolA", &clauses, &root, None)
         .expect("usages_a");
     assert!(
-        usages_a.0.is_empty(),
+        usages_a.rows.is_empty(),
         "SymbolA must be shadowed after dirty overlay; got: {usages_a:?}"
     );
 
     // find_usages("SymbolB") must return 1 row from dirty segment.
     let usages_b = storage
-        .find_usages("SymbolB", &clauses, &root)
+        .find_usages("SymbolB", &clauses, &root, None)
         .expect("usages_b");
     assert_eq!(
-        usages_b.0.len(),
+        usages_b.rows.len(),
         1,
         "SymbolB must appear in dirty segment; got: {usages_b:?}"
     );

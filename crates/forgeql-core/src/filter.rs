@@ -961,7 +961,7 @@ pub(crate) struct FileGroups<T> {
 
 /// Why a file that matched did not make it into the response.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Withheld {
+pub enum Withheld {
     /// More files matched than `LIMIT` (or the default cap) allows.
     Limit,
     /// The selected files together hold more sites than the response renders.

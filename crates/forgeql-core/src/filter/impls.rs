@@ -400,3 +400,61 @@ impl ClauseTarget for crate::storage::columnar::segment_reader::RowView<'_> {
         self.source_path()
     }
 }
+
+/// An occurrence site read as the row `FIND usages` would build from it.
+///
+/// The row is a symbol row with almost every field empty — the name queried,
+/// the file, the line, and a `role` where the backend tags one — so the view
+/// mirrors it arm for arm rather than reaching for anything. The field lists
+/// are taken from the row's own impl rather than restated, because the row is
+/// what a clause is validated against before either of them sees it.
+///
+/// A field this view answers `None` for is a field the row answers `None` for:
+/// an occurrence row's open map holds `role` and nothing else, so every other
+/// unlisted name misses on both. That is what makes filtering and ordering the
+/// sites before they are built decide what filtering and ordering the rows
+/// would have decided.
+impl ClauseTarget for crate::storage::SiteView<'_> {
+    const ROW: &'static str = <crate::result::SymbolMatch as ClauseTarget>::ROW;
+    const STR_FIELDS: &'static [&'static str] =
+        <crate::result::SymbolMatch as ClauseTarget>::STR_FIELDS;
+    const NUM_FIELDS: &'static [&'static str] =
+        <crate::result::SymbolMatch as ClauseTarget>::NUM_FIELDS;
+    const OPEN_FIELDS: bool = <crate::result::SymbolMatch as ClauseTarget>::OPEN_FIELDS;
+
+    #[expect(
+        clippy::match_same_arms,
+        reason = "the arms are the mirror: each names a field the row answers \
+                  and says what it answers there, so folding the `None` ones \
+                  into the wildcard would hide the agreement this rests on"
+    )]
+    fn field_str(&self, field: &str) -> Option<&str> {
+        match field {
+            "name" => Some(self.name),
+            // An occurrence row leaves these `None`; a site carries no more.
+            "node_kind" | "fql_kind" | "language" | "node_id" => None,
+            "path" => self.path.to_str(),
+            // The open map, which holds this one key and no other.
+            "role" => self.role,
+            _ => None,
+        }
+    }
+
+    #[expect(
+        clippy::match_same_arms,
+        reason = "as above: the arms are the mirror, not a lookup table"
+    )]
+    fn field_num(&self, field: &str) -> Option<i64> {
+        match field {
+            "usages" | "count" => None,
+            "line" => Some(i64::try_from(self.line).unwrap_or(i64::MAX)),
+            // The row parses its map value; so does this, on the same value.
+            "role" => self.role.and_then(|role| role.parse().ok()),
+            _ => None,
+        }
+    }
+
+    fn path(&self) -> Option<&Path> {
+        Some(self.path)
+    }
+}

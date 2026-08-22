@@ -165,11 +165,21 @@ impl ForgeQLEngine {
                 _ => None,
             }
         })?;
+        // Only the count is wanted, so the page asks for no files at all: every
+        // site is still read and counted, none is built into a row.
         let sites = engine
-            .find_usages(&name, &Clauses::default(), root)
+            .find_usages(
+                &name,
+                &Clauses::default(),
+                root,
+                Some(crate::storage::UsageBound {
+                    files: 0,
+                    skip: 0,
+                    site_ceiling: 0,
+                }),
+            )
             .ok()?
-            .0
-            .len();
+            .total;
         if sites == 0 {
             return None;
         }
@@ -196,44 +206,43 @@ impl ForgeQLEngine {
 
         // A usage site is one line of one file, and the question behind the
         // query is "which files hold this name?".  So the cap counts files, not
-        // rows: the backend is asked for every site — LIMIT and OFFSET are
-        // withheld from it — and whole file groups are selected below.  Cutting
-        // the site list at a row count instead would report a file as partly
-        // used and drop the rest of it with no marker.
+        // rows, and it is handed to the backend as such: whole file groups are
+        // selected there, before a site outside the page is ever built into a
+        // row.  Cutting the site list at a row count instead would report a
+        // file as partly used and drop the rest of it with no marker, which is
+        // why this bound is its own shape rather than the row LIMIT `FIND
+        // symbols` hands down.
         //
         // GROUP BY is exempt.  Its rows are aggregates, already one per group,
         // and its own LIMIT counts those groups; re-grouping them by path would
-        // collapse a `GROUP BY` on any other field into a single bucket.
+        // collapse a `GROUP BY` on any other field into a single bucket.  It
+        // gets no bound, and its default page is still cut here.
         let grouped = clauses.group_by.is_some();
         let mut engine_clauses = clauses.clone();
-        if !grouped {
+        let bound = if grouped {
+            None
+        } else {
             engine_clauses.limit = None;
             engine_clauses.offset = None;
-        }
+            Some(crate::storage::UsageBound {
+                files: clauses.limit.unwrap_or(find_limit),
+                skip: clauses.offset.unwrap_or(0),
+                site_ceiling: crate::filter::USAGE_SITE_CEILING,
+            })
+        };
 
-        let (mut results, verify_hint) =
-            session
-                .engine_for(backend)?
-                .find_usages(of, &engine_clauses, &root)?;
+        let page = session
+            .engine_for(backend)?
+            .find_usages(of, &engine_clauses, &root, bound)?;
 
         // `total` is the true site count even under an explicit LIMIT — the
         // number a rename campaign measures its progress against.  FIND symbols
         // still reports a LIMIT-capped total; the divergence is deliberate.
-        let total = results.len();
-        let mut withheld = None;
-        if grouped {
-            if clauses.limit.is_none() {
-                results.truncate(find_limit);
-            }
-        } else {
-            let selected = crate::filter::take_file_groups(
-                results,
-                clauses.offset.unwrap_or(0),
-                clauses.limit.unwrap_or(find_limit),
-                crate::filter::USAGE_SITE_CEILING,
-            );
-            results = selected.rows;
-            withheld = selected.withheld;
+        let total = page.total;
+        let mut results = page.rows;
+        let withheld = page.withheld;
+        if grouped && clauses.limit.is_none() {
+            results.truncate(find_limit);
         }
         let found_rev = self.record_found_set(sid, "find_usages", &results, total, clauses);
 
@@ -266,7 +275,7 @@ impl ForgeQLEngine {
             },
             hint: Self::withheld_hint(withheld)
                 .into_iter()
-                .chain(verify_hint)
+                .chain(page.unread)
                 .reduce(|a, b| format!("{a} {b}")),
             found_rev,
         }))
