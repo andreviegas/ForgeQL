@@ -509,7 +509,9 @@ pub struct UsageBound {
 pub struct UsagePage {
     /// The sites this query renders.
     pub rows: Vec<SymbolMatch>,
-    /// How many sites matched, before the file selection cut the page.
+    /// How many sites matched, before the file selection cut the page — except
+    /// under `GROUP BY`, where it is the number of group rows the page holds,
+    /// those being cut by their own `LIMIT` before anything counts them.
     pub total: usize,
     /// Which files matched but were not rendered, and why.
     pub withheld: Option<crate::filter::Withheld>,

@@ -174,7 +174,9 @@ FIND files [clauses]
 > `total` is the true site count across the whole worktree **even under an
 > explicit `LIMIT`** — it is what a rename campaign measures progress against,
 > and `total` greater than the row count is how you see that files were left
-> out. (`FIND symbols` reports the true match count too, except for a bare
+> out. Under `GROUP BY` it means something else: the rows are aggregates cut by
+> their own `LIMIT` before anything counts them, so there `total` is the number
+> of group rows the page holds. (`FIND symbols` reports the true match count too, except for a bare
 > `LIMIT` with no `ORDER BY` and for `ORDER BY name` with a small one, where the
 > scan stops early and nothing counts what it did not read.) A result with files
 > left out arms no `found_rev`, so every `FOUND` verb refuses.
@@ -1013,13 +1015,19 @@ on nothing and the predicate is false for every row of that segment — `!=` and
 than passing it. That segment contributed nothing before either; what has gone
 is the rows built to find out, and with them the rule that one segment lacking
 an enrichment column took the page off row views for every segment that had it.
-What still bars a field is a segment *shadowing* it with a same-named enrichment
-column. The `ORDER BY` field asks less: it need only be one a row view reads the
-same way the row it would build reads it, which is every field except `usages`,
-`node_id` and `count`, since a built row fills those three in from outside its
-columns. A field a segment simply does not carry is not a bar to ordering on it
-either — both readings agree it is absent — which is what makes ordering on an
-enrichment field reachable at all.
+Two things still bar a field. One is a segment *shadowing* it with a same-named
+enrichment column. The other is `body` and `role`, which are written onto a row
+after its columns are read — `body` out of the file as the row is materialised,
+`role` by the read pass that finds an occurrence site — so for those two a
+missing column is not a missing value, and both the `WHERE` and the `ORDER BY`
+wait for the row. The `ORDER BY` field asks a different question, not a weaker
+one: it need only be one a row view reads the same way the row it would build
+reads it, which is every field except the five a built row can come to carry
+from outside its columns — `usages`, `node_id` and `count`, plus `body` and
+`role`. A shadow is no bar to ordering, because the ranking reads a struct-backed
+name from the fixed column whatever a same-named enrichment column holds; and a
+field a segment simply does not carry is no bar either, both readings agreeing it
+is absent, which is what makes ordering on an enrichment field reachable at all.
 Where it declines, a running top-K trim over built rows still holds the working
 set to a few thousand rows for `k` no greater than 1000 with no `OFFSET`, no
 `GROUP BY` and no `HAVING`; and where neither applies, every matching row is

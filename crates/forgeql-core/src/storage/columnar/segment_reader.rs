@@ -466,16 +466,23 @@ pub(crate) const VIEW_CANNOT_ANSWER: &[&str] = &["node_id", "usages", "count"];
 /// A property of the field, not of the segment: [`RowView`] resolves every
 /// field exactly as [`crate::result::SymbolMatch`] resolves it — struct-backed
 /// names from the fixed columns the built row is filled from, everything else
-/// from the enrichment column the built row's map is filled from — so the only
-/// fields the two can disagree on are the ones no column holds at all.
+/// from the enrichment column the built row's map is filled from. So the two
+/// disagree only where the built row is given a value from neither: the three
+/// in [`VIEW_CANNOT_ANSWER`], and the names
+/// [`crate::field_tiers::written_after_materialisation`] marks as written onto
+/// the row after its columns are read.
 ///
-/// It is deliberately not [`SegmentReader::answers_field`], which is the
-/// conservative question a *predicate* asks: that one may decline where it is
-/// unsure, because a declined predicate is merely run later. An ordering that
-/// declines where it should not is not merely slower — it takes the whole page
-/// off the route.
+/// That second set matters more here than it does for a predicate. A predicate
+/// that declines is merely run later; an ordering that ranks every row by an
+/// absence the built row does not share cuts the wrong top-K and sheds rows
+/// that belonged in the answer, with a full-confidence page to show for it. So
+/// this asks the same question [`SegmentReader::row_field`] asks, even though
+/// the two are otherwise different questions: that one may decline a field it
+/// is merely unsure of, and this one may not decline `name` because some
+/// segment shadows it, or the route would be taken by almost nothing.
 pub(crate) fn ranks_field_like_a_built_row(field: &str) -> bool {
     !VIEW_CANNOT_ANSWER.contains(&field)
+        && !crate::field_tiers::written_after_materialisation(field)
 }
 
 /// One segment row carried through the duplicate collapse, the ordering and

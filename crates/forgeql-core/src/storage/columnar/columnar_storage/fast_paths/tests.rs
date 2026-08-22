@@ -746,6 +746,26 @@ fn the_view_path_gate_covers_every_published_tie_breaker() {
              answer, which would leave no ordering able to ride a view at all"
         );
     }
+
+    // The ordering reader asks the same guard the predicate reader asks. A
+    // deferred predicate is merely slower; an ordering that ranks every row by
+    // an absence the built row does not share cuts the wrong top-K and sheds
+    // rows that belonged in the answer, so this is the reader that can least
+    // afford to admit `body` or `role`.
+    for field in ["body", "role"] {
+        assert!(
+            !ranks_field_like_a_built_row(field),
+            "{field} is written onto the row after its columns are read, so a \
+             view ranking by it ranks by an absence the built row may not share"
+        );
+    }
+    for field in ["has_doc", "lines", "naming", "param_count"] {
+        assert!(
+            ranks_field_like_a_built_row(field),
+            "{field} is an ordinary enrichment name — refusing it here would \
+             take the route back to almost nothing"
+        );
+    }
 }
 
 /// Every field a row view answers must read the same on the view as on the row

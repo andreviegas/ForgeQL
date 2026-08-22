@@ -8,11 +8,13 @@
 //! selected file returned, a `total` that stays the true site count, and a
 //! `FOUND` set that arms only when no file was dropped.
 //!
-//! They also pin where the cap is applied, not only what it produces.  The
-//! backend is handed the file bound and cuts the page from the site list, so a
-//! site in a file nobody will see is never built into a row.  Take the bound
-//! away from the backend and every case here that expects fewer rows than
-//! `total` fails, which is what stops the cut drifting back to the caller.
+//! They pin what the cap produces, not where it is applied.  The backend is
+//! handed the file bound and cuts the page from the site list, so a site in a
+//! file nobody will see is never built into a row — but the caller-side
+//! selection this replaced produced the same rows and the same `total`, so no
+//! case here can tell the two apart.  That the page is cut before the rows are
+//! built is pinned in `crates/forgeql-core/src/storage/mod.rs`, by a case that
+//! asks for zero files and gets zero rows with the count intact.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
