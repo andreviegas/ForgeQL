@@ -314,11 +314,24 @@ pub(in crate::storage) fn usages_budget_exceeded(sites: usize, max_rows: usize) 
 /// differently. A predicate waits when [`SegmentReader::answers_field`]
 /// declines its field — `usages`, which is stamped from the workspace overlay
 /// only after materialisation; `node_id`, which is built during it; `count`,
-/// which GROUP BY assigns later still; a struct-backed name this segment
-/// shadows with an enrichment column; or a field no column of this segment
-/// holds — and also when the operator is a regex, because
-/// `apply_where_predicates` compiles the pattern once for a whole batch while
-/// a per-row evaluation would recompile it for every row.
+/// which GROUP BY assigns later still; or a struct-backed name this segment
+/// shadows with an enrichment column — and also when the operator is a regex.
+///
+/// A field no column of this segment holds does **not** wait. The row this
+/// segment would build carries it in neither its struct nor its enrichment
+/// map, so both readers resolve it to `None`, and every operator that consults
+/// the field is then false — `!=` and `NOT LIKE` as much as `=` and `LIKE`,
+/// because each arm of `eval_predicate_on` is `is_some_and`. A segment like
+/// that contributes nothing to the answer, which is what it contributed before
+/// as well; the difference is that its rows are no longer built to find out.
+///
+/// The regex clause is not only about cost, and must stay first. On a value
+/// the reader resolves to `None`, `apply_where_predicates` and
+/// `eval_predicate_on` disagree about `NOT MATCHES`: the batch path keeps the
+/// row (`ok == is_matches` with both false) and the per-item path drops it
+/// (`is_some_and` on nothing). Holding every regex back to the batch that
+/// built the rows is what keeps that disagreement off the answer, so a change
+/// here that let one through would move rows, not just work.
 fn predicate_waits_for_a_built_row(
     seg: &SegmentReader,
     predicate: &crate::ir::Predicate,

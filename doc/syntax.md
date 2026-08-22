@@ -1002,15 +1002,24 @@ A view is 48 bytes against about 1,600 for the row it stands for, so the same
 page now meets is the one on what it delivers rather than the one on what it
 searches. That route wants no `GROUP BY` and no `HAVING`, no two segments of the
 index built from one source path, and two conditions that are not the same
-condition. Every field the `WHERE` names must be answerable from the columns of
-each segment the query selects — and no `MATCHES`/`NOT MATCHES` operator is,
-whatever field it names, a regex being compiled once for a batch of built rows
-rather than once per row. The `ORDER BY` field asks less: it need only be one a
-row view reads the same way the row it would build reads it, which is every field
-except `usages`, `node_id` and `count`, since a built row fills those three in
-from outside its columns. A field a segment simply does not carry is not a bar to
-ordering on it — both readings agree it is absent — which is what makes
-ordering on an enrichment field reachable at all.
+condition. Every field the `WHERE` names must be one each segment the query
+selects either answers from a column or holds no column for at all — and no
+`MATCHES`/`NOT MATCHES` operator is, whatever field it names, a regex being
+compiled once for a batch of built rows rather than once per row. Absence is an
+answer: where no column holds the field, the row that segment would build
+carries it in neither its struct nor its enrichment map, so both readings agree
+on nothing and the predicate is false for every row of that segment — `!=` and
+`NOT LIKE` as much as `=` and `LIKE`, a missing value failing an operator rather
+than passing it. That segment contributed nothing before either; what has gone
+is the rows built to find out, and with them the rule that one segment lacking
+an enrichment column took the page off row views for every segment that had it.
+What still bars a field is a segment *shadowing* it with a same-named enrichment
+column. The `ORDER BY` field asks less: it need only be one a row view reads the
+same way the row it would build reads it, which is every field except `usages`,
+`node_id` and `count`, since a built row fills those three in from outside its
+columns. A field a segment simply does not carry is not a bar to ordering on it
+either — both readings agree it is absent — which is what makes ordering on an
+enrichment field reachable at all.
 Where it declines, a running top-K trim over built rows still holds the working
 set to a few thousand rows for `k` no greater than 1000 with no `OFFSET`, no
 `GROUP BY` and no `HAVING`; and where neither applies, every matching row is

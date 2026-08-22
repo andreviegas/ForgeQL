@@ -748,6 +748,10 @@ fn a_row_view_answers_a_prefilterable_predicate_as_the_built_row_does() {
 /// `usages` is overwritten from the workspace overlay after materialisation,
 /// `node_id` is built during it, `node_kind` is not stored at all, and `count`
 /// is assigned later still by GROUP BY.
+///
+/// A field nothing holds is the opposite case and is answered, so the two are
+/// checked together: declining is for where the readers would disagree, not
+/// for wherever a column is missing.
 #[test]
 fn fields_a_built_row_answers_from_its_struct_are_not_answered_from_columns() {
     let (_tmp, seg) = segment_for_row_view();
@@ -761,8 +765,13 @@ fn fields_a_built_row_answers_from_its_struct_are_not_answered_from_columns() {
     // `path` is the caller's, so it is answerable only when the caller gave one.
     assert!(reader.answers_field("path", true));
     assert!(!reader.answers_field("path", false));
-    // A field no column of this segment holds is not answered either.
-    assert!(!reader.answers_field("has_doc", true));
+    // A field no column of this segment holds IS answered — by reporting that
+    // it is absent. The row this segment would build carries it in neither its
+    // struct nor its enrichment map, so both readers resolve it to None and
+    // every operator that consults the field is false on both. That is a
+    // different case from the four above, where the built row does carry the
+    // field and reads it from somewhere no view can see.
+    assert!(reader.answers_field("has_doc", true));
 }
 
 /// An enrichment column named after one of those fields can make the two

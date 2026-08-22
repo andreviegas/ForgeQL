@@ -57,7 +57,9 @@ fn every_predicate_lands_on_exactly_one_side_of_the_split() {
         predicate("param_count", CompareOp::Eq, PredicateValue::Number(2)),
         // Stamped from the workspace overlay only after materialisation.
         predicate("usages", CompareOp::Gte, PredicateValue::Number(1)),
-        // No column of this segment holds it.
+        // No column of this segment holds it, and the row it would build would
+        // not carry it either — so both readers answer None and this is
+        // decided here, not after the rows are built.
         predicate(
             "has_doc",
             CompareOp::Eq,
@@ -86,9 +88,126 @@ fn every_predicate_lands_on_exactly_one_side_of_the_split() {
     assert_eq!(got, want, "the two halves together must be the input");
 
     let early_fields: Vec<&str> = early.iter().map(|(field, _)| *field).collect();
-    assert_eq!(early_fields, ["line", "param_count"]);
+    assert_eq!(early_fields, ["line", "param_count", "has_doc"]);
     let late_fields: Vec<&str> = late.iter().map(|p| p.field.as_str()).collect();
-    assert_eq!(late_fields, ["usages", "has_doc", "name"]);
+    assert_eq!(late_fields, ["usages", "name"]);
+}
+
+/// A predicate on a field no column of the segment holds is answered early,
+/// and it answers what the built row's filter would have answered.
+///
+/// This is the arm that is easiest to get wrong, so it is checked against the
+/// built path rather than against an expectation. For each operator the same
+/// predicate is run two ways: over a `SegRowRef`, which is what the early
+/// filter does, and over the `SymbolMatch` the same row materialises into,
+/// which is what `apply_where_predicates` falls through to for every operator
+/// that is not a regex. The two must agree for every row.
+///
+/// The negative operators are the point. `!=` and `NOT LIKE` on an absent
+/// field are **false**, not true — every arm of `eval_predicate_on` is
+/// `is_some_and`, so a missing value fails the operator rather than passing
+/// it — and a reading that "a negative predicate lets every row through"
+/// would silently add rows the built path drops.
+#[test]
+fn an_absent_field_answers_early_exactly_as_the_built_row_answers_it() {
+    let (_tmp, seg) = ranked_segment();
+    let source = std::path::Path::new("ranked.rs");
+    let rows = seg.materialize_rows(&(0..seg.row_count).collect(), Some(source));
+
+    // `has_doc` is on no column of this fixture, so nothing on the row or in
+    // its enrichment map carries it.
+    let cases = [
+        predicate(
+            "has_doc",
+            CompareOp::Eq,
+            PredicateValue::String("true".into()),
+        ),
+        predicate(
+            "has_doc",
+            CompareOp::NotEq,
+            PredicateValue::String("true".into()),
+        ),
+        predicate(
+            "has_doc",
+            CompareOp::Like,
+            PredicateValue::String("tr%".into()),
+        ),
+        predicate(
+            "has_doc",
+            CompareOp::NotLike,
+            PredicateValue::String("tr%".into()),
+        ),
+        predicate("has_doc", CompareOp::Eq, PredicateValue::Number(1)),
+        predicate("has_doc", CompareOp::NotEq, PredicateValue::Number(1)),
+        predicate("has_doc", CompareOp::Gt, PredicateValue::Number(0)),
+        predicate("has_doc", CompareOp::Gte, PredicateValue::Number(0)),
+        predicate("has_doc", CompareOp::Lt, PredicateValue::Number(99)),
+        predicate("has_doc", CompareOp::Lte, PredicateValue::Number(99)),
+        // Passes every row without ever consulting the field, on both readers.
+        predicate("has_doc", CompareOp::NotLike, PredicateValue::Number(5)),
+    ];
+
+    for pred in &cases {
+        assert!(
+            !predicate_waits_for_a_built_row(&seg, pred, true),
+            "{:?} on an absent field should be answered early",
+            pred.op
+        );
+        for row in 0..seg.row_count {
+            let view = crate::storage::columnar::segment_reader::SegRowRef {
+                seg: &seg,
+                row,
+                source_path: Some(source),
+            };
+            assert_eq!(
+                crate::filter::eval_predicate(&view, pred),
+                crate::filter::eval_predicate(&rows[row as usize], pred),
+                "{:?} disagrees with the built row on row {row}",
+                pred.op
+            );
+        }
+    }
+
+    // Every operator that consults the field is false; only the arm that
+    // short-circuits before reading it passes.
+    let view = crate::storage::columnar::segment_reader::SegRowRef {
+        seg: &seg,
+        row: 0,
+        source_path: Some(source),
+    };
+    for pred in &cases[..cases.len() - 1] {
+        assert!(
+            !crate::filter::eval_predicate(&view, pred),
+            "{:?} on an absent field must be false, negations included",
+            pred.op
+        );
+    }
+    assert!(crate::filter::eval_predicate(
+        &view,
+        &cases[cases.len() - 1]
+    ));
+
+    // A regex still waits, and not only for cost: on a value that resolves to
+    // None the batch filter KEEPS a NOT MATCHES row while a per-row evaluation
+    // would drop it, so letting one through here would move the answer.
+    assert!(predicate_waits_for_a_built_row(
+        &seg,
+        &predicate(
+            "has_doc",
+            CompareOp::NotMatches,
+            PredicateValue::String("^t".into())
+        ),
+        true
+    ));
+    assert!(predicate_waits_for_a_built_row(
+        &seg,
+        &predicate(
+            "has_doc",
+            CompareOp::Matches,
+            PredicateValue::String("^t".into())
+        ),
+        true
+    ));
 }
 
 /// With no path for the segment there is nothing to answer `path` with, so it
@@ -797,6 +916,53 @@ fn the_view_route_opens_for_a_plain_bounded_scan_and_closes_where_it_must() {
         ),
         "a regex is compiled once for a batch of built rows and would be \
          recompiled per row here, so it waits whatever field it names"
+    );
+}
+
+/// A field NO column of the segment holds leaves the view route open, and this
+/// is the case that used to close it.
+///
+/// The row this segment would build carries `has_doc` in neither its struct nor
+/// its enrichment map, so the view and the row agree on `None` and the
+/// predicate is decided from the columns. For a whole query that means one
+/// segment lacking an enrichment column no longer takes the page off views for
+/// every segment that has it — which is the whole of what this change buys, so
+/// this is the case that goes red if it stops happening.
+#[test]
+fn an_absent_column_leaves_the_view_route_open_but_a_regex_still_waits() {
+    let (_tmp, seg) = ranked_segment();
+
+    assert!(segment_rows_can_travel_as_views(
+        &seg,
+        &[predicate(
+            "has_doc",
+            CompareOp::Eq,
+            PredicateValue::String("true".to_owned())
+        )]
+    ));
+    assert!(
+        segment_rows_can_travel_as_views(
+            &seg,
+            &[predicate(
+                "has_doc",
+                CompareOp::NotEq,
+                PredicateValue::String("true".to_owned())
+            )]
+        ),
+        "a negative operator is answered here too, and answers false — the \
+         same thing the built row's filter concludes from the same absence"
+    );
+    assert!(
+        !segment_rows_can_travel_as_views(
+            &seg,
+            &[Predicate {
+                field: "has_doc".to_owned(),
+                op: CompareOp::NotMatches,
+                value: crate::ir::PredicateValue::String("^t".to_owned()),
+            }]
+        ),
+        "NOT MATCHES on an absent field is the one shape where the batch \
+         filter and a per-row evaluation disagree, so it must keep waiting"
     );
 }
 

@@ -103,6 +103,46 @@
      { "name": "collect_nodes", "line": 358 }
     ]
    }
+  },
+  {
+   "name": "a_predicate_some_segments_have_no_column_for_answers_the_same",
+   "description": "Mixed coverage: 21,983 of this corpus's 32,748 candidate segments carry no `lines` column at all, and one such segment among the candidates used to take the page off row views for every segment that has one. It no longer does. The row those segments would build carries `lines` in neither its struct nor its enrichment map, so the view and the row both resolve it to None and the predicate is decided from the columns — a segment with no column contributes nothing, which is exactly what it contributed before, minus the rows built to find that out. This case pins the answer, which must not move.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE lines > 150 LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "total": 57
+   }
+  },
+  {
+   "name": "the_same_mixed_coverage_answer_under_an_order_by",
+   "description": "The same predicate with an ordering written, so the page is ranked rather than taken in segment order. Same count, because what changed is where the predicate is answered and not which rows answer it.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE lines > 150 ORDER BY name ASC LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "total": 57
+   }
+  },
+  {
+   "name": "a_negative_predicate_on_an_absent_column_drops_those_rows",
+   "description": "The arm that is easiest to get wrong, and the reason this is pinned against a real corpus rather than reasoned about. `!=` on a field a segment has no column for is FALSE for every row of that segment, not true: each arm of the row filter is `is_some_and`, so a missing value fails the operator rather than passing it. The corpus holds 59,636 rows and 3,903 of them answer `lines != 150` — the rest carry no `lines` at all and are dropped, before this change and after it. A reading that a negative predicate lets every row through would report tens of thousands here.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE lines != 150 LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "total": 3903
+   }
+  },
+  {
+   "name": "a_negative_like_on_an_absent_column_drops_them_too",
+   "description": "`NOT LIKE` behaves as `!=` does and for the same reason, so the two are pinned together: 3,799 rows carry a `lines` value that does not start with 15. What is NOT answered early is `NOT MATCHES`, which stays with the built rows whatever field it names — on a value that resolves to nothing the batch filter keeps the row while a per-row evaluation would drop it, and holding every regex back is what keeps that disagreement off the answer. The unit suite pins that; no golden case can see it, because the answer is the same either way.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE lines NOT LIKE '15%' LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "total": 3799
+   }
   }
  ]
 }

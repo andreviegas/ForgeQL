@@ -363,8 +363,19 @@ pub(crate) enum RowField {
     Line,
     /// An enrichment column, already resolved to its byte range.
     Extra(ColRange),
-    /// Nothing on this row answers the field, so the predicate naming it is
-    /// not answered early — it runs against the materialised rows instead.
+    /// No column of this segment holds the field, and no struct field of the
+    /// row it would build holds it either — so both readers answer `None`, and
+    /// the predicate naming it can be answered here.
+    ///
+    /// Distinct from [`Self::Unanswerable`], which is where the two would
+    /// disagree. Reporting a confident absence is an answer: on an absent
+    /// field every operator [`crate::filter::eval_predicate_on`] consults the
+    /// field with is false, negations included, which is exactly what the
+    /// built row's filter concludes from the same missing value.
+    Absent,
+    /// The built row answers the field from somewhere this reader cannot see,
+    /// so the predicate naming it is not answered early — it runs against the
+    /// materialised rows instead.
     Unanswerable,
 }
 
@@ -396,7 +407,7 @@ impl<'a> SegRowRef<'a> {
             RowField::Language => non_empty(self.seg.language_of(self.row)),
             RowField::Path => self.source_path.and_then(Path::to_str),
             RowField::Extra(range) => self.seg.opt_str_in(range, self.row),
-            RowField::Line | RowField::Unanswerable => None,
+            RowField::Line | RowField::Absent | RowField::Unanswerable => None,
         }
     }
 
@@ -412,6 +423,7 @@ impl<'a> SegRowRef<'a> {
             | RowField::FqlKind
             | RowField::Language
             | RowField::Path
+            | RowField::Absent
             | RowField::Unanswerable => None,
         }
     }
@@ -1583,11 +1595,20 @@ impl SegmentReader {
     /// overwritten from the workspace overlay afterwards, and `count` is
     /// assigned later still by GROUP BY. A predicate on one of them is left to
     /// run against the built rows rather than answered from a column.
+    ///
+    /// A field no column holds is [`RowField::Absent`] rather than
+    /// unanswerable, which is a different thing: the built row's map would not
+    /// carry it either, so the two readers agree on `None` and the predicate is
+    /// answered here.
     pub(crate) fn row_field(&self, field: &str, has_path: bool) -> RowField {
         let Some(index) = STRUCT_BACKED_FIELDS.iter().position(|name| *name == field) else {
+            // Not struct-backed and no column of this segment holds it, so the
+            // row this segment would build carries it in neither its struct nor
+            // its enrichment map: both readers answer `None`, and saying so
+            // early is the same answer said sooner.
             return self
                 .extra_col_range(field)
-                .map_or(RowField::Unanswerable, RowField::Extra);
+                .map_or(RowField::Absent, RowField::Extra);
         };
         // Only the colliding name falls back. An enrichment column named after
         // one struct-backed field says nothing about the others, so a segment
@@ -1607,11 +1628,21 @@ impl SegmentReader {
         }
     }
 
-    /// Whether a row view over this segment answers `field` at all.
+    /// Whether a row view over this segment answers `field` the way the row it
+    /// would build answers it.
     ///
     /// A caller filters a predicate before materialisation only when this is
     /// true; a predicate it is false for is not dropped, it is left for the
     /// filter that runs on the built rows.
+    ///
+    /// **Reporting a confident absence counts as answering.** A field no
+    /// column of this segment holds is one the built row carries in neither
+    /// its struct nor its enrichment map, so both readers resolve it to
+    /// `None` and every operator that consults the field is false on both —
+    /// `!=` and `NOT LIKE` included, since each arm of
+    /// [`crate::filter::eval_predicate_on`] is `is_some_and`. Only
+    /// [`RowField::Unanswerable`] is false here: those are the names where the
+    /// built row reads from somewhere no view can see.
     pub(crate) fn answers_field(&self, field: &str, has_path: bool) -> bool {
         !matches!(self.row_field(field, has_path), RowField::Unanswerable)
     }
