@@ -1584,3 +1584,41 @@ fn count_and_the_kind_are_the_only_two_the_kind_group_row_answers() {
         );
     }
 }
+
+/// No regex predicate is answered before the rows are built — on any field,
+/// including one the segment holds a column for.
+///
+/// This is not a cost rule, and reading it as one is how it would get relaxed.
+/// `apply_where_predicates` and `eval_predicate_on` genuinely disagree on a
+/// `NOT MATCHES` whose value is absent: the batch path computes
+/// `is_some_and(is_match)` and keeps the row when that is `false == false`,
+/// while `eval_predicate_on` computes `is_some_and(|v| !is_match(v))` and drops
+/// it. Nothing reaches that disagreement only because this line holds every
+/// regex to the batch path.
+///
+/// The absent case is pinned elsewhere. What this pins is the harder one: a
+/// field the segment *does* carry a column for still waits, because an unset
+/// slot in a stored column reads as absent too — so admitting regexes for
+/// "fields the segment answers" would walk straight into the same divergence.
+#[test]
+fn a_regex_waits_for_a_built_row_even_on_a_column_the_segment_holds() {
+    let (_tmp, reader) = one_row_segment();
+
+    assert!(
+        reader.answers_field("param_count", true),
+        "the fixture must carry this column, or the test is asking nothing"
+    );
+
+    for op in [CompareOp::Matches, CompareOp::NotMatches] {
+        assert!(
+            predicate_waits_for_a_built_row(
+                &reader,
+                &predicate("param_count", op, PredicateValue::String("^2$".to_owned())),
+                true
+            ),
+            "{op:?} on a column this segment holds must still wait: the two \
+             readers disagree on an absent value, and an unset slot in a held \
+             column is absent"
+        );
+    }
+}

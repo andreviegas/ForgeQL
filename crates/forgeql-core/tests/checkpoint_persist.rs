@@ -240,3 +240,64 @@ fn nested_checkpoints_rollback() {
         "ROLLBACK txn-a failed"
     );
 }
+
+/// `SHOW COMMITS` reports the page size as its total under an explicit `LIMIT`.
+///
+/// **Known defect, ignored until fixed.** `readouts.rs` applies the clauses —
+/// which truncates to the `LIMIT` — and only then takes `total` from what
+/// survived, so a page of five reports five however many commits the session
+/// made. That is the "an early exit that assumes LIMIT bounds the answer"
+/// family the `total_counts_the_answer` golden suite exists to kill; this verb
+/// was never re-checked when the rest of it was.
+///
+/// It cannot be pinned as a golden case: `SHOW COMMITS` counts commits the
+/// session itself made, a golden session makes none, and one that committed
+/// would meet the commit gate. So it is pinned here, where a session can
+/// commit, and left `#[ignore]`d rather than asserting the wrong number.
+///
+/// The fix is one line, and `usage_page_from_sites` already shows it: take the
+/// count from `apply_clauses_counted`, which returns what matched before the
+/// page was cut, instead of from `results.len()` after.
+#[test]
+#[ignore = "known defect: SHOW COMMITS reports the page size as its total"]
+fn show_commits_reports_every_commit_not_the_page_size() {
+    let mut t = engine_with_git_session();
+
+    // `register_local_session` names the session branch `test-branch`, which the
+    // fixture's repo does not hold — and `SHOW COMMITS` counts commits since
+    // exactly that ref. Point it at the initial commit so the six below are what
+    // the verb has to count.
+    {
+        let repo = git2::Repository::open(t.workspace()).expect("open fixture repo");
+        let head = repo.head().expect("HEAD").peel_to_commit().expect("commit");
+        repo.branch("test-branch", &head, true).expect("branch");
+    }
+
+    for i in 1..=6 {
+        fs::write(
+            t.workspace().join(format!("note_{i}.txt")),
+            format!("{i}\n"),
+        )
+        .expect("write a file to commit");
+        t.exec(&format!("COMMIT MESSAGE 'commit number {i}'"));
+    }
+
+    let ForgeQLResult::Query(all) = t.exec("SHOW COMMITS") else {
+        panic!("SHOW COMMITS did not answer with a query result");
+    };
+    assert_eq!(all.total, 6, "the session made six commits");
+
+    let ForgeQLResult::Query(page) = t.exec("SHOW COMMITS LIMIT 5") else {
+        panic!("SHOW COMMITS LIMIT 5 did not answer with a query result");
+    };
+    assert_eq!(
+        page.results.len(),
+        5,
+        "the page holds what the LIMIT asked for"
+    );
+    assert_eq!(
+        page.total, 6,
+        "and the total is still every commit — a total equal to the page size \
+         tells an agent it has seen everything when it has seen five of six"
+    );
+}
