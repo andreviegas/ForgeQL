@@ -267,9 +267,12 @@ pub(in crate::storage) fn row_budget_exceeded(max_rows: usize) -> anyhow::Error 
          matched. That route wants no GROUP BY and no HAVING — a HAVING \
          runs after the page is cut — no two segments of this index built \
          from one source path, and every field the WHERE and the ORDER BY \
-         name answerable from a segment's own columns, which usages, \
-         node_id and count never are and which no regex operator is, \
-         whatever field it names. Where it declines, a running top-K trim \
+         name either answerable from a segment's own columns or held by no \
+         column of that segment at all — an absent field is decided from \
+         its absence, so a WHERE on an enrichment field some segments do \
+         not carry is inside this route, while usages, node_id and count \
+         never are, nor is any regex operator, whatever field it names. \
+         Where it declines, a running top-K trim \
          over built rows still holds the working set to a few thousand rows \
          for k <= 1000 with no OFFSET, no GROUP BY and no HAVING, and where \
          neither applies this refusal is what is left — as it is where two \
@@ -414,10 +417,12 @@ fn order_field_of(clauses: &Clauses) -> &str {
 /// clauses — collapsed, ranked and paged without ever being built.
 ///
 /// The one thing left that is a property of a *segment*: every residual
-/// predicate has to be answerable from this segment's columns. One that is not
-/// would leave rows the query excludes in the set being ranked, and a page cut
-/// from that set is short by however many the filter over built rows then
-/// removes, with nothing in the reply to say so.
+/// predicate has to be one this segment either answers from its columns or
+/// holds no column for at all — see [`predicate_waits_for_a_built_row`], which
+/// is where that is decided and why an absent field counts as answered. A
+/// predicate that is neither would leave rows the query excludes in the set
+/// being ranked, and a page cut from that set is short by however many the
+/// filter over built rows then removes, with nothing in the reply to say so.
 ///
 /// The collapse needs no admission of its own. Its key is
 /// [`RowView::collapse_key`] — `name`, `fql_kind`, `line` — three fixed columns

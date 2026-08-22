@@ -497,10 +497,14 @@ pub struct UsageBound {
 /// One page of a `FIND usages` answer, with the size of the answer it was cut
 /// from and what the cut left out.
 ///
-/// `total` is every site that matched and not the page's length — the number a
-/// rename campaign measures its progress against, true under an explicit
-/// `LIMIT` as well as under the default page. `withheld` says whether whole
-/// files were left out and why, so a partial listing is never a silent one.
+/// On a site listing — the shape that carries a [`UsageBound`] — `total` is
+/// every site that matched and not the page's length, the number a rename
+/// campaign measures its progress against, true under an explicit `LIMIT` as
+/// much as under the default page. **Under `GROUP BY` it is the number of
+/// group rows the page holds**, because grouped rows are cut by their own
+/// `LIMIT` before they are counted; that is unchanged and is the one shape
+/// where the sentence above does not hold. `withheld` says whether whole files
+/// were left out and why, so a partial listing is never a silent one.
 #[derive(Debug, Default)]
 pub struct UsagePage {
     /// The sites this query renders.

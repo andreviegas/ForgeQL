@@ -1602,13 +1602,26 @@ impl SegmentReader {
     /// answered here.
     pub(crate) fn row_field(&self, field: &str, has_path: bool) -> RowField {
         let Some(index) = STRUCT_BACKED_FIELDS.iter().position(|name| *name == field) else {
-            // Not struct-backed and no column of this segment holds it, so the
+            // Not struct-backed. If a column holds it, read that; otherwise the
             // row this segment would build carries it in neither its struct nor
-            // its enrichment map: both readers answer `None`, and saying so
+            // its enrichment map, so both readers answer `None` and saying so
             // early is the same answer said sooner.
-            return self
-                .extra_col_range(field)
-                .map_or(RowField::Absent, RowField::Extra);
+            //
+            // Unless something writes it onto the row after the columns are
+            // read. `body` is read out of the file as the row is materialised
+            // and `role` is written onto an occurrence row by the read pass, so
+            // for those two "no column" is not "nothing", and they wait for the
+            // row like `usages` does.
+            return self.extra_col_range(field).map_or_else(
+                || {
+                    if crate::field_tiers::written_after_materialisation(field) {
+                        RowField::Unanswerable
+                    } else {
+                        RowField::Absent
+                    }
+                },
+                RowField::Extra,
+            );
         };
         // Only the colliding name falls back. An enrichment column named after
         // one struct-backed field says nothing about the others, so a segment

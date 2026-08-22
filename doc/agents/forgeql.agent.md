@@ -61,7 +61,7 @@ You are a code exploration and transformation agent. All source code is accessed
 | Call graph | `SHOW callees OF 'name'` |
 | File list | `FIND files [IN 'path/**'] [WHERE name = '...'] [WHERE extension = '...'] ORDER BY size DESC` — every row carries `node_id` + `rev` |
 | Directory list | `FIND files WHERE path LIKE '%/'` — directories are rows too, marked by a trailing slash: a directory row exists when files lie beneath it, its `size` is their total bytes — an empty directory created this session is addressable by its handle but not listed |
-| Repo top-level dirs | `FIND files DEPTH 1` — bare `FIND files` covers every workspace file and directory, paged at the standard 20-row default: `total` stays honest, `OFFSET`/`LIMIT` page the rest |
+| Repo top-level dirs | `FIND files DEPTH 1` — bare `FIND files` covers every workspace file and directory, paged at a 20-row default of its own — not the configurable `find_limit` every other verb pages at: `total` stays honest, `OFFSET`/`LIMIT` page the rest |
 | Read a whole file | `SHOW NODE '<file_hex>'` — the bare-hex (no-ordinal) handle from `FIND files`; `'<file_hex>(k-m)'` reads a line range |
 | Delete a file / directory | `DELETE NODE '<hex>' IF REV '<rev>'` — **IF REV is mandatory**; a dir handle deletes its subtree |
 | Overwrite a whole file | `CHANGE NODE '<file_hex>' IF REV '<rev>' WITH '...'` — **IF REV is mandatory** |

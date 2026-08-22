@@ -58,7 +58,7 @@ The local workspace may be empty — never fall back to local filesystem tools (
 | Page a truncated/buffered output | `SHOW MORE [HEAD n \| TAIL n \| n-m] [WHERE text MATCHES '...']` |
 | Grep the last `VERIFY` log (no rebuild) | `SHOW MORE WHERE text MATCHES 'error\|warning'` |
 | Review an uncommitted change | `SHOW DIFF STAT` for the file map, then `SHOW DIFF IN 'path/**'` |
-| Repo top-level dirs | `FIND files DEPTH 1` — bare `FIND files` covers every workspace file and directory, paged at the standard 20-row default: `total` stays honest, `OFFSET`/`LIMIT` page the rest |
+| Repo top-level dirs | `FIND files DEPTH 1` — bare `FIND files` covers every workspace file and directory, paged at a 20-row default of its own — not the configurable `find_limit` every other verb pages at: `total` stays honest, `OFFSET`/`LIMIT` page the rest |
 | Find a file by name | `FIND files WHERE name = 'Kconfig'` (also `LIKE`/`MATCHES`) |
 | Insert around a node | `INSERT BEFORE/AFTER NODE '<id>' WITH '...'` |
 | Delete a node | `DELETE NODE '<id>' IF REV '<rev>'` — `'<id>(n-m)'` deletes lines within it |

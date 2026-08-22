@@ -1090,3 +1090,24 @@ pub fn canonical(field: &str) -> &str {
 pub fn refused_fields() -> impl Iterator<Item = &'static FieldTier> {
     FIELD_TIERS.iter().filter(|tier| tier.is_refused())
 }
+
+/// Whether a result row is given this field **after** it is built, from
+/// something no segment column holds.
+///
+/// [`Source::MaterialisedText`] is the declaration that a field arrives that
+/// way: `body` is read out of the file as the row is materialised, and `role`
+/// is written onto an occurrence row by the read pass that finds the site. A
+/// reader looking only at the columns sees nothing for either and would be
+/// wrong to conclude the row carries nothing — so a predicate on one of them
+/// has to wait for the row, exactly as `usages` and `node_id` do.
+///
+/// This is the guard on treating "no column holds it" as "nothing holds it".
+/// The two coincide today on the on-disk `FIND symbols` path, because
+/// `SegmentReader::materialize_rows` fills a row's map from enrichment columns
+/// and from nothing else — but by accident of that one function rather than by
+/// anything that would stop the next writer, which is why the rule asks here
+/// instead of assuming.
+#[must_use]
+pub fn written_after_materialisation(field: &str) -> bool {
+    lookup(field).is_some_and(|tier| tier.source == Source::MaterialisedText)
+}

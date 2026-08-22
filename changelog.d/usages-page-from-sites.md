@@ -22,8 +22,9 @@
   It now asks for a page of no files at all: every site is still read and
   counted, none is built.
 
-- Two claims about the result budget were wrong and are corrected wherever they
-  appeared. `FIND files` was described as needing no bound because it "pages at
+- Two claims about the result budget were wrong and are corrected in the
+  budget documentation itself, in the refusal an agent reads when it hits the
+  budget, and in every agent document that repeated them. `FIND files` was described as needing no bound because it "pages at
   the standard 20-row `FIND` default"; it does build a row for every workspace
   entry before any clause runs, and what makes that safe is that the row is a
   file entry and the count is the number of files rather than the number of

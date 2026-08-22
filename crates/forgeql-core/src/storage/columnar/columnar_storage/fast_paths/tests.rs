@@ -186,6 +186,53 @@ fn an_absent_field_answers_early_exactly_as_the_built_row_answers_it() {
         &view,
         &cases[cases.len() - 1]
     ));
+}
+
+/// "No column holds it" is only "nothing holds it" for a field nothing writes
+/// onto the row afterwards, and this is the guard that says so.
+///
+/// `field_tiers` declares `body` and `role` as written after the columns are
+/// read — `body` out of the file as the row is materialised, `role` by the read
+/// pass that finds an occurrence site. A reader looking only at the columns
+/// sees nothing for either and would conclude a confident absence the built row
+/// may contradict, so both keep waiting for the row. Nothing writes either on
+/// the on-disk `FIND symbols` path today, which is exactly why the rule has to
+/// ask `field_tiers` rather than observe `materialize_rows`: the invariant is
+/// held by a declaration, not by what one function currently happens to fill in.
+#[test]
+fn a_field_written_after_materialisation_is_not_treated_as_absent() {
+    let (_tmp, seg) = ranked_segment();
+
+    for field in ["body", "role"] {
+        assert!(
+            crate::field_tiers::written_after_materialisation(field),
+            "{field} is the case this guard exists for"
+        );
+        assert!(
+            predicate_waits_for_a_built_row(
+                &seg,
+                &predicate(field, CompareOp::Eq, PredicateValue::String("x".into())),
+                true
+            ),
+            "{field} has no column but is written after materialisation, so it \
+             must wait for the row"
+        );
+    }
+
+    assert!(
+        !crate::field_tiers::written_after_materialisation("has_doc"),
+        "an ordinary enrichment name must not be caught by the guard, or every \
+         absent field goes back to waiting and the route closes again"
+    );
+    assert!(!predicate_waits_for_a_built_row(
+        &seg,
+        &predicate(
+            "has_doc",
+            CompareOp::Eq,
+            PredicateValue::String("true".into())
+        ),
+        true
+    ));
 
     // A regex still waits, and not only for cost: on a value that resolves to
     // None the batch filter KEEPS a NOT MATCHES row while a per-row evaluation
@@ -394,9 +441,10 @@ fn choosing_by_row_view_picks_what_choosing_by_built_row_picks() {
         // Equal on every row, so the tie-breakers decide the page alone.
         ("fql_kind", SortDirection::Asc),
         // No column of this segment holds it, so both the view and the row it
-        // builds rank every row by the same absence. This is the case a gate
-        // written on answerability would have refused, taking almost every real
-        // query with it.
+        // builds rank every row by the same absence — and, since that same
+        // agreement is now what lets the WHERE answer it early, decide it the
+        // same way too. The ranking admitted this before the predicate reader
+        // did; they no longer differ on it.
         ("has_doc", SortDirection::Asc),
     ];
 
