@@ -12,9 +12,12 @@
 //! handed the file bound and cuts the page from the site list, so a site in a
 //! file nobody will see is never built into a row — but the caller-side
 //! selection this replaced produced the same rows and the same `total`, so no
-//! case here can tell the two apart.  That the page is cut before the rows are
-//! built is pinned in `crates/forgeql-core/src/storage/mod.rs`, by a case that
-//! asks for zero files and gets zero rows with the count intact.
+//! case here can tell the two apart.  Nor does anything else pin it exactly:
+//! the nearest is `a_bounded_page_renders_whole_files_and_still_counts_the_rest`
+//! in `crates/forgeql-core/src/storage/mod.rs`, which asks for zero files and
+//! gets zero rows delivered with the count intact — a regression that built all
+//! five rows and then discarded them would satisfy it too.  The count of rows
+//! BUILT is held by construction: one call site, mapping over the selection.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 

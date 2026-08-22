@@ -270,8 +270,10 @@ pub(in crate::storage) fn row_budget_exceeded(max_rows: usize) -> anyhow::Error 
          name either answerable from a segment's own columns or held by no \
          column of that segment at all — an absent field is decided from \
          its absence, so a WHERE on an enrichment field some segments do \
-         not carry is inside this route, while usages, node_id and count \
-         never are, nor is any regex operator, whatever field it names. \
+         not carry is inside this route, while usages, node_id, count, body \
+         and role never are — the last two being written onto a row after \
+         its columns are read — nor is any regex operator, whatever field \
+         it names. \
          Where it declines, a running top-K trim \
          over built rows still holds the working set to a few thousand rows \
          for k <= 1000 with no OFFSET, no GROUP BY and no HAVING, and where \
@@ -320,7 +322,11 @@ pub(in crate::storage) fn usages_budget_exceeded(sites: usize, max_rows: usize) 
 /// which GROUP BY assigns later still; or a struct-backed name this segment
 /// shadows with an enrichment column — and also when the operator is a regex.
 ///
-/// A field no column of this segment holds does **not** wait. The row this
+/// A field no column of this segment holds does **not** wait — unless
+/// [`crate::field_tiers::written_after_materialisation`] says something writes
+/// it onto the row once the columns have been read, which is `body` and `role`.
+/// For those two a missing column is not a missing value, and the wait stands.
+/// Otherwise the row this
 /// segment would build carries it in neither its struct nor its enrichment
 /// map, so both readers resolve it to `None`, and every operator that consults
 /// the field is then false — `!=` and `NOT LIKE` as much as `=` and `LIKE`,

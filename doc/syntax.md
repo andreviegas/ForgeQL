@@ -174,9 +174,10 @@ FIND files [clauses]
 > `total` is the true site count across the whole worktree **even under an
 > explicit `LIMIT`** — it is what a rename campaign measures progress against,
 > and `total` greater than the row count is how you see that files were left
-> out. Under `GROUP BY` it means something else: the rows are aggregates cut by
-> their own `LIMIT` before anything counts them, so there `total` is the number
-> of group rows the page holds. (`FIND symbols` reports the true match count too, except for a bare
+> out. Under `GROUP BY` it counts groups rather than sites, and an explicit `LIMIT`
+> clips it — the aggregates are cut before anything counts them. The default
+> page does not clip it, so on `GROUP BY file` a `total` above the row count
+> still means groups were withheld. (`FIND symbols` reports the true match count too, except for a bare
 > `LIMIT` with no `ORDER BY` and for `ORDER BY name` with a small one, where the
 > scan stops early and nothing counts what it did not read.) A result with files
 > left out arms no `found_rev`, so every `FOUND` verb refuses.

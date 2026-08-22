@@ -500,18 +500,20 @@ pub struct UsageBound {
 /// On a site listing — the shape that carries a [`UsageBound`] — `total` is
 /// every site that matched and not the page's length, the number a rename
 /// campaign measures its progress against, true under an explicit `LIMIT` as
-/// much as under the default page. **Under `GROUP BY` it is the number of
-/// group rows the page holds**, because grouped rows are cut by their own
-/// `LIMIT` before they are counted; that is unchanged and is the one shape
-/// where the sentence above does not hold. `withheld` says whether whole files
+/// much as under the default page. **Under `GROUP BY` it counts groups rather
+/// than sites**, and an explicit `LIMIT` clips it, the aggregates being cut
+/// before anything counts them; the default page does not clip it, because the
+/// caller truncates after taking the count. That is unchanged, and it is the
+/// one shape where the sentence above does not hold as written. `withheld` says whether whole files
 /// were left out and why, so a partial listing is never a silent one.
 #[derive(Debug, Default)]
 pub struct UsagePage {
     /// The sites this query renders.
     pub rows: Vec<SymbolMatch>,
     /// How many sites matched, before the file selection cut the page — except
-    /// under `GROUP BY`, where it is the number of group rows the page holds,
-    /// those being cut by their own `LIMIT` before anything counts them.
+    /// under `GROUP BY`, where it counts groups rather than sites and an
+    /// explicit `LIMIT` clips it, those aggregates being cut before anything
+    /// counts them. The default page does not clip it.
     pub total: usize,
     /// Which files matched but were not rendered, and why.
     pub withheld: Option<crate::filter::Withheld>,

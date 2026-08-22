@@ -494,9 +494,11 @@ pub(crate) fn ranks_field_like_a_built_row(field: &str) -> bool {
 /// names from their fixed columns, and every other name from the enrichment
 /// column the row's map would be filled from. `a_view_reads_every_field_as_the_row_it_builds`
 /// pins the two against each other field by field, including on a segment
-/// whose enrichment column shadows a struct-backed name. The exceptions are
-/// [`VIEW_CANNOT_ANSWER`], and a caller must gate on them rather than read
-/// them.
+/// whose enrichment column shadows a struct-backed name. Where the two can
+/// come apart is not one list but two — [`VIEW_CANNOT_ANSWER`] and the names
+/// [`crate::field_tiers::written_after_materialisation`] marks — and a caller
+/// must gate on [`ranks_field_like_a_built_row`], which asks both, rather than
+/// read either directly.
 ///
 /// `name` and `line` are resolved once, when the view is made, because
 /// [`crate::filter::order_cmp`] consults `name` on every pair it compares and
