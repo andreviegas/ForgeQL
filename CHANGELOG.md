@@ -6,6 +6,37 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.181.0] — 2026-08-22 — a usages page is cut before its rows are built
+
+### Performance
+
+- `FIND usages` cuts its page in the engine instead of building a row for every
+  site and letting the caller select afterwards. Everything that can remove or
+  reorder a site — path globs, `WHERE`, `HAVING`, `ORDER BY` — still runs over
+  the whole answer, and `total` is still taken before the cut; only the sites
+  inside the page are built. The site list itself is still held whole and still
+  bounded by the result budget, because a cut that selects whole files out of a
+  computed answer cannot bound what is searched.
+
+- A `WHERE` on a field no column of a segment holds is answered from that
+  absence rather than deferred until the rows are built. It answers what the
+  built row's filter would have answered, including for the negative operators:
+  a missing value fails `!=` and `NOT LIKE` rather than passing them, so the
+  early answer can only remove rows the built path also removes.
+
+### Notes
+
+- `body` and `role` are written onto a result row after its columns are read, so
+  a `WHERE` or `ORDER BY` naming either now falls off the bounded-page route and
+  can be refused by the result budget where it was previously answered. The
+  ordering is the reader that could least afford the old reading: ranking by an
+  absence the built row does not share cuts the wrong top-K and sheds rows that
+  belonged in the answer.
+
+- `total` on `FIND usages` counts groups rather than sites under `GROUP BY`, and
+  an explicit `LIMIT` clips it; the default page does not. Unchanged behaviour,
+  now stated where it is met.
+
 ## [0.180.0] — 2026-08-21 — a page is chosen from row views, and only the page is built
 
 ### Performance
