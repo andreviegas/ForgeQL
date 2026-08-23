@@ -1646,3 +1646,61 @@ fn a_regex_waits_for_a_built_row_even_on_a_column_the_segment_holds() {
         );
     }
 }
+
+/// A `WHERE` on `name` where the segment also carries an enrichment column
+/// called `name` is routed EARLY — asserted where the routing decision is made.
+///
+/// `a_segment_that_shadows_a_key_field_still_travels_as_views` already covers a
+/// shadowed `fql_kind`. `name` is the case that motivated the slice and the one
+/// no fixture held: `extract_fields` writes every tree-sitter grammar field as
+/// an enrichment column and `name` is a grammar field on essentially every
+/// definition node, so 308 of 411 segments of this repository carry one — the
+/// refusal this slice removed took three quarters of every scan off the cheap
+/// route.
+///
+/// It is asserted at the router and not only at the reader, because the refusal
+/// lived in the router: reinstating it there for `name` leaves all 995 library
+/// tests green, since no reader-level case can see a route close.
+#[test]
+fn a_shadowed_name_is_routed_early_where_the_decision_is_made() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("shadowed_name.fqsf");
+    let mut b = SegmentBuilder::new("test", &[0x5E_u8; 20]);
+    let row = b.emit_row(SymbolRow {
+        name: "alpha",
+        fql_kind: "function",
+        language: "rust",
+        line: 3,
+        byte_start: 0,
+        byte_end: 10,
+        usages_count: 0,
+    });
+    // What `extract_fields` writes for a grammar field called `name`.
+    b.set_field(row, "name", "the_identifier_child");
+    b.flush(&path).expect("flush");
+    let seg = SegmentReader::open(&path).expect("open");
+
+    assert!(
+        seg.enrichment_columns().any(|(n, _)| n == "name"),
+        "the fixture must carry the shadowing column, or this asserts nothing"
+    );
+
+    for value in [
+        PredicateValue::String("alpha".to_owned()),
+        PredicateValue::Number(42),
+    ] {
+        let pred = predicate("name", CompareOp::Eq, value);
+        assert!(
+            !predicate_waits_for_a_built_row(&seg, &pred, true),
+            "a shadowed `name` must not be deferred: deferring it is the refusal \
+             this slice removed, and no reader-level case can see it come back"
+        );
+        let (early, late) = split_seg_predicates(&seg, std::slice::from_ref(&pred), true);
+        assert_eq!(
+            early.len(),
+            1,
+            "and it lands in the early half of the split"
+        );
+        assert!(late.is_empty());
+    }
+}
