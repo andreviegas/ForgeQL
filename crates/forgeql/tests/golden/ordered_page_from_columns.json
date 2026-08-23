@@ -143,6 +143,26 @@
     "row_count": 3,
     "total": 3799
    }
+  },
+  {
+   "name": "a_predicate_on_a_shadowed_name_answers_what_it_always_answered",
+   "description": "A `name` predicate over a corpus whose segments carry an enrichment column also called `name` -- 292 of the 293 segments this scan selects, because `name` is a tree-sitter grammar field on essentially every definition node. It used to be deferred to the built rows on every one of them and is now answered from the columns; the answer is what it was. Neither this case nor the one below can see WHICH route answered, and they are not asked to: the route census is a panic probe through the built binary, and the mechanism is pinned in segment_reader/tests.rs and fast_paths/tests.rs, which do go red. What these two add is that the routes agree on a real corpus.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name LIKE '%exec%' LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "total": 34
+   }
+  },
+  {
+   "name": "and_the_same_answer_forced_onto_the_built_rows",
+   "description": "The same query held on the route that builds as it goes, by a regex no row view may evaluate. `.` matches every name in the corpus, so it changes no row and only the route: whatever the shadow reading does, these two totals must stay equal.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name LIKE '%exec%' WHERE name MATCHES '.' LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "total": 34
+   }
   }
  ]
 }

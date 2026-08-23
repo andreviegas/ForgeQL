@@ -721,7 +721,11 @@ fn a_row_view_answers_a_prefilterable_predicate_as_the_built_row_does() {
     for p in &probes {
         let field = crate::field_tiers::canonical(&p.field);
         assert!(
-            reader.answers_field(field, true),
+            reader.answers_field(
+                field,
+                true,
+                crate::storage::columnar::segment_reader::accessor_for(p)
+            ),
             "probe '{field}' is not prefilterable, so this test would prove nothing about it"
         );
         for (row, built_row) in built.iter().enumerate() {
@@ -758,31 +762,36 @@ fn fields_a_built_row_answers_from_its_struct_are_not_answered_from_columns() {
     let reader = SegmentReader::open(&seg).expect("open");
     for field in ["usages", "node_id", "node_kind", "count"] {
         assert!(
-            !reader.answers_field(field, true),
+            !reader.answers_field(field, true, Accessor::Str)
+                && !reader.answers_field(field, true, Accessor::Num),
             "'{field}' must fall back to the filter that runs on built rows"
         );
     }
     // `path` is the caller's, so it is answerable only when the caller gave one.
-    assert!(reader.answers_field("path", true));
-    assert!(!reader.answers_field("path", false));
+    assert!(reader.answers_field("path", true, Accessor::Str));
+    assert!(!reader.answers_field("path", false, Accessor::Str));
     // A field no column of this segment holds IS answered — by reporting that
     // it is absent. The row this segment would build carries it in neither its
     // struct nor its enrichment map, so both readers resolve it to None and
     // every operator that consults the field is false on both. That is a
     // different case from the four above, where the built row does carry the
     // field and reads it from somewhere no view can see.
-    assert!(reader.answers_field("has_doc", true));
+    assert!(reader.answers_field("has_doc", true, Accessor::Str));
 }
 
-/// An enrichment column named after one of those fields can make the two
-/// disagree on THAT field, where the operator's type does not match the struct
-/// accessor: a numeric operator on `name` falls through to the built row's
-/// enrichment map and finds the shadow column, which the row view never
-/// consults. So that one name stops being answered early. The rest of the
-/// segment is unaffected: every field the column does not shadow is still
-/// answered from its own column, and still answers as the built row answers it.
+/// An enrichment column named after one of those fields is followed rather than
+/// refused, because the built row follows it too.
+///
+/// The two accessors go different ways on such a name: a string operator on
+/// `name` reads the struct on a built row, a numeric one falls through to its
+/// enrichment map and finds the shadow column. This reader is told which
+/// accessor is coming, so it reads the fixed column for the first and the same
+/// shadow column for the second, and agrees with the built row on both. It used
+/// to be told neither and declined the name outright. The rest of the segment
+/// was never in question: every field the column does not name is answered from
+/// its own column, as the built row answers it.
 #[test]
-fn an_enrichment_column_named_after_a_struct_field_disables_only_that_field() {
+fn an_enrichment_column_named_after_a_struct_field_is_followed_not_refused() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let seg = tmp.path().join("seg.fqsf");
     let content_id = [0x33_u8; 20];
@@ -796,28 +805,41 @@ fn an_enrichment_column_named_after_a_struct_field_disables_only_that_field() {
         byte_end: 10,
         usages_count: 0,
     });
-    // `name` is the shadow to use: it is answered from a column when nothing
-    // collides, so withholding it is observable. A column named `usages` would
-    // prove nothing here — `usages` resolves to `Unanswerable` through the
-    // catch-all arm whether the guard runs or not.
+    // `name` is the shadow to use: it is answered from a fixed column under one
+    // accessor and from this enrichment column under the other, so following it
+    // is observable both ways. A column named `usages` would prove nothing —
+    // `usages` is unanswerable under either accessor whatever this reader does.
     b.set_field(row, "name", "77");
     b.set_field(row, "param_count", "2");
     b.flush(&seg).expect("flush");
 
     let reader = SegmentReader::open(&seg).expect("open");
 
+    // THE MECHANISM. A column named `name` no longer withholds anything: a
+    // string operator reads the fixed name column, which is where the built row
+    // reads it too, and a numeric one reads this shadow column, which is where
+    // the built row reads THAT. If this ever goes back to being refused, the
+    // scan silently returns to building every row of every segment carrying a
+    // grammar field called `name` — 292 of 293 on this repository's own index —
+    // and no golden case would see it, because the answers are the same either
+    // way.
     assert!(
-        !reader.answers_field("name", true),
-        "the shadowed name must fall back to the filter that runs on built rows"
+        reader.answers_field("name", true, Accessor::Str),
+        "a shadowed name is still answered from the fixed column for a string \
+         operator, because that is the column the built row answers from"
+    );
+    assert!(
+        reader.answers_field("name", true, Accessor::Num),
+        "and from the shadow column for a numeric one, for the same reason"
     );
     for field in ["fql_kind", "language", "line", "path"] {
         assert!(
-            reader.answers_field(field, true),
+            reader.answers_field(field, true, Accessor::Str),
             "'{field}' does not collide with the 'name' column, so it is still answered"
         );
     }
     assert!(
-        reader.answers_field("param_count", true),
+        reader.answers_field("param_count", true, Accessor::Num),
         "a column that collides with nothing is still answered"
     );
 
@@ -852,7 +874,11 @@ fn an_enrichment_column_named_after_a_struct_field_disables_only_that_field() {
     ];
     for p in &probes {
         assert!(
-            reader.answers_field(crate::field_tiers::canonical(&p.field), true),
+            reader.answers_field(
+                crate::field_tiers::canonical(&p.field),
+                true,
+                accessor_for(p)
+            ),
             "probe '{}' is not answered early, so it would prove nothing here",
             p.field
         );
@@ -864,26 +890,32 @@ fn an_enrichment_column_named_after_a_struct_field_disables_only_that_field() {
         );
     }
 
-    // And why the shadowed name is withheld from THIS reader at all. A built
-    // row reads `name` from its struct for a string operator, but a NUMERIC one
-    // falls through to the enrichment map and finds the shadow column there,
-    // while `SegRowRef` answers from the fixed column or not at all. Filtering
-    // that predicate early would drop a row the built-row filter keeps.
+    // And the arm that used to force the whole name to be withheld from THIS
+    // reader. A built row reads `name` from its struct for a string operator,
+    // but a NUMERIC one falls through to the enrichment map and finds the
+    // shadow column there. `SegRowRef` used to answer from the fixed column or
+    // not at all, so it could not follow, and the safe move was to decline
+    // `name` on this segment under every operator.
+    //
+    // It follows now: the accessor is part of what it is asked, so the numeric
+    // operator reads the shadow column here as well and the two agree. That is
+    // what lets the string operators above be answered before the rows exist.
     //
     // `RowView`, the reader that ranks and keys a row rather than filtering it,
-    // mirrors the built row on both operators instead and is not withheld — see
-    // `a_view_reads_every_field_as_the_row_it_builds`. The two readers are
-    // deliberately different: declining a predicate costs a later filter,
-    // declining an ordering costs the whole route.
+    // has mirrored the built row on both operators all along — see
+    // `a_view_reads_every_field_as_the_row_it_builds`. The two readers now
+    // resolve a field the same way; what still differs is only what they are
+    // used for.
     let cross_type = predicate("name", CompareOp::Eq, PredicateValue::Number(77));
     assert!(
         crate::filter::eval_predicate(&built[0], &cross_type),
         "a numeric operator on 'name' reads the shadow column on a built row"
     );
-    assert_ne!(
+    assert_eq!(
         crate::filter::eval_predicate(&view, &cross_type),
         crate::filter::eval_predicate(&built[0], &cross_type),
-        "the shadowed name is withheld precisely because the two disagree"
+        "the row view and the built row must read the shadow column alike under \
+         a numeric operator, or answering the string ones early is unsound"
     );
 }
 
@@ -967,7 +999,7 @@ fn a_column_named_after_any_declared_field_answers_as_the_built_row_or_not_at_al
         ];
         for p in &probes {
             let canonical = crate::field_tiers::canonical(&p.field);
-            if !reader.answers_field(canonical, true) {
+            if !reader.answers_field(canonical, true, accessor_for(p)) {
                 continue;
             }
             compared += 1;

@@ -1016,8 +1016,11 @@ on nothing and the predicate is false for every row of that segment — `!=`,
 failing an operator rather than passing it. That segment contributed nothing before either; what has gone
 is the rows built to find out, and with them the rule that one segment lacking
 an enrichment column took the page off row views for every segment that had it.
-Two things still bar a field. One is a segment *shadowing* it with a same-named
-enrichment column. The other is `body` and `role`, which are written onto a row
+A segment carrying an enrichment column named after a struct-backed field bars
+nothing either: the built row reads such a name from its own struct under one
+kind of operator and from that column under the other, and a view follows it to
+whichever of the two the built row would have read. What does bar a field is
+`body` and `role`, which are written onto a row
 after its columns are read — `body` out of the file as the row is materialised,
 `role` by the read pass that finds an occurrence site — so for those two a
 missing column is not a missing value, and both the `WHERE` and the `ORDER BY`

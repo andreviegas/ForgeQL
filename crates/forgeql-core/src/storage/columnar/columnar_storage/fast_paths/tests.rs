@@ -13,6 +13,7 @@
 use super::*;
 use crate::ir::Predicate;
 use crate::storage::columnar::segment_builder::{SegmentBuilder, SymbolRow};
+use crate::storage::columnar::segment_reader::Accessor;
 
 /// One row carrying one enrichment column, enough for `answers_field` to say
 /// yes to `param_count` and no to everything the segment does not hold.
@@ -1085,12 +1086,13 @@ fn duplicate_heavy_segment() -> (tempfile::TempDir, SegmentReader) {
     (tmp, reader)
 }
 
-/// A segment that can rank its rows but cannot key them.
+/// A segment whose enrichment column is named after a struct-backed field.
 ///
-/// An enrichment column named `fql_kind` shadows the struct-backed field, so a
-/// row view withholds it. `fql_kind` is not one of the fields the comparator
-/// consults, so ranking is unaffected — which is exactly what makes this the
-/// case that tells the two admission tests apart.
+/// The column is called `fql_kind` and carries a value the fixed kind column
+/// does not, so every reader that claims to resolve the name as the built row
+/// resolves it can be caught here: the fixed column under a string operator,
+/// this column under a numeric one. `fql_kind` is also a published tie-breaker,
+/// so the same fixture answers whether ranking and keying survive the collision.
 fn shadowed_kind_segment() -> (tempfile::TempDir, SegmentReader) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let path = tmp.path().join("shadowed.fqsf");
@@ -1194,10 +1196,29 @@ fn a_segment_that_shadows_a_key_field_still_travels_as_views() {
     let rows: RoaringBitmap = (0..seg.row_count).collect();
 
     assert!(
-        !seg.answers_field("fql_kind", true),
+        seg.answers_field("fql_kind", true, Accessor::Str),
         "an enrichment column named fql_kind shadows the struct-backed field, \
-         which is the shape this case is about — a predicate on it still waits \
-         for a built row"
+         which is the shape this case is about — and a string predicate on it \
+         is still answered from the fixed kind column, because that is the \
+         column the built row answers from"
+    );
+    // And the level that decides the route, which the assert above cannot see.
+    // `answers_field` is the resolver; `split_seg_predicates` is what actually
+    // puts a predicate on the early side or the late one, and a shadow guard
+    // reinstated there would close this route again with every other case in
+    // the suite still green — including both golden cases, which check answers
+    // and say in their own descriptions that they cannot tell the routes apart.
+    let kind_eq = predicate(
+        "fql_kind",
+        CompareOp::Eq,
+        PredicateValue::String("function".to_owned()),
+    );
+    let (early, late) = split_seg_predicates(&seg, std::slice::from_ref(&kind_eq), true);
+    assert_eq!(
+        (early.len(), late.len()),
+        (1, 0),
+        "a predicate on the shadowed name must be answered from the columns, \
+         not handed to the filter that runs after the rows are built"
     );
     assert!(
         ordering_travels_on_views("line"),
@@ -1608,7 +1629,7 @@ fn a_regex_waits_for_a_built_row_even_on_a_column_the_segment_holds() {
     let (_tmp, reader) = one_row_segment();
 
     assert!(
-        reader.answers_field("param_count", true),
+        reader.answers_field("param_count", true, Accessor::Str),
         "the fixture must carry this column, or the test is asking nothing"
     );
 

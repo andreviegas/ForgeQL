@@ -315,16 +315,17 @@ impl FixedColumns {
 }
 
 /// Clause fields a materialised row answers from a `SymbolMatch` struct field
-/// rather than from its enrichment map.
+/// rather than from its enrichment map — under ONE of its two accessors.
 ///
-/// A segment storing an enrichment column under one of these names can make a
-/// built row and a row view disagree, but only where the operator's type does
-/// not match the struct accessor: `WHERE name LIKE …` reads the struct on a
-/// built row, while `WHERE name = 42` falls through to `fields.get("name")` and
-/// finds the shadow column, which the row view would never consult. That one
-/// name therefore stops being answered from a column; the segment's other
-/// fields are unaffected, since a collision on one name says nothing about the
-/// rest.
+/// Which one is the whole point, and [`SegmentReader::row_field`] is where it is
+/// resolved. `field_str` reads `name`, `node_kind`, `fql_kind`, `language`,
+/// `path` and `node_id` from the struct; `field_num` reads `usages`, `count`
+/// and `line` from it; each reaches the enrichment map for every name the other
+/// holds. So a segment storing an enrichment column under one of these names is
+/// invisible to the built row under the first accessor and IS what it reads
+/// under the second — `WHERE name LIKE …` reads the struct, `WHERE name = 42`
+/// finds the column — and a reader told which accessor is coming follows it
+/// either way. A name outside this list is a map lookup under both.
 const STRUCT_BACKED_FIELDS: &[&str] = &[
     "name",
     "node_kind",
@@ -336,13 +337,6 @@ const STRUCT_BACKED_FIELDS: &[&str] = &[
     "count",
     "line",
 ];
-
-/// One bit per name in [`SegmentReader::shadowed_struct_fields`], so the list
-/// may not outgrow the mask that stands for it.
-const _: () = assert!(
-    STRUCT_BACKED_FIELDS.len() <= u16::BITS as usize,
-    "STRUCT_BACKED_FIELDS no longer fits the shadowed-field mask"
-);
 
 /// Which column answers a clause field on a row of a segment.
 ///
@@ -379,6 +373,55 @@ pub(crate) enum RowField {
     Unanswerable,
 }
 
+/// Which of a row's two accessors a clause will read the field through.
+///
+/// It matters because `impl ClauseTarget for SymbolMatch` splits its fields
+/// between them: `field_str` answers `name`, `node_kind`, `fql_kind`,
+/// `language`, `path` and `node_id` from the struct and everything else from
+/// the enrichment map, while `field_num` answers `usages`, `count` and `line`
+/// from the struct and everything else from the map. So one name can be a
+/// struct field to one accessor and a map lookup to the other, and a segment
+/// carrying an enrichment column of that name is invisible to the first and
+/// visible to the second. A reader that did not know which accessor was coming
+/// could only decline both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Accessor {
+    /// `ClauseTarget::field_str` — the pattern operators, and a comparison
+    /// against a string.
+    Str,
+    /// `ClauseTarget::field_num` — the ordering comparisons, and a comparison
+    /// against a number.
+    Num,
+}
+
+/// Which of a row's two accessors [`crate::filter::eval_predicate_on`] will
+/// read this predicate's field through.
+///
+/// Decided by the operator and the value type and never by the field name: the
+/// pattern operators and a comparison against a string reach `field_str`, the
+/// ordering comparisons and a comparison against a number reach `field_num`.
+/// Naming it is what lets a segment answer a struct-backed field it also holds
+/// an enrichment column for, because the built row takes one of the two
+/// accessors from its struct and the other from that column.
+///
+/// A `Bool` value reads neither — `Eq` and `NotEq` return false before any
+/// field is touched — so either answer is correct there and `Str` is the one
+/// named.
+pub(crate) const fn accessor_for(predicate: &crate::ir::Predicate) -> Accessor {
+    use crate::ir::{CompareOp, PredicateValue};
+
+    match predicate.op {
+        CompareOp::Gt | CompareOp::Gte | CompareOp::Lt | CompareOp::Lte => Accessor::Num,
+        CompareOp::Eq | CompareOp::NotEq => match predicate.value {
+            PredicateValue::Number(_) => Accessor::Num,
+            PredicateValue::String(_) | PredicateValue::Bool(_) => Accessor::Str,
+        },
+        CompareOp::Like | CompareOp::NotLike | CompareOp::Matches | CompareOp::NotMatches => {
+            Accessor::Str
+        }
+    }
+}
+
 /// One row of one segment, viewed in place.
 ///
 /// Implements [`crate::filter::ClauseTarget`] so a residual `WHERE` can be
@@ -401,7 +444,10 @@ impl<'a> SegRowRef<'a> {
     /// and carry it while the view itself goes out of scope. [`RowView`] is
     /// that caller.
     pub(crate) fn str_value(&self, field: &str) -> Option<&'a str> {
-        match self.seg.row_field(field, self.source_path.is_some()) {
+        match self
+            .seg
+            .row_field(field, self.source_path.is_some(), Accessor::Str)
+        {
             RowField::Name => Some(self.seg.name_of(self.row)),
             RowField::FqlKind => non_empty(self.seg.fql_kind_of(self.row)),
             RowField::Language => non_empty(self.seg.language_of(self.row)),
@@ -413,7 +459,10 @@ impl<'a> SegRowRef<'a> {
 
     /// The row's value for the canonical clause field `field`, as a number.
     pub(crate) fn num_value(&self, field: &str) -> Option<i64> {
-        match self.seg.row_field(field, self.source_path.is_some()) {
+        match self
+            .seg
+            .row_field(field, self.source_path.is_some(), Accessor::Num)
+        {
             RowField::Line => match self.seg.line_of(self.row) {
                 0 => None,
                 line => Some(i64::from(line)),
@@ -687,15 +736,6 @@ pub struct SegmentReader {
     pub content_id: Vec<u8>,
     /// Enrichment columns from the header blob, in header order.
     extra_cols: Vec<ExtraCol>,
-    /// Bit `i` is set when an enrichment column of this segment is named
-    /// `STRUCT_BACKED_FIELDS[i]` — the collision that makes that one field
-    /// unanswerable from the columns.
-    ///
-    /// Derived from `extra_cols` at open because [`Self::row_field`] asks the
-    /// question once per row: answering it by scanning the column names would
-    /// read the mapping a million times over a whole-corpus scan, and the
-    /// answer cannot change while the segment is open.
-    shadowed_struct_fields: u16,
     strings: StringPool,
     /// `postings_fql_kind`, addressed in place — see `postings.rs`. Nothing
     /// is decoded until a lookup asks for one kind's rows.
@@ -860,11 +900,6 @@ impl SegmentReader {
             })
             .collect();
 
-        // Which of the fields a built row answers from its own struct this
-        // segment shadows with an enrichment column of the same name. Asked
-        // once per row later, so it is answered once here.
-        let shadowed_struct_fields = Self::shadow_mask(&extra_cols);
-
         Ok(Self {
             mmap,
             fixed,
@@ -872,7 +907,6 @@ impl SegmentReader {
             provider_id: hdr.provider_id,
             content_id: hdr.content_id,
             extra_cols,
-            shadowed_struct_fields,
             strings,
             kind_blob,
             field_blobs,
@@ -934,34 +968,13 @@ impl SegmentReader {
         Ok(mentions)
     }
 
-    /// Which of the fields a built row answers from its own struct these
-    /// enrichment columns shadow, as one bit per name in
-    /// [`STRUCT_BACKED_FIELDS`].
+    /// Replace the enrichment columns.
     ///
-    /// The mask is a derivation of the column names and of nothing else, so it
-    /// is computed here and installed together with them — see
-    /// [`Self::set_extra_cols`] — rather than kept in step by hand. A mask that
-    /// disagreed with the columns would have [`Self::row_field`] answer a
-    /// shadowed field from the struct, confidently and wrongly.
-    fn shadow_mask(extra_cols: &[ExtraCol]) -> u16 {
-        STRUCT_BACKED_FIELDS
-            .iter()
-            .enumerate()
-            .fold(0_u16, |mask, (index, field)| {
-                let shadowed = extra_cols.iter().any(|extra| extra.name.as_ref() == *field);
-                if shadowed { mask | (1 << index) } else { mask }
-            })
-    }
-
-    /// Replace the enrichment columns, recomputing the shadow mask from them.
-    ///
-    /// Change the columns of an open reader through here and not by assigning
-    /// `extra_cols`: the mask is derived from the names and would otherwise go
-    /// stale. Module-private, so that is a convention this module keeps, not
-    /// something the compiler enforces.
+    /// Module-private and test-only. It exists so a test can give an open
+    /// reader a column named after a struct-backed field without rebuilding the
+    /// segment.
     #[cfg(test)]
     fn set_extra_cols(&mut self, extra_cols: Vec<ExtraCol>) {
-        self.shadowed_struct_fields = Self::shadow_mask(&extra_cols);
         self.extra_cols = extra_cols;
     }
 
@@ -1595,78 +1608,118 @@ impl SegmentReader {
         non_empty(self.strings.get(id))
     }
 
-    /// Which column of this segment answers the canonical clause field
-    /// `field`, given whether the caller supplied the file's path.
+    /// Which column of this segment answers the canonical clause field `field`
+    /// for a clause reading it through `want`, given whether the caller
+    /// supplied the file's path.
     ///
-    /// The names a materialised row answers from its own struct are
-    /// deliberately [`RowField::Unanswerable`]: `node_kind` is never stored in
-    /// a segment, `node_id` is built during materialisation, `usages` is
-    /// overwritten from the workspace overlay afterwards, and `count` is
-    /// assigned later still by GROUP BY. A predicate on one of them is left to
-    /// run against the built rows rather than answered from a column.
+    /// Resolved arm for arm as `impl ClauseTarget for SymbolMatch` resolves it,
+    /// which is what makes answering early the same answer as answering late.
+    /// That impl splits its names between the two accessors, so this does too:
+    /// `field_str` reads `name`, `node_kind`, `fql_kind`, `language`, `path`
+    /// and `node_id` from the struct, `field_num` reads `usages`, `count` and
+    /// `line` from it, and each reaches the enrichment map for every name the
+    /// other holds. **A same-named enrichment column therefore shadows nothing
+    /// under the accessor that reads the struct** — the built row cannot see it
+    /// there either — and IS what both readers find under the other one.
+    ///
+    /// Six names are [`RowField::Unanswerable`] under BOTH accessors, and not
+    /// all for the same reason. `usages` is stamped from the workspace overlay
+    /// after materialisation, `node_id` is built during it, `count` is assigned
+    /// later still by GROUP BY, and `body` and `role` are written onto the row
+    /// once its columns have been read: under the accessor that reads the
+    /// struct there is nothing here to read them from. Under the other accessor
+    /// the built row would reach its map, and this declines anyway rather than
+    /// answer one half of a name it cannot answer whole. `node_kind` is the
+    /// sixth and is different again: nothing stores it, so both readers would
+    /// find it absent — it is declined because it is refused at the clause
+    /// layer on every verb that filters rows, which makes one exclusion list do
+    /// the work of two. `path` is declined only on a segment read without one.
     ///
     /// A field no column holds is [`RowField::Absent`] rather than
     /// unanswerable, which is a different thing: the built row's map would not
     /// carry it either, so the two readers agree on `None` and the predicate is
     /// answered here.
-    pub(crate) fn row_field(&self, field: &str, has_path: bool) -> RowField {
-        let Some(index) = STRUCT_BACKED_FIELDS.iter().position(|name| *name == field) else {
-            // Not struct-backed. If a column holds it, read that; otherwise the
-            // row this segment would build carries it in neither its struct nor
-            // its enrichment map, so both readers answer `None` and saying so
-            // early is the same answer said sooner.
-            //
-            // Unless something writes it onto the row after the columns are
-            // read. `body` is read out of the file as the row is materialised
-            // and `role` is written onto an occurrence row by the read pass, so
-            // for those two "no column" is not "nothing", and they wait for the
-            // row like `usages` does.
-            return self.extra_col_range(field).map_or_else(
-                || {
-                    if crate::field_tiers::written_after_materialisation(field) {
-                        RowField::Unanswerable
-                    } else {
-                        RowField::Absent
-                    }
-                },
-                RowField::Extra,
-            );
-        };
-        // Only the colliding name falls back. An enrichment column named after
-        // one struct-backed field says nothing about the others, so a segment
-        // carrying one still answers every field it does not shadow. The mask
-        // stands for the column-name scan this used to run per call, over the
-        // same names and resolved at open.
-        if self.shadowed_struct_fields & (1 << index) != 0 {
+    pub(crate) fn row_field(&self, field: &str, has_path: bool, want: Accessor) -> RowField {
+        // Written onto the row after its columns are read — `body` out of the
+        // file as the row is materialised, `role` by the read pass that finds an
+        // occurrence site — so for these two a missing column is not a missing
+        // value and a reader that sees only columns must not conclude one.
+        if crate::field_tiers::written_after_materialisation(field) {
             return RowField::Unanswerable;
         }
-        match field {
-            "name" => RowField::Name,
-            "fql_kind" => RowField::FqlKind,
-            "language" => RowField::Language,
-            "line" => RowField::Line,
-            "path" if has_path => RowField::Path,
-            _ => RowField::Unanswerable,
+
+        // Not a name the built row answers from its struct under either
+        // accessor, so both readers reach the enrichment map for it: this
+        // segment's column if it has one, and otherwise nothing, which is what
+        // the built row's map would also hold.
+        if !STRUCT_BACKED_FIELDS.contains(&field) {
+            return self
+                .extra_col_range(field)
+                .map_or(RowField::Absent, RowField::Extra);
+        }
+
+        // Four of the struct-backed names no view can stand in for under either
+        // accessor. Three come from outside the columns entirely: `node_id` is
+        // built during materialisation, `usages` is stamped from the workspace
+        // overlay afterwards, and `count` is assigned later still by GROUP BY.
+        // `node_kind` is not stored per row at all, so a view could only report
+        // it absent; it is refused at the clause layer on every verb that
+        // filters rows, so declining it here keeps one exclusion list rather
+        // than two.
+        if VIEW_CANNOT_ANSWER.contains(&field) || field == "node_kind" {
+            return RowField::Unanswerable;
+        }
+
+        // The rest are struct-backed to ONE accessor and a map lookup to the
+        // other. Where the built row reads its struct, a same-named enrichment
+        // column is invisible to it, so it is invisible here too and the fixed
+        // column answers — shadow or no shadow. Where the built row reads its
+        // map, the fall-through below reads that very column.
+        match (want, field) {
+            (Accessor::Str, "name") => RowField::Name,
+            (Accessor::Str, "fql_kind") => RowField::FqlKind,
+            (Accessor::Str, "language") => RowField::Language,
+            // A view with no path answers `path` as the built row does, with
+            // nothing — but this reader declines instead of saying so, because
+            // a segment read without a source path is not the shape the early
+            // filter was measured on.
+            (Accessor::Str, "path") if has_path => RowField::Path,
+            (Accessor::Str, "path") => RowField::Unanswerable,
+            (Accessor::Num, "line") => RowField::Line,
+            _ => self
+                .extra_col_range(field)
+                .map_or(RowField::Absent, RowField::Extra),
         }
     }
 
-    /// Whether a row view over this segment answers `field` the way the row it
-    /// would build answers it.
+    /// Whether a row view over this segment answers `field`, read through
+    /// `want`, the way the row it would build answers it.
     ///
     /// A caller filters a predicate before materialisation only when this is
     /// true; a predicate it is false for is not dropped, it is left for the
     /// filter that runs on the built rows.
     ///
+    /// **The accessor is part of the question, not a detail of it.** A built
+    /// row answers `name` from its struct through `field_str` and from its
+    /// enrichment map through `field_num`, so on a segment whose column is also
+    /// called `name` the two accessors see different values — and a view that
+    /// reads the fixed column for one and the same column the built row reads
+    /// for the other agrees on both. Ask without naming the accessor and the
+    /// only safe answer is no.
+    ///
     /// **Reporting a confident absence counts as answering.** A field no
     /// column of this segment holds is one the built row carries in neither
     /// its struct nor its enrichment map, so both readers resolve it to
     /// `None` and every operator that consults the field is false on both —
-    /// `!=` and `NOT LIKE` included, since each arm of
+    /// `!=`, `NOT LIKE` and `NOT MATCHES` included, since each arm of
     /// [`crate::filter::eval_predicate_on`] is `is_some_and`. Only
     /// [`RowField::Unanswerable`] is false here: those are the names where the
     /// built row reads from somewhere no view can see.
-    pub(crate) fn answers_field(&self, field: &str, has_path: bool) -> bool {
-        !matches!(self.row_field(field, has_path), RowField::Unanswerable)
+    pub(crate) fn answers_field(&self, field: &str, has_path: bool, want: Accessor) -> bool {
+        !matches!(
+            self.row_field(field, has_path, want),
+            RowField::Unanswerable
+        )
     }
 
     /// Look up a string-pool entry by ID.

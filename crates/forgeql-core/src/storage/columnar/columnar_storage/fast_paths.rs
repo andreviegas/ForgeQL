@@ -14,7 +14,7 @@ use crate::storage::FindPage;
 
 use super::super::overlay::{Overlay, RowPtr};
 use super::super::segment_reader::{
-    RowView, SegRowRef, SegmentReader, ranks_field_like_a_built_row,
+    RowView, SegRowRef, SegmentReader, accessor_for, ranks_field_like_a_built_row,
 };
 use super::ColumnarStorage;
 use super::query::find::dedupe_symbol_matches;
@@ -317,10 +317,19 @@ pub(in crate::storage) fn usages_budget_exceeded(sites: usize, max_rows: usize) 
 /// The one definition of "late", so the split below and the whole-query gate
 /// that asks whether a scan may carry views at all cannot answer it
 /// differently. A predicate waits when [`SegmentReader::answers_field`]
-/// declines its field — `usages`, which is stamped from the workspace overlay
-/// only after materialisation; `node_id`, which is built during it; `count`,
-/// which GROUP BY assigns later still; or a struct-backed name this segment
-/// shadows with an enrichment column — and also when the operator is a regex.
+/// declines its field for the accessor this predicate will read it through —
+/// `usages`, which is stamped from the workspace overlay only after
+/// materialisation; `node_id`, which is built during it; `count`, which GROUP
+/// BY assigns later still; `node_kind`, which no segment stores; and `path` on
+/// a segment read without one — and also when the operator is a regex.
+///
+/// A name this segment shadows with an enrichment column does **not** wait, and
+/// used to. The accessor is what settles it: the built row reads a struct-backed
+/// name from its struct through one of its two accessors and from its
+/// enrichment map through the other, so naming the accessor lets a view follow
+/// it to whichever of the two the built row would have read. On this
+/// repository's own index that shadow covered 292 of the 293 segments a
+/// `WHERE name …` scan selects.
 ///
 /// A field no column of this segment holds does **not** wait — unless
 /// [`crate::field_tiers::written_after_materialisation`] says something writes
@@ -351,7 +360,11 @@ fn predicate_waits_for_a_built_row(
     has_path: bool,
 ) -> bool {
     matches!(predicate.op, CompareOp::Matches | CompareOp::NotMatches)
-        || !seg.answers_field(crate::field_tiers::canonical(&predicate.field), has_path)
+        || !seg.answers_field(
+            crate::field_tiers::canonical(&predicate.field),
+            has_path,
+            accessor_for(predicate),
+        )
 }
 
 /// Split a segment's residual `WHERE` into the predicates a row view answers

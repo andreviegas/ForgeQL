@@ -102,8 +102,14 @@ Short, durable facts discovered while working in this codebase.
   (capped pool, private copy past the cap). Reading a name back out of the
   mapping instead costs a whole-corpus scan ~90 ms per query — measured — because
   `materialize_rows` resolves every column name once per segment per query.
-- `row_field` asks "does this segment shadow a struct-backed field?" per ROW (the
-  dedupe key calls `str_value("name")`/`("fql_kind")` for every candidate). It is
-  answered from `shadowed_struct_fields: u16`, resolved at open; bit `i` is
-  `STRUCT_BACKED_FIELDS[i]`, and a `const _: () = assert!` pins the list to the
-  mask's width.
+- `row_field` is asked which column answers a clause field, and the answer
+  depends on the ACCESSOR the clause will read it through, not on the field name
+  alone. A built row reads `name`/`node_kind`/`fql_kind`/`language`/`path`/
+  `node_id` from its struct through `field_str` and `usages`/`count`/`line`
+  through `field_num`, reaching its enrichment map for every name the other
+  accessor holds — so a segment with an enrichment column called `name` is
+  invisible to the built row under one accessor and IS what it reads under the
+  other. `accessor_for` derives which is coming from the operator and the value
+  type. There is no shadow mask: it existed to decline such a name outright, and
+  declining cost 292 of the 293 segments a `WHERE name …` scan selects on this
+  repository.
