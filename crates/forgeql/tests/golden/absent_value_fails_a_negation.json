@@ -1,0 +1,56 @@
+{
+ "suite": "absent_value_fails_a_negation",
+ "description": "A row that does not carry the field fails every predicate naming it, negations included. Two filters answer a WHERE and they have to agree: eval_predicate_on, which every operator but a regex reaches, is is_some_and in every arm and drops a row whose value is missing; apply_where_predicates compiles a regex once for the whole batch and computed ok == is_matches, which on a missing value is false == false and KEPT the row. NOT MATCHES was therefore the one operator an absent value passed, and these cases hold the two spellings of one question to one answer. num_format is the field: 3620 rows of this corpus carry it and 35 of those are hex, so every count below is arithmetic on those two numbers rather than a figure read off a run. The .{N,} shortcut is a second reader of the same rule inside the batch filter and gets its own case, because a fix that missed it would leave the shortest patterns still disagreeing. What no case here can see is WHICH filter answered; that is pinned by an_absent_value_fails_a_negation_on_both_filters in crates/forgeql-core/src/filter/tests.rs, which asserts the two agree row by row.",
+ "cases": [
+  {
+   "name": "the_answer_both_spellings_have_to_reach",
+   "description": "Ground truth, taken from the operator that was always right. 3620 rows carry num_format and 35 of them are hex, so 3585 carry one that is not hex. NOT LIKE reaches eval_predicate_on like every non-regex operator, and has always dropped the rows carrying no num_format at all.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE num_format NOT LIKE '%hex%' LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "total": 3585
+   }
+  },
+  {
+   "name": "not_matches_answers_what_not_like_answers",
+   "description": "The same question spelled as a regex, and the case the change is about. It answered 59601 -- every indexed row of every kind, because the batch filter read a missing num_format as a passing NOT MATCHES -- against the 3585 above. One question, two spellings, two answers.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE num_format NOT MATCHES 'hex' LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "total": 3585
+   }
+  },
+  {
+   "name": "the_positive_form_is_unchanged",
+   "description": "MATCHES was already is_some_and on both filters, so the hex rows are the same 35 they were. Here so the case above cannot be satisfied by breaking the operator in the other direction instead.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE num_format MATCHES 'hex' LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "total": 35
+   }
+  },
+  {
+   "name": "a_negation_matching_nothing_keeps_only_the_rows_that_carry_the_field",
+   "description": "No num_format contains zzz, so every row carrying one survives and every row carrying none does not: 3620, the size of the field universe rather than of the corpus. This is the shape a negation has always had on the non-regex operators, and the regex spelling of it is the case below.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE num_format NOT LIKE '%zzz%' LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "total": 3620
+   }
+  },
+  {
+   "name": "the_dot_brace_shortcut_reads_the_rule_the_same_way",
+   "description": "'.{100,}' is answered by the length shortcut inside the batch filter rather than by a compiled regex -- a separate arm, which computed ok == is_matches too. No num_format is 100 characters long, so the negation keeps every row that carries one and drops every row that does not: the same 3620 as the case above.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE num_format NOT MATCHES '.{100,}' LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "total": 3620
+   }
+  }
+ ]
+}

@@ -1072,6 +1072,19 @@ fn apply_clauses_inner<T: ClauseTarget>(
 /// redundant regex compilations on large symbol tables (e.g. a 29 M+ symbol
 /// kernel).
 ///
+/// Those two shortcuts — compiling once, and the `.{N,}` byte-length check,
+/// which stands in for the pattern only where the value is single-line and
+/// ASCII, as the structural enrichment values it is meant for are — are the
+/// only things this does differently from calling [`eval_predicate`] on each
+/// row. On which rows survive, the two agree, and have to. A row that does not
+/// carry the field fails every predicate naming it — `!=`, `NOT LIKE` and
+/// `NOT MATCHES` as much as `=`, `LIKE` and `MATCHES` — because a value that is
+/// missing is not a value that differs. The one thing that passes a negation
+/// before any field is read is a pattern operator handed something it cannot
+/// use: `NOT LIKE` or `NOT MATCHES` with a non-string value, or `NOT MATCHES`
+/// with a regex that does not compile. `!=` is not in that set, and fails on a
+/// missing value whatever its value type.
+///
 /// Public so storage backends can run the same compile-once residual filter
 /// per segment (bounding memory to matching rows) before the final
 /// [`apply_clauses`] pass — AND semantics make the early pass idempotent.
@@ -1091,8 +1104,8 @@ pub fn apply_where_predicates<T: ClauseTarget>(
             // condition_text, signature, and name).
             if let Some(min_len) = dot_brace_min_len(pat) {
                 results.retain(|item| {
-                    let ok = item.field_str(&field).is_some_and(|v| v.len() >= min_len);
-                    ok == is_matches
+                    item.field_str(&field)
+                        .is_some_and(|v| (v.len() >= min_len) == is_matches)
                 });
                 continue;
             }
@@ -1100,14 +1113,23 @@ pub fn apply_where_predicates<T: ClauseTarget>(
             // General path: compile once, apply to all remaining items.
             match Regex::new(pat) {
                 Ok(re) => {
+                    // A row that does not carry the field fails the predicate
+                    // whichever way it is written. `is_some_and` is what every
+                    // arm of `eval_predicate_on` does with a missing value, and
+                    // an absent value has nothing for a pattern to not-match:
+                    // reading the miss as a passing `NOT MATCHES` made this the
+                    // one operator that let such a row through.
                     results.retain(|item| {
-                        let ok = item.field_str(&field).is_some_and(|v| re.is_match(v));
-                        ok == is_matches
+                        item.field_str(&field)
+                            .is_some_and(|v| re.is_match(v) == is_matches)
                     });
                 }
                 Err(_) => {
-                    // Invalid regex: MATCHES → nothing passes; NOT MATCHES → all
-                    // pass (a no-op retain).
+                    // Invalid regex: MATCHES → nothing passes; NOT MATCHES →
+                    // all pass (a no-op retain). The pattern is unusable rather
+                    // than unmatched, so this is the short circuit
+                    // `eval_predicate_on` takes before it reads the field at
+                    // all, and deliberately not the absent-value rule above.
                     if is_matches {
                         results.clear();
                     }

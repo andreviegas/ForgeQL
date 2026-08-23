@@ -629,9 +629,12 @@ fn matches_alias_field_canonicalizes() {
 #[test]
 fn not_matches_alias_field_canonicalizes() {
     // NOT MATCHES is where an unresolved alias is dangerous in the other
-    // direction: `field_str` returns None for every row, `is_some_and` is
-    // false, and `false == is_matches(false)` is true, so every row would
-    // silently pass instead of the intended ones being excluded.
+    // direction: `field_str` returns None for every row, a value the row does
+    // not carry fails the predicate, and so every row would silently drop
+    // instead of the intended ones being excluded. Before the batch filter and
+    // the per-item evaluator were aligned it went the opposite way here and
+    // every row silently passed; either answer is the corpus rather than the
+    // query.
     let items = vec![
         make_symbol("setPeakLevel", "Function", 3),
         make_symbol("getBaseLevel", "Function", 5),
@@ -668,6 +671,75 @@ fn not_matches_alias_field_canonicalizes() {
     let alias_names: Vec<&str> = via_alias.iter().map(|s| s.name.as_str()).collect();
     let canonical_names: Vec<&str> = via_canonical.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(alias_names, canonical_names);
+}
+
+/// A value the row does not carry fails a negation as surely as it fails the
+/// positive form, and both filters say so.
+///
+/// They did not. `apply_where_predicates` computed `ok == is_matches`, so a
+/// missing value made `NOT MATCHES` true and the row was kept, while every
+/// other operator reaches `eval_predicate_on`, which is `is_some_and` and drops
+/// it. That reached served answers rather than staying latent: on the frozen
+/// snapshot the golden suite pins against, `WHERE num_format NOT MATCHES 'hex'`
+/// answered 59,601 rows — nodes of every kind, most carrying no `num_format` at
+/// all — where `WHERE num_format NOT LIKE '%hex%'` answered the 3,585 numbers
+/// that are not hexadecimal. Two spellings of one question, two answers. Those
+/// counts are asserted, on that corpus, by
+/// `crates/forgeql/tests/golden/absent_value_fails_a_negation.json`; what this
+/// case adds is that the two filters agree row by row, which no golden can see.
+///
+/// The `.{N,}` shortcut is pinned beside the general path because it is a
+/// second reader of the same rule, and a fix to one that missed the other would
+/// leave the shortest patterns still disagreeing. It is a byte-length stand-in
+/// for the pattern rather than the pattern, so the values here are single-line
+/// ASCII, which is what it is meant for.
+#[test]
+fn an_absent_value_fails_a_negation_on_both_filters() {
+    // `signature` is carried by one of these two rows and not by the other.
+    let absent = make_symbol("alpha", "Function", 1);
+    let present = make_symbol_with_sig("beta", "int beta(int)", 1);
+
+    // Operator, pattern, and whether the row that HAS the value survives it.
+    // The last pair is the `.{N,}` shortcut, with a length no signature here
+    // reaches, so it separates the two rows the same way the others do.
+    let cases = [
+        (CompareOp::NotMatches, "void", true),
+        (CompareOp::Matches, "void", false),
+        (CompareOp::NotLike, "%void%", true),
+        (CompareOp::Like, "%void%", false),
+        (CompareOp::NotMatches, ".{100,}", true),
+        (CompareOp::Matches, ".{100,}", false),
+    ];
+
+    for (op, pattern, keeps_present) in cases {
+        let label = format!("{op:?} '{pattern}'");
+        let pred = Predicate {
+            field: "signature".to_string(),
+            op,
+            value: PredicateValue::String(pattern.to_string()),
+        };
+
+        let mut batch = vec![absent.clone(), present.clone()];
+        apply_where_predicates(&mut batch, std::slice::from_ref(&pred));
+
+        let kept: Vec<&str> = batch.iter().map(|s| s.name.as_str()).collect();
+        let expected: Vec<&str> = if keeps_present { vec!["beta"] } else { vec![] };
+        assert_eq!(
+            kept, expected,
+            "batch filter on {label}: a row carrying no value must not survive \
+             a negation, and one carrying a value must still be judged on it"
+        );
+
+        assert!(
+            !eval_predicate(&absent, &pred),
+            "per-item evaluator kept an absent value on {label}"
+        );
+        assert_eq!(
+            eval_predicate(&present, &pred),
+            keeps_present,
+            "the two filters disagree about the row that has the value on {label}"
+        );
+    }
 }
 
 #[test]

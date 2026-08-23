@@ -136,7 +136,7 @@
   },
   {
    "name": "a_negative_like_on_an_absent_column_drops_them_too",
-   "description": "`NOT LIKE` behaves as `!=` does and for the same reason, so the two are pinned together: 3,799 rows carry a `lines` value that does not start with 15. What is NOT answered early is `NOT MATCHES`, which stays with the built rows whatever field it names — on a value that resolves to nothing the batch filter keeps the row while a per-row evaluation would drop it, and holding every regex back is what keeps that disagreement off the answer. The unit suite pins that; no golden case can see it, because the answer is the same either way.",
+   "description": "`NOT LIKE` behaves as `!=` does and for the same reason, so the two are pinned together: 3,799 rows carry a `lines` value that does not start with 15. `NOT MATCHES` is the same rule again and is now pinned with them, in absent_value_fails_a_negation.json -- it did keep a row whose value resolved to nothing where a per-row evaluation dropped it, and holding every regex back to the built rows is what kept that disagreement off the answer; the two filters agree now, and the regex still waits for the compile alone.",
    "use": "forgeql-pub.frozen",
    "fql": "FIND symbols WHERE lines NOT LIKE '15%' LIMIT 3",
    "assert": {

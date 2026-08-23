@@ -329,18 +329,22 @@ pub(in crate::storage) fn usages_budget_exceeded(sites: usize, max_rows: usize) 
 /// Otherwise the row this
 /// segment would build carries it in neither its struct nor its enrichment
 /// map, so both readers resolve it to `None`, and every operator that consults
-/// the field is then false — `!=` and `NOT LIKE` as much as `=` and `LIKE`,
-/// because each arm of `eval_predicate_on` is `is_some_and`. A segment like
-/// that contributes nothing to the answer, which is what it contributed before
-/// as well; the difference is that its rows are no longer built to find out.
+/// the field is then false — `!=`, `NOT LIKE` and `NOT MATCHES` as much as `=`,
+/// `LIKE` and `MATCHES`, because each arm of `eval_predicate_on` is
+/// `is_some_and` and the batch filter requires the same presence. A segment
+/// like that contributes nothing to the answer, which is what it contributed
+/// before as well; the difference is that its rows are no longer built to find
+/// out.
 ///
-/// The regex clause is not only about cost, and must stay first. On a value
-/// the reader resolves to `None`, `apply_where_predicates` and
-/// `eval_predicate_on` disagree about `NOT MATCHES`: the batch path keeps the
-/// row (`ok == is_matches` with both false) and the per-item path drops it
-/// (`is_some_and` on nothing). Holding every regex back to the batch that
-/// built the rows is what keeps that disagreement off the answer, so a change
-/// here that let one through would move rows, not just work.
+/// The regex clause is about cost: a pattern is compiled once for a batch of
+/// built rows rather than once per row. It was about more than that until the
+/// two filters were aligned — on a value the reader resolved to `None`,
+/// `apply_where_predicates` kept the row under `NOT MATCHES` (`ok ==
+/// is_matches` with both false) where `eval_predicate_on` dropped it
+/// (`is_some_and` on nothing), and holding every regex back to the batch was
+/// what kept that disagreement off the answer. Both now fail a negation on a
+/// missing value, so admitting a regex here would cost work rather than move
+/// rows.
 fn predicate_waits_for_a_built_row(
     seg: &SegmentReader,
     predicate: &crate::ir::Predicate,

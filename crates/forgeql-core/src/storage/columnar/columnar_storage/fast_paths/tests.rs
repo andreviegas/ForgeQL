@@ -1588,18 +1588,21 @@ fn count_and_the_kind_are_the_only_two_the_kind_group_row_answers() {
 /// No regex predicate is answered before the rows are built — on any field,
 /// including one the segment holds a column for.
 ///
-/// This is not a cost rule, and reading it as one is how it would get relaxed.
-/// `apply_where_predicates` and `eval_predicate_on` genuinely disagree on a
-/// `NOT MATCHES` whose value is absent: the batch path computes
-/// `is_some_and(is_match)` and keeps the row when that is `false == false`,
-/// while `eval_predicate_on` computes `is_some_and(|v| !is_match(v))` and drops
-/// it. Nothing reaches that disagreement only because this line holds every
-/// regex to the batch path.
+/// This is now a cost rule, and only a cost rule: a pattern is compiled once
+/// for a batch of built rows rather than once per row. It was more than that.
+/// `apply_where_predicates` and `eval_predicate_on` used to disagree on a
+/// `NOT MATCHES` whose value is absent: the batch path computed
+/// `is_some_and(is_match)` and kept the row when that was `false == false`,
+/// while `eval_predicate_on` computed `is_some_and(|v| !is_match(v))` and
+/// dropped it, and nothing reached the disagreement only because this line
+/// holds every regex to the batch path. Both now fail a negation on a missing
+/// value, so what this line still buys is the compile.
 ///
-/// The absent case is pinned elsewhere. What this pins is the harder one: a
-/// field the segment *does* carry a column for still waits, because an unset
-/// slot in a stored column reads as absent too — so admitting regexes for
-/// "fields the segment answers" would walk straight into the same divergence.
+/// The case is kept because the cost is real and because the shape it covers is
+/// the harder one to keep on the slow side: a field the segment *does* carry a
+/// column for still waits, even though an unset slot in a stored column reads
+/// as absent, so a relaxation aimed at "fields the segment answers" has to be
+/// argued rather than assumed.
 #[test]
 fn a_regex_waits_for_a_built_row_even_on_a_column_the_segment_holds() {
     let (_tmp, reader) = one_row_segment();

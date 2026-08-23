@@ -1011,9 +1011,9 @@ selects either answers from a column or holds no column for at all — and no
 compiled once for a batch of built rows rather than once per row. Absence is an
 answer: where no column holds the field, the row that segment would build
 carries it in neither its struct nor its enrichment map, so both readings agree
-on nothing and the predicate is false for every row of that segment — `!=` and
-`NOT LIKE` as much as `=` and `LIKE`, a missing value failing an operator rather
-than passing it. That segment contributed nothing before either; what has gone
+on nothing and the predicate is false for every row of that segment — `!=`,
+`NOT LIKE` and `NOT MATCHES` as much as `=`, `LIKE` and `MATCHES`, a missing value
+failing an operator rather than passing it. That segment contributed nothing before either; what has gone
 is the rows built to find out, and with them the rule that one segment lacking
 an enrichment column took the page off row views for every segment that had it.
 Two things still bar a field. One is a segment *shadowing* it with a same-named
@@ -1292,6 +1292,15 @@ IN → EXCLUDE → WHERE → GROUP BY → HAVING → ORDER BY → OFFSET → LIM
 | `MATCHES` | Regex match (Rust `regex` crate syntax, case-sensitive by default; use `(?i)` for case-insensitive) |
 | `NOT MATCHES` | Negated regex match |
 | `>` `>=` `<` `<=` | Numeric comparison |
+
+A row that does not carry the field fails **every** operator naming it, so a
+negation is not a way to reach the rows that lack it: `WHERE naming != 'x'`,
+`NOT LIKE` and `NOT MATCHES` all return only rows that have a `naming` to
+differ from. The one exception is a **pattern** operator handed something it
+cannot use: `NOT LIKE` or `NOT MATCHES` with a non-string value, or
+`NOT MATCHES` with a regex that does not compile, passes before any field is
+read. `!=` is not in that set and fails on a missing value whatever its value
+type.
 
 | Value syntax | Type |
 |---|---|
