@@ -6,6 +6,15 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Notes
+
+- Two defects found while landing the page cut are pinned rather than fixed,
+  because each changes an answer: `SHOW COMMITS` reports the page size as its
+  total under an explicit `LIMIT`, and the two predicate readers disagree on a
+  `NOT MATCHES` whose value is absent — reachable only if a regex were ever
+  admitted to the pre-materialisation path, which is what makes that guard
+  load-bearing rather than a cost choice.
+
 ## [0.181.0] — 2026-08-22 — a usages page is cut before its rows are built
 
 ### Performance
