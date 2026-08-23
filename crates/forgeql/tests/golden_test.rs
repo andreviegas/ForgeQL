@@ -829,6 +829,49 @@ fn build_trial(
         _ => Trial::test(name, move || run_case(&h, &case)),
     }
 }
+
+/// Refuse to judge a run whose corpora answer from the legacy in-memory index.
+///
+/// A session whose columnar index will not open does not fail. It falls back to
+/// the complete in-memory index and answers — and the two backends do not
+/// answer alike: the counted `GROUP BY` routes, the node handles and several
+/// refusal texts are the columnar backend's alone. What that produced the one
+/// time it happened was 90 of 377 cases failing on row values, with nothing in
+/// any diff to say which backend had written them.
+///
+/// `USING 'columnar'` errors when no columnar engine is installed for a session
+/// — `backend_set::new_yields_legacy_only` pins that — so one probe per corpus
+/// turns a silent substitution into one refusal that names it. Same principle
+/// as the foreign-tree refusal in `main`: judge nothing rather than judge the
+/// wrong thing. It costs no extra session, since `session_for` memoises and
+/// this opens the one this member's first cases would have opened anyway.
+///
+/// # Panics
+/// When a corpus the suites name has no columnar index in the data dir.
+fn refuse_a_run_without_a_columnar_index(member: &Mutex<Harness>, corpora: &[String]) {
+    let mut without_index: Vec<String> = Vec::new();
+    let mut guard = member.lock().expect("golden pool member 0");
+    for use_str in corpora {
+        let probed = match guard.session_for(use_str) {
+            Ok(sid) => guard.run(&sid, "FIND symbols USING 'columnar' LIMIT 1"),
+            Err(e) => Err(e),
+        };
+        if let Err(e) = probed {
+            without_index.push(format!("  {use_str}: {e}"));
+        }
+    }
+    drop(guard);
+
+    assert!(
+        without_index.is_empty(),
+        "these corpora have no columnar index in this data dir, so their \
+         sessions answer from the legacy in-memory fallback while the suites \
+         pin what the columnar backend answers:\n{}\n\
+         Re-index them for the current index generation (ENRICH_VER) and run \
+         the suites again.",
+        without_index.join("\n")
+    );
+}
 fn main() {
     let args = Arguments::from_args();
 
@@ -885,14 +928,21 @@ fn main() {
         }
     }
 
-    // The self-tests below need one source that really is registered. Any will
-    // do, so take the lexicographically first the suites mention: deterministic,
-    // and it stays in step with the suites instead of hardcoding a corpus name.
-    let live_use: Option<String> = suites
-        .iter()
-        .flat_map(|s| s.cases.iter())
-        .map(|c| c.use_str.clone())
-        .min();
+    // Every corpus the suites name, deduplicated, in a deterministic order.
+    // The self-tests below need one source that really is registered — any will
+    // do, so they take the first, which stays in step with the suites instead
+    // of hardcoding a corpus name.
+    let corpora: Vec<String> = {
+        let mut named: Vec<String> = suites
+            .iter()
+            .flat_map(|s| s.cases.iter())
+            .map(|c| c.use_str.clone())
+            .collect();
+        named.sort();
+        named.dedup();
+        named
+    };
+    let live_use: Option<String> = corpora.first().cloned();
 
     // One engine process per pool member. libtest-mimic already ran trials on
     // parallel threads, but every trial locked the SAME harness for a whole
@@ -901,6 +951,7 @@ fn main() {
     let pool: Vec<Arc<Mutex<Harness>>> = (0..POOL_SIZE)
         .map(|id| Arc::new(Mutex::new(Harness::new(&data_dir, id))))
         .collect();
+    refuse_a_run_without_a_columnar_index(&pool[0], &corpora);
     let mut trials = Vec::new();
     // Soft-enforced cases push their failure here instead of failing the gate.
     let soft_fails: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));

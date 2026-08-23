@@ -33,6 +33,13 @@ registered; without it the harness skips (exit 0).
   across the pool and a per-member mutex serialises that member's channel. Session aliases
   carry the pid and the pool index, so neither concurrent runs (multiple agents) nor two
   pool members can collide on one worktree.
+
+- The run is **refused** when a corpus the suites name has no columnar index in
+  the data dir. Such a session does not fail — it falls back to the complete
+  in-memory index and answers, and the two backends disagree on the counted
+  `GROUP BY` routes, on node handles and on several refusal texts, so the cases
+  fail on row values with nothing to say why. One `USING 'columnar'` probe per
+  corpus at startup turns that into one message naming what to re-index.
 - Teardown is automatic: the server is killed and per-run worktrees removed when the run ends.
 
 ## Suite schema
