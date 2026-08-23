@@ -115,10 +115,10 @@ fn hex_of(content_id: &[u8]) -> String {
 /// subtraction against the canonical total can put them in a group.
 ///
 /// Two more are the same row twice. The dedupe pass collapses them into the one
-/// row the answer holds; `step6_build_name_fst` does not intersect its postings
-/// with the canonical set, so the name index still proposes both — which is why
-/// a `name =` beside a counted `GROUP BY file` reported one row too many, and
-/// why it is no longer counted.
+/// row the answer holds, and `step6_build_name_fst` intersects its postings
+/// with that canonical set, so the name index proposes the survivor alone —
+/// which is what lets a `name =` beside a counted `GROUP BY file` report one
+/// row instead of the two it used to.
 fn overlay_with_kindless_and_duplicate_rows()
 -> (TempDir, forgeql_core::storage::columnar::ColumnarStorage) {
     use forgeql_core::storage::columnar::ColumnarStorage;
@@ -245,10 +245,10 @@ fn the_kind_groups_partition_the_whole_answer() {
     assert_eq!(summed, all.rows.len());
 }
 
-/// A `name =` beside a counted `GROUP BY file` goes to the scan, and the count
+/// A `name =` beside a `GROUP BY file` is counted from the index, and the count
 /// it comes back with is the number of rows the answer holds.
 #[test]
-fn a_name_predicate_leaves_the_counted_route() {
+fn a_name_predicate_is_counted_and_counts_the_duplicate_once() {
     let (_tmp, storage) = overlay_with_kindless_and_duplicate_rows();
 
     let clauses = Clauses {
@@ -262,14 +262,20 @@ fn a_name_predicate_leaves_the_counted_route() {
         .find_symbols(&via_scan(&clauses), Path::new("."))
         .expect("scan route");
 
+    // Pinned at the route and not only at the number. The count below is what
+    // both routes answer, so a change that quietly handed this shape back to
+    // the scan would leave the rest of this test green.
     assert!(
-        !file_group_came_from_the_index(&page),
-        "a name predicate must not be counted: no name tier verifies its candidates"
+        file_group_came_from_the_index(&page),
+        "a name equality is counted: step6_build_name_fst intersects the name \
+         postings with each segment's canonical rows, so what the tier proposes \
+         is what the answer holds"
     );
     assert_eq!(file_groups(&page), file_groups(&scanned));
 
-    // The number is the whole point: the name postings carry both raw rows, so
-    // counting them reports two where the answer holds one.
+    // The number is the whole point: the fixture emits one row twice, and the
+    // postings carried both raw rows until the intersection, so counting them
+    // reported two where the answer holds one.
     let summed: usize = page.iter().filter_map(|r| r.count).sum();
     assert_eq!(summed, 1, "the duplicate row is one row of the answer");
 }

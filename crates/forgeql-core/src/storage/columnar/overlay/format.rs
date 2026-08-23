@@ -51,7 +51,14 @@ pub(crate) const MAGIC: [u8; 4] = *b"FQOV";
 ///   total usage-site count aggregated across all segments.
 /// - **15**: no layout change — content invalidation for ENRICH_VER 24
 ///   (ECUC parameter/reference values named by DEFINITION-REF last segment).
-pub(crate) const SCHEMA_VERSION: u32 = 15;
+/// - **16**: no layout change — the `name_fst` postings change content. They
+///   held each segment's RAW rows; they now hold only its canonical ones, the
+///   same intersection `step5_build_kind_postings` has always applied, so a
+///   name's posting list is the answer rows for that name rather than the rows
+///   plus the intra-segment duplicates the answer collapses. A v15 overlay is
+///   not corrupt — it over-counts and over-streams, which is exactly what made
+///   `WHERE name = … GROUP BY file` uncountable — so it must not be reused.
+pub(crate) const SCHEMA_VERSION: u32 = 16;
 
 /// Number of bytes in the fixed header (before the TOC).
 pub(crate) const HEADER_LEN: usize = 24;

@@ -2100,25 +2100,26 @@ pub(super) fn group_by_file_fast_path_eligible(clauses: &Clauses, dirty_empty: b
     clauses.where_predicates.iter().all(counts_exactly)
 }
 
-/// The one predicate a counted grouping may narrow by: `fql_kind = '<value>'`.
+/// The two predicates a counted grouping may narrow by: `fql_kind = '<value>'`
+/// and `name = '<value>'`.
 ///
-/// Its postings are the only tier that both verifies and deduplicates:
-/// `step5_build_kind_postings` intersects them with each segment's canonical row
-/// set, so a row sits in exactly one kind bitmap and a cardinality is a count of
-/// rows. Every other tier only proposes. The trigram index over-generates by
-/// construction, and the name FST carries a segment's raw rows because
-/// `step6_build_name_fst` does not canonical-intersect the way step 5 does — so
-/// a plain `name =` proposes the intra-segment duplicates the scan collapses.
-/// Nothing at query time can settle either of those, because the canonical row
-/// set is stored as a per-segment COUNT and not as a set, so there is nothing to
-/// intersect a candidate against; the shapes are handed to the scan, which
-/// decides each row by reading it. Making `name =` exact instead means
-/// canonical-intersecting the name postings at overlay build, which changes
-/// stored index output and owes an `ENRICH_VER` bump.
+/// Both are served from postings that were intersected with each segment's
+/// canonical row set at overlay build — `step5_build_kind_postings` for the
+/// kinds, `step6_build_name_fst` for the names — so a candidate they propose is
+/// an answer row and a cardinality of them is a count of answer rows. That is
+/// the whole admission test: a tier that only *proposes* cannot be counted,
+/// because a counted path never opens a row and so can never verify one.
 ///
-/// A non-string value is out for a different reason: `prefilter_global` has no
-/// arm for `fql_kind = <number>`, and a predicate it cannot serve it SKIPS —
-/// leaving every row a candidate rather than failing.
+/// The trigram index is the tier that fails it, by construction: it
+/// over-generates, and a literal shorter than the trigram width makes it
+/// decline altogether — `prefilter_global` then SKIPS the predicate and every
+/// row of a file becomes a candidate. So `name LIKE` and `name MATCHES` are out
+/// at every literal length, and they are handed to the scan, which decides each
+/// row by reading it.
+///
+/// A non-string value is out for a different reason again: `prefilter_global`
+/// has no arm for `fql_kind = <number>`, and a predicate it cannot serve it
+/// SKIPS — leaving every row a candidate rather than failing.
 fn counts_exactly(pred: &crate::ir::Predicate) -> bool {
     matches!(
         (
@@ -2126,7 +2127,11 @@ fn counts_exactly(pred: &crate::ir::Predicate) -> bool {
             &pred.op,
             &pred.value
         ),
-        ("fql_kind", CompareOp::Eq, PredicateValue::String(_))
+        (
+            "fql_kind" | "name",
+            CompareOp::Eq,
+            PredicateValue::String(_)
+        )
     )
 }
 

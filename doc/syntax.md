@@ -1113,15 +1113,16 @@ cannot be narrowed to the subset a predicate selects, so
 `WHERE fql_kind = 'function' GROUP BY naming` is scanned like any other grouping
 — and on a large enough corpus refused — and `GROUP BY fql_kind` refuses a
 `WHERE` outright for the same reason. `GROUP BY file` is the exception: its
-groups are the segments themselves, so `fql_kind = '<value>'` is intersected
-against them and still rides the counted route. That is the whole admitted set,
-and the reason is that the kind postings are the only tier intersected with each
-segment's canonical rows at build, so counting them counts answer rows. A `name`
-predicate is admitted at no literal length: a counted path never opens a row, so
-whatever a tier proposes is what gets counted, and every name tier only proposes
-— a literal under three bytes leaves every row a candidate, a literal the tier
-answers still proposes a superset, and a plain `name =` proposes the duplicate
-rows inside a file that the answer collapses into one. Such a query is answered
+groups are the segments themselves, so `fql_kind = '<value>'` and
+`name = '<value>'` are intersected against them and still ride the counted
+route. Those two are the whole admitted set, and the reason is that their
+postings are the two intersected with each segment's canonical rows at build —
+the kind postings always were, the name postings now are — so counting them
+counts answer rows. A name PATTERN is admitted at no literal length: a counted
+path never opens a row, so whatever a tier proposes is what gets counted, and
+the trigram tier only proposes — a literal under three bytes leaves every row a
+candidate, and a literal the tier answers still proposes a superset. Such a
+query is answered
 by the scan, which decides each row by reading it — an ordinary scan, so this
 budget applies to it and on a large corpus it can be refused where the counted
 route returned a number; narrow it with `IN`/`EXCLUDE`, since a `LIMIT` cannot

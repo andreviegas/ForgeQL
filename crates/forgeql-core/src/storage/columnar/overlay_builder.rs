@@ -171,7 +171,7 @@ impl OverlayBuilder {
             || Self::step55_build_enrich_bitmaps(&segs, &row_offsets, &seg_dedup),
             || {
                 rayon::join(
-                    || Self::step6_build_name_fst(&segs, &row_offsets),
+                    || Self::step6_build_name_fst(&segs, &row_offsets, &seg_dedup),
                     || Self::step6a_build_trigrams(&segs, &row_offsets),
                 )
             },
@@ -717,27 +717,31 @@ impl OverlayBuilder {
     fn step6_build_name_fst(
         segs: &[(PathBuf, String, SegmentReader)],
         row_offsets: &[u32],
+        seg_dedup: &[(RoaringBitmap, u32)],
     ) -> Result<(Vec<u8>, Vec<u8>)> {
         let t_step = std::time::Instant::now();
         // `zip` truncates to the shorter side, so a short `row_offsets` would
         // drop the tail segments' names from the merge instead of failing.
         ensure!(
-            segs.len() == row_offsets.len(),
-            "overlay name merge got {} segments but {} row offsets",
+            segs.len() == row_offsets.len() && segs.len() == seg_dedup.len(),
+            "overlay name merge got {} segments but {} row offsets and {} canonical sets",
             segs.len(),
             row_offsets.len(),
+            seg_dedup.len(),
         );
         // Resolve per segment once instead of once per (segment, shard): the
         // postings blob is a hash probe, and the first-byte mask lets a shard
         // skip outright every segment that cannot hold one of its keys.
-        let seg_inputs: Vec<(&[u8], u32, ShardMask)> = segs
+        let seg_inputs: Vec<(&[u8], u32, ShardMask, &RoaringBitmap)> = segs
             .par_iter()
             .zip(row_offsets)
-            .map(|((_, _, reader), &row_offset)| {
+            .zip(seg_dedup)
+            .map(|(((_, _, reader), &row_offset), (canonical, _))| {
                 (
                     reader.name_postings_bytes(),
                     row_offset,
                     first_byte_mask(&reader.name_fst),
+                    canonical,
                 )
             })
             .collect();
@@ -749,7 +753,7 @@ impl OverlayBuilder {
             .map(|&(byte, lo, hi)| {
                 let t_shard = std::time::Instant::now();
                 let mut merged: BTreeMap<Vec<u8>, Vec<u32>> = BTreeMap::new();
-                for ((_, _, reader), &(name_postings_raw, row_offset, mask)) in
+                for ((_, _, reader), &(name_postings_raw, row_offset, mask, canonical)) in
                     segs.iter().zip(&seg_inputs)
                 {
                     if !shard_present(&mask, byte) {
@@ -765,7 +769,22 @@ impl OverlayBuilder {
                     let mut stream = range.into_stream();
                     while let Some((name_bytes, encoded)) = stream.next() {
                         let local_rows = name_postings_slice(encoded, name_postings_raw);
-                        let global_rows = local_rows.iter().map(|&r| r + row_offset);
+                        // Canonical rows only — see `canonical_global_rows`.
+                        // A merged posting list is read as an answer (counted
+                        // by `fast_group_by_file`, streamed as rows by the
+                        // ascending name pages), so a duplicate in here is a
+                        // row the answer does not have.
+                        //
+                        // A name cannot vanish: the dedup key contains the
+                        // name, so the survivor of every group carries it. The
+                        // emptiness check keeps that true if the key ever
+                        // changes — a name with no rows would otherwise enter
+                        // the FST and answer "present" with nothing behind it.
+                        let mut global_rows =
+                            canonical_global_rows(local_rows, canonical, row_offset).peekable();
+                        if global_rows.peek().is_none() {
+                            continue;
+                        }
                         // A name recurs in ~4 segments, so most iterations hit an
                         // existing entry; `entry()` would allocate a key Vec for
                         // every one of them, `get_mut` allocates for none.
@@ -1493,6 +1512,24 @@ fn name_postings_slice(encoded: u64, name_postings: &[u8]) -> &[u32] {
     }
     #[expect(clippy::indexing_slicing, reason = "bounds checked above")]
     cast_slice::<u8, u32>(&name_postings[byte_offset..end])
+}
+
+/// The rows of one name in one segment, filtered to that segment's canonical
+/// set and renumbered into the overlay.
+///
+/// This is the intersection `step5_build_kind_postings` performs with a bitmap
+/// AND. A name posting list arrives as a sorted slice rather than a bitmap, so
+/// building one per name to intersect it would cost more than probing the
+/// canonical set once per row does.
+fn canonical_global_rows<'a>(
+    local_rows: &'a [u32],
+    canonical: &'a RoaringBitmap,
+    row_offset: u32,
+) -> impl Iterator<Item = u32> + 'a {
+    local_rows
+        .iter()
+        .filter(|&&row| canonical.contains(row))
+        .map(move |&row| row + row_offset)
 }
 
 /// One shard: its first byte, then the `(lower, upper)` key bounds it owns —

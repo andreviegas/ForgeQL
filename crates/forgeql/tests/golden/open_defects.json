@@ -130,7 +130,7 @@
 ,
   {
    "name": "control_a_long_literal_groups_by_file_correctly",
-   "description": "Anchors the cases below. A name pattern is no longer counted from the index -- no name tier verifies the candidates it proposes -- so this grouping is answered by the scan, and the 57 files it reports are the files that hold a matching row. The counted route used to answer this shape and happened to agree here, which is exactly why the three cases below exist: agreement was the corpus being kind, not the path being exact. The line pins the route, since a counted group row from this path carries none of its own.",
+   "description": "Anchors the cases below. A name PATTERN is not counted from the index -- no pattern tier verifies the candidates it proposes -- so this grouping is answered by the scan, and the 57 files it reports are the files that hold a matching row. The counted route used to answer this shape and happened to agree here, which is exactly why the cases below exist: agreement was the corpus being kind, not the path being exact. The line pins the route, since a counted group row from this path carries none of its own.",
    "use": "forgeql-pub.frozen",
    "fql": "FIND symbols WHERE name LIKE '%segment%' GROUP BY file ORDER BY count DESC",
    "assert": {
@@ -159,7 +159,7 @@
   },
   {
    "name": "a_counted_group_by_file_counts_only_matching_rows",
-   "description": "A GROUP BY file counted from the index returns the counts the scan returns. It does, now that the only WHERE it counts under is fql_kind = -- the one tier whose postings are intersected with each segment's canonical rows at build. A name pattern the trigram tier declines used to leave every row a candidate and every candidate a count; group_by_file_fast_path_eligible hands the shape to the scan instead, which decides each row by reading it. The line: 3 pins that route: a counted group row carries no line of its own.",
+   "description": "A GROUP BY file counted from the index returns the counts the scan returns. A name PATTERN is not one of the shapes it counts: the trigram tier over-generates by construction, and below its literal width it declines outright, leaving every row of a file a candidate and every candidate a count. group_by_file_fast_path_eligible hands the pattern to the scan, which decides each row by reading it. The line: 3 pins that route -- a counted group row carries no line of its own. The two shapes that ARE counted, fql_kind = and name =, are served by postings intersected with the canonical rows at build; this one has no such structure to be served from.",
    "use": "forgeql-pub.frozen",
    "fql": "FIND symbols WHERE name LIKE '%ab%' GROUP BY file ORDER BY count DESC",
    "assert": {
@@ -211,13 +211,13 @@
   },
   {
    "name": "a_counted_group_by_file_counts_each_row_once",
-   "description": "The half of the defect that needed no pattern, only a plain name equality -- the shape the old eligibility rule most obviously intended to admit, and the one it could not count. step6_build_name_fst merges each segment's raw name postings into the overlay FST without intersecting them with the canonical bitmap that step5_build_kind_postings and collect_posting_enrichment both apply, so a name posting still carries the intra-segment duplicates the scan collapses: this file reported 57 rows named '0' where it holds 48. Nothing at query time can settle that -- the canonical row set is stored as a per-segment count, not as a set -- so the shape is handed to the scan. Making it countable means canonical-intersecting the name postings at overlay build, which changes stored index output and owes an ENRICH_VER bump.",
+   "description": "The half of the defect that needed no pattern, only a plain name equality -- the shape the old eligibility rule most obviously intended to admit, and the one it could not count. step6_build_name_fst merged each segment's RAW name postings into the overlay FST without the canonical intersection that step5_build_kind_postings and collect_posting_enrichment both apply, so a name posting carried the intra-segment duplicates the answer collapses: this file reported 57 rows named '0' where it holds 48. The intersection now runs at overlay build, which is what makes a name equality countable and re-admits it here. The count is the control's 48, and the empty name and zero line are what say the counted route reached it -- the scan's row for this group carries a name of its own, at line 191.",
    "use": "forgeql-pub.frozen",
    "fql": "FIND symbols WHERE name = '0' IN 'crates/forgeql-core/src/transforms/diff.rs' GROUP BY file",
    "assert": {
     "row_count": 1,
     "rows": [
-     { "count": 48, "group_key": "crates/forgeql-core/src/transforms/diff.rs", "line": 191 }
+     { "count": 48, "group_key": "crates/forgeql-core/src/transforms/diff.rs", "name": "", "line": 0 }
     ]
    }
   }
@@ -237,7 +237,7 @@
   },
   {
    "name": "a_counted_group_by_file_counts_an_answered_pattern_once",
-   "description": "The case that said there is no safe literal length. This four-byte pattern IS served by the trigram index, and the counted grouping still came back one row high -- because a tier that answers still only proposes, and nothing tested a proposal against its own row. It is kept beside the sub-trigram case so neither is read as marking a boundary the other stays inside: the fix is not a longer literal, it is that no name tier is admitted to a counted group at all.",
+   "description": "The case that said there is no safe literal length for a PATTERN. This four-byte pattern IS served by the trigram index, and the counted grouping still came back one row high -- because a tier that answers still only proposes, and nothing tested a proposal against its own row. It is kept beside the sub-trigram case so neither is read as marking a boundary the other stays inside: what settles a name predicate is not the length of its literal, it is whether the structure serving it was intersected with the canonical rows at build. The name FST now is, so a name EQUALITY is counted; the trigram index is not and cannot be, since it over-generates by construction, so every name pattern stays with the scan at every length.",
    "use": "forgeql-pub.frozen",
    "fql": "FIND symbols WHERE name LIKE '%name%' IN 'crates/forgeql/tests/golden.json' GROUP BY file",
    "assert": {

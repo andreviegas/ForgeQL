@@ -10,6 +10,10 @@
   now. What replaced them was counted on the same query — 197,965 comparisons
   against already-mapped bytes for the whole of it, 8.2 per segment.
 
+  Those maps were per-session heap, which is the kind that multiplies: several
+  agents on one corpus each paid for their own. That, rather than the size of
+  any single one, is what the change is for.
+
   Answers are unchanged: the search runs over a sorted permutation of the same
   pool, so it finds the same id, and the same absence where the segment does
   not hold the value. No wall-clock claim is made — the query is bounded by

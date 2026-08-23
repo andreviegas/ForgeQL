@@ -1452,16 +1452,19 @@ fn count_and_the_grouped_field_are_the_only_two_the_group_row_answers() {
     );
 }
 
-/// The one predicate a counted `GROUP BY file` may narrow by is `fql_kind =`
-/// with a string value.
+/// The two predicates a counted `GROUP BY file` may narrow by are `fql_kind =`
+/// and `name =`, each with a string value.
 ///
 /// Every arm here is load-bearing. `prefilter_global` SKIPS a predicate no tier
 /// serves, and [`ColumnarStorage::fast_group_by_file`] clears the residual
 /// `WHERE` before delivering, so a predicate admitted here and unserved there is
-/// counted as the whole segment. The three `name` spellings were admitted for
+/// counted as the whole segment. All three `name` spellings were admitted for
 /// years and all three counted high; `open_defects.json` carries the numbers.
+/// The equality is admitted again now that `step6_build_name_fst` intersects
+/// the name postings with each segment's canonical rows — the patterns are not,
+/// and cannot be, since the trigram tier over-generates by construction.
 #[test]
-fn only_an_exact_kind_predicate_narrows_a_counted_file_group() {
+fn only_an_exact_kind_or_name_predicate_narrows_a_counted_file_group() {
     let with = |pred: crate::ir::Predicate| Clauses {
         where_predicates: vec![pred],
         ..bare_group_by("file")
@@ -1481,15 +1484,18 @@ fn only_an_exact_kind_predicate_narrows_a_counted_file_group() {
         ),
         "the canonical kind postings are exact"
     );
-    for (label, pred) in [
-        (
-            "name =",
-            predicate(
+    assert!(
+        group_by_file_fast_path_eligible(
+            &with(predicate(
                 "name",
                 CompareOp::Eq,
-                PredicateValue::String("0".to_owned()),
-            ),
+                PredicateValue::String("0".to_owned())
+            )),
+            true
         ),
+        "the name postings are canonical-intersected too, so a name equality counts"
+    );
+    for (label, pred) in [
         (
             "name LIKE",
             predicate(

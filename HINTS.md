@@ -69,6 +69,18 @@ Short, durable facts discovered while working in this codebase.
   `Overlay::dedup_total()` sums it, and the merged kind postings are canonical-only,
   so `prefilter_kind(K).len()` is the deduped per-kind count — honest stream totals
   come from storage, never an FST walk.
+- The overlay's **name postings are canonical-only too** since FQOV v16
+  (`step6_build_name_fst` takes `seg_dedup` and probes `canonical.contains(row)`
+  per posting entry — a sorted slice, so a probe rather than step 5's bitmap
+  AND). That is what re-admitted `name = '<value>'` to `fast_group_by_file`
+  (`counts_exactly` is the one predicate list both gates read). Five readers
+  take those postings, all in `overlay.rs` via `decode_postings`/`_slice`:
+  `prefilter_name_values`, `lookup_name_bitmap` (→ `prefilter_global` and
+  `query/resolve.rs`), and the five `stream_names_*`. Resolution lands where it
+  landed because `step45_dedup_segments` keeps the LOWEST row id of each group,
+  so the first candidate in a segment is the survivor. Dirty segments are NOT
+  intersected (no dedup pass runs for them) — harmless, because every counted
+  grouping already requires an empty dirty overlay.
 - The name streams (`try_order_by_name_fast_paths`, query/find.rs) serve
   `ORDER BY name [DESC] [WHERE fql_kind =] LIMIT` and the bare `LIMIT`; they decline
   on a non-empty dirty overlay, duplicated source paths, and `need > find_max_rows()`.
