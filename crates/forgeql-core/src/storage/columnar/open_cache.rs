@@ -2,10 +2,13 @@
 //!
 //! Every session used to decode its own copy of a commit: the [`Overlay`], and
 //! one [`SegmentReader`] per indexed file. Those readers are the expensive part
-//! — each holds decoded postings, a string pool and FSTs — and they are private
-//! heap rather than shared mappings, so N sessions on one commit cost N times
-//! the working set. Several concurrent sessions on one corpus is a routine
-//! load, and it has taken the server out of memory.
+//! — each held decoded postings and a heap map of its string pool, and they are
+//! private heap rather than shared mappings, so N sessions on one commit cost N
+//! times the working set. Several concurrent sessions on one corpus is a
+//! routine load, and it has taken the server out of memory. (A reader is a
+//! smaller thing now: postings are decoded per lookup and the string pool is
+//! searched in the mapping. Sharing it still matters — what remains is its
+//! blob ranges and its FSTs, per file, per session.)
 //!
 //! Sharing them is sound by construction rather than by convention:
 //!

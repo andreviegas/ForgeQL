@@ -25,9 +25,9 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use bytemuck::cast_slice;
 use fst::Map as FstMap;
 use memmap2::{Mmap, MmapOptions};
@@ -102,8 +102,10 @@ impl MmapSlice {
 
 /// Slice-backed string intern table backed by the parent segment's `Arc<Mmap>`.
 ///
-/// Reads `strings_offsets` and `strings_data` blobs from the single `.fqsf`
-/// mmap rather than maintaining separate per-file mmaps.
+/// Reads the `strings_offsets`, `strings_data` and `strings_sorted` blobs from
+/// the single `.fqsf` mmap rather than maintaining separate per-file mmaps,
+/// and answers both directions — id to string, string to id — out of them
+/// without owning a byte.
 struct StringPool {
     mmap: Arc<Mmap>,
     /// Byte range of the `strings_offsets` blob within `mmap`.
@@ -113,28 +115,25 @@ struct StringPool {
     dat_start: usize,
     dat_end: usize,
     string_count: u32,
-    /// Reverse map for O(1) prefilter lookups, built on first use.
+    /// Byte range of the `strings_sorted` blob within `mmap` — the pool's ids
+    /// ordered by the bytes they name, `string_count` of them exactly.
     ///
-    /// Its keys are an owned copy of every string in the pool — bytes the mmap
-    /// already holds, duplicated onto the heap. It used to be built eagerly at
-    /// open time, for every segment, whether or not anything would ask it a
-    /// question.
+    /// A value lookup binary searches this against `strings_data` through the
+    /// mapping, so a segment answers "which id is this string?" without a
+    /// table of its own. What stood here before was a
+    /// `HashMap<String, u32>` holding an owned copy of every string in the
+    /// pool — bytes the mapping already held, duplicated onto the heap. It was
+    /// built by the first `WHERE field = value` to touch the segment and kept
+    /// for the life of the open, so a predicate-heavy session accumulated one
+    /// per segment it reached.
     ///
-    /// **No indexing step reads it.** Every caller is a query prefilter, so an
-    /// index build used to pay to construct one of these per segment and then
-    /// read none of them. Measured on the Linux kernel — 80,426 segments —
-    /// building them cost 16.4 of the 17.8 seconds spent opening segments for
-    /// the overlay build, which now takes 1.4. The overlay comes out
-    /// byte-identical, which is the property to preserve if this is ever made
-    /// eager again for some other reason.
-    ///
-    /// It is not, however, where that phase's memory went: dropping the eager
-    /// build left the phase's 7.5 GiB growth unchanged. Of what remained,
-    /// about 40% (~210 of ~550 MiB, measured on a 3.06M-row corpus) was the
-    /// posting bitmaps `open` deserialised for every segment; those are now
-    /// read in place (see `postings.rs`). The rest is the readers' own tables
-    /// — TOC, column names, string-pool bounds — and is still heap.
-    reverse: OnceLock<HashMap<String, u32>>,
+    /// **No indexing step ever asked this question.** Every caller is a query
+    /// prefilter, which is why the map was made lazy first: measured on the
+    /// Linux kernel — 80,426 segments — building one eagerly per segment cost
+    /// 16.4 of the 17.8 seconds spent opening segments for an overlay build
+    /// that read none of them.
+    srt_start: usize,
+    srt_end: usize,
 }
 
 impl StringPool {
@@ -142,6 +141,7 @@ impl StringPool {
         mmap: Arc<Mmap>,
         off_range: (usize, usize),
         dat_range: (usize, usize),
+        srt_range: Option<(usize, usize)>,
         string_count: u32,
     ) -> Result<Self> {
         let (off_start, off_end) = off_range;
@@ -154,6 +154,21 @@ impl StringPool {
         //  1. `strings_offsets` blob has ≥ (string_count + 1) * 4 bytes.
         //  2. Offsets are monotonically non-decreasing.
         //  3. Last offset ≤ `strings_data` blob length.
+        //  4. `strings_sorted` is present and holds ≥ string_count ids, each
+        //     of them naming a string this pool has.
+        //
+        // Invariant 4 is a refusal and not a fallback: a segment written
+        // before the blob existed is not reachable, because segments are
+        // cached under a directory named for `ENRICH_VER` and the blob landed
+        // with a bump. A reader that kept the old map beside the search would
+        // be keeping a path nothing can take.
+        let Some((srt_start, srt_end)) = srt_range else {
+            bail!(
+                "segment has no strings_sorted blob (string_count = {string_count}); \
+                 it predates the sorted string index and must be re-indexed"
+            );
+        };
+
         if string_count > 0 {
             let expected_offset_bytes = (string_count as usize + 1) * 4;
             let actual_offset_bytes = off_end - off_start;
@@ -178,6 +193,22 @@ impl StringPool {
                 last <= dat_len,
                 "strings_offsets: last offset {last} > strings_data length {dat_len}"
             );
+
+            let expected_sorted_bytes = string_count as usize * 4;
+            let actual_sorted_bytes = srt_end - srt_start;
+            ensure!(
+                actual_sorted_bytes >= expected_sorted_bytes,
+                "strings_sorted blob has {actual_sorted_bytes} bytes; \
+                 expected ≥ {expected_sorted_bytes} for {string_count} strings"
+            );
+            let srt_slice: &[u32] = cast_slice(&mmap[srt_start..srt_start + expected_sorted_bytes]);
+            for (i, &id) in srt_slice.iter().enumerate() {
+                ensure!(
+                    id < string_count,
+                    "strings_sorted names id {id} at index {i}, past the {string_count} \
+                     strings this pool holds"
+                );
+            }
         }
 
         let pool = Self {
@@ -187,7 +218,10 @@ impl StringPool {
             dat_start,
             dat_end,
             string_count,
-            reverse: OnceLock::new(),
+            srt_start,
+            // Trim to the ids the header accounts for, so the search reads a
+            // whole number of them however long the blob is.
+            srt_end: srt_start + string_count as usize * 4,
         };
 
         Ok(pool)
@@ -195,20 +229,32 @@ impl StringPool {
 
     /// The id of `s` in this pool, or `None` when the pool does not hold it.
     ///
-    /// Builds the reverse map on first call and reuses it after. Callers are
-    /// prefilters deciding whether a segment can match a value at all, so the
-    /// answer has to be exact in both directions: `None` means the string is
-    /// absent from this segment, which lets a caller skip the segment, and
-    /// inventing one would skip a segment that matches.
+    /// A binary search over `strings_sorted`, comparing against `strings_data`
+    /// through the mapping: one comparison per halving of the pool, each of
+    /// them two `u32` reads and a compare of bytes that are already mapped.
+    /// Nothing is allocated and nothing is kept, so the cost is paid per
+    /// lookup instead of once per segment for the life of the open.
+    ///
+    /// Callers are prefilters deciding whether a segment can match a value at
+    /// all, so the answer has to be exact in both directions: `None` means the
+    /// string is absent from this segment, which lets a caller skip the
+    /// segment, and inventing one would skip a segment that matches. The
+    /// search gives both — the blob is a permutation of the pool's ids ordered
+    /// by the bytes they name, and `SegmentBuilder::intern` holds each string
+    /// once, so a present string is found and an absent one is not.
+    ///
+    /// This is a per-lookup cost and must stay one. Every caller asks it once
+    /// per predicate value per segment — `prefilter_kind`,
+    /// `prefilter_enrichment_postings` and `proves_enrichment_value_absent`,
+    /// each of which then reads a posting bitmap keyed by the id it got back —
+    /// so a pool of a few hundred strings is a handful of comparisons per
+    /// segment per query. On a per-row path the same walk would be paid by
+    /// every row, which is the trade a mapped structure loses.
     fn id_of(&self, s: &str) -> Option<u32> {
-        self.reverse
-            .get_or_init(|| {
-                (0..self.string_count)
-                    .map(|id| (self.get(id).to_owned(), id))
-                    .collect()
-            })
-            .get(s)
-            .copied()
+        let ids: &[u32] = cast_slice(&self.mmap[self.srt_start..self.srt_end]);
+        ids.binary_search_by(|&id| self.get(id).cmp(s))
+            .ok()
+            .map(|i| ids[i])
     }
 
     /// Look up string ID `id`; returns `""` for absent / out-of-range IDs.
@@ -821,8 +867,13 @@ impl SegmentReader {
         // ── 6. String pool ────────────────────────────────────────────────
         let off_range = toc.get("strings_offsets").unwrap_or((0, 0));
         let dat_range = toc.get("strings_data").unwrap_or((0, 0));
-        let strings =
-            StringPool::from_blobs(Arc::clone(&mmap), off_range, dat_range, hdr.string_count)?;
+        let strings = StringPool::from_blobs(
+            Arc::clone(&mmap),
+            off_range,
+            dat_range,
+            toc.get("strings_sorted"),
+            hdr.string_count,
+        )?;
 
         // ── 7. Roaring postings — addressed in place, layout checked, not
         //       decoded (see `postings.rs`). The blob names are built in a

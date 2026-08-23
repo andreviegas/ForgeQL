@@ -404,6 +404,139 @@ fn open_nonmonotone_string_pool_returns_err() {
     // blob not found — test passes vacuously (shouldn't happen with real segments)
 }
 
+/// A value lookup answers exactly what the reverse `HashMap` it replaced
+/// answered — both directions, the miss included.
+///
+/// The map is rebuilt here from the pool and kept as the oracle. It is the
+/// algorithm `id_of` used until the sorted blob existed, and the property that
+/// matters is not that the search works but that it decides the same segments
+/// in and out: `None` is what lets a prefilter skip a segment, so a wrong miss
+/// is a row that never comes back.
+#[test]
+fn a_value_lookup_answers_what_the_reverse_map_answered() {
+    let (_tmp, seg) = make_segment(&[
+        ("alpha", "function", 1),
+        ("beta", "struct", 2),
+        ("Gamma", "function", 3),
+        ("alpha2", "function", 4),
+    ]);
+    let reader = SegmentReader::open(&seg).expect("open");
+    let pool = &reader.strings;
+
+    let oracle: HashMap<String, u32> = (0..pool.string_count)
+        .map(|id| (pool.get(id).to_owned(), id))
+        .collect();
+    assert!(
+        oracle.len() >= 4,
+        "fixture must intern several strings, got {}",
+        oracle.len()
+    );
+
+    for (s, &id) in &oracle {
+        assert_eq!(
+            pool.id_of(s),
+            Some(id),
+            "the search and the map disagree on the present {s:?}"
+        );
+    }
+
+    // Probes chosen to be the shapes a binary search gets wrong when the
+    // ordering is not the one the writer used: either side of a present
+    // string, a prefix of one, an extension of one, and a case fold.
+    for absent in ["", "aaa", "zzz", "alph", "alphaa", "ALPHA", "gamma"] {
+        assert_eq!(
+            pool.id_of(absent),
+            oracle.get(absent).copied(),
+            "the search and the map disagree on {absent:?}"
+        );
+    }
+}
+
+/// The writer's `strings_sorted` blob is a permutation of the pool's ids in
+/// the order of the bytes they name.
+///
+/// That is the invariant the binary search rests on and the one thing no
+/// lookup re-checks: an unsorted blob would not fail, it would answer `None`
+/// for a string the segment holds.
+#[test]
+fn the_sorted_string_index_is_a_permutation_in_byte_order() {
+    let (_tmp, seg) = make_segment(&[
+        ("alpha", "function", 1),
+        ("beta", "struct", 2),
+        ("Gamma", "function", 3),
+        ("alpha2", "function", 4),
+    ]);
+    let reader = SegmentReader::open(&seg).expect("open");
+    let pool = &reader.strings;
+
+    let ids: &[u32] = cast_slice(&pool.mmap[pool.srt_start..pool.srt_end]);
+    assert_eq!(
+        ids.len(),
+        pool.string_count as usize,
+        "the blob holds one id per string"
+    );
+
+    for pair in ids.windows(2) {
+        let (lo, hi) = (pool.get(pair[0]), pool.get(pair[1]));
+        assert!(
+            lo < hi,
+            "ids {} and {} are out of byte order: {lo:?} then {hi:?}",
+            pair[0],
+            pair[1]
+        );
+    }
+
+    let mut seen = vec![false; ids.len()];
+    for &id in ids {
+        assert!(!seen[id as usize], "id {id} appears twice");
+        seen[id as usize] = true;
+    }
+    assert!(seen.iter().all(|&s| s), "every id of the pool appears once");
+}
+
+/// A segment carrying no `strings_sorted` blob is refused at open rather than
+/// served from a fallback.
+///
+/// Nothing can produce one any more: segments are cached under a directory
+/// named for `ENRICH_VER` and the blob landed with a bump, so the only way to
+/// ask the reader this question is to take the blob away from a segment it
+/// wrote. Keeping the map beside the search for such a file would be keeping a
+/// path no build can reach and no test can exercise.
+#[test]
+fn a_segment_without_the_sorted_string_index_is_refused_at_open() {
+    let (_tmp, seg) = make_segment(&[("alpha", "function", 1), ("beta", "struct", 2)]);
+    let mut bytes = std::fs::read(&seg).expect("read segment");
+
+    // Rename the entry rather than dropping it: every other blob stays exactly
+    // where the table says it is, so the open fails for the one reason under
+    // test. `parse_toc` sorts what it reads, so the renamed entry is still
+    // found by every other name.
+    let entry_count = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let mut renamed = false;
+    for i in 0..entry_count {
+        let es = 12 + i * TOC_ENTRY_SIZE;
+        let name_end = bytes[es..es + ENTRY_NAME_LEN]
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(ENTRY_NAME_LEN);
+        if &bytes[es..es + name_end] == b"strings_sorted" {
+            bytes[es] = b'x';
+            renamed = true;
+        }
+    }
+    assert!(renamed, "the builder must write a strings_sorted blob");
+    std::fs::write(&seg, &bytes).expect("write segment");
+
+    let Err(err) = SegmentReader::open(&seg) else {
+        panic!("a segment with no strings_sorted blob opened instead of being refused");
+    };
+    let text = format!("{err:#}");
+    assert!(
+        text.contains("strings_sorted"),
+        "the refusal must name the missing blob, got: {text}"
+    );
+}
+
 // ── absent columns ────────────────────────────────────────────────────────
 
 /// A segment written before a column existed simply has no TOC entry for it.

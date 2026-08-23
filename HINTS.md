@@ -97,6 +97,26 @@ Short, durable facts discovered while working in this codebase.
   ranges — `name_postings`, `usages_postings`, `MentionIndex.postings`,
   `ExtraCol.data` — so a blob the reader must read has to be resolved in `open`,
   not looked up later.
+
+- A value lookup (`StringPool::id_of`) is a **binary search over the
+  `strings_sorted` blob** — the pool's ids in the order of the bytes they name —
+  comparing against `strings_data` in the mapping. It replaced a lazily built
+  `HashMap<String, u32>` per segment (`ENRICH_VER` 71). A segment without the
+  blob is refused at open rather than falling back, and none can be reached:
+  segments cache under `{provider}-v{ENRICH_VER}/`. Census through
+  `RUN 'run_fql'` (counters in `id_of`, printed at the end of the query): one
+  `WHERE naming = 'snake_case'` touches **24,056 of zephyr's 32,748** segments
+  and **397 of this repo's 411**; the maps it no longer builds held 5,721,758
+  strings / 221,016,000 bytes of string data there, 193,481 / 11,020,016 here.
+  The search that replaced them costs 197,965 comparisons for that whole query
+  on zephyr (8.2 per lookup), 3,929 here (9.9). Four different enrichment
+  predicates in one session reach 400 of 411 — the ceiling is the segments the
+  session touches, not the number of predicates.
+- **`WHERE fql_kind = '<kind>'` calls `id_of` zero times** (0 of 32,748 and 0 of
+  411, measured) — the kind equality is answered before `prefilter_kind` is
+  reached. That is why no `bench_mem` class ever built these maps: `kind_scan`,
+  `wide_scope`, `name_stream` and `full_scan` carry no enrichment equality.
+  `bench_ab naming_eq` is the only class with the shape.
 - Names that repeat across segments (enrichment column names, occurrence role
   names) are interned process-wide in `segment_reader/intern.rs` as `Arc<str>`
   (capped pool, private copy past the cap). Reading a name back out of the

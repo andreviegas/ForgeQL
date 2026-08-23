@@ -566,6 +566,7 @@ impl SegmentBuilder {
 
         // Encode the fallible blobs before assembling the vec.
         let (offsets_bytes, data_bytes) = encode_string_table(&self.strings)?;
+        let sorted_bytes = encode_sorted_strings(&self.strings)?;
         let kind_postings_bytes = encode_kind_postings(&self.kind_postings)?;
         let (fst_bytes, name_post_bytes) = encode_name_fst(&self.name_to_rows)?;
         let name_prefix_bytes = encode_name_prefix(&self.name_to_rows)?;
@@ -593,6 +594,7 @@ impl SegmentBuilder {
         blobs.extend([
             ("strings_offsets".to_owned(), offsets_bytes),
             ("strings_data".to_owned(), data_bytes),
+            ("strings_sorted".to_owned(), sorted_bytes),
             ("postings_fql_kind".to_owned(), kind_postings_bytes),
             ("name_fst".to_owned(), fst_bytes),
             ("name_postings".to_owned(), name_post_bytes),
@@ -818,6 +820,25 @@ fn encode_string_table(strings: &[String]) -> Result<(Vec<u8>, Vec<u8>)> {
     offsets.push(u32::try_from(data.len()).context("string table final offset overflow")?);
 
     Ok((cast_slice::<u32, u8>(&offsets).to_vec(), data))
+}
+
+/// Encode the string ids of `strings` ordered by the bytes they name: the
+/// `strings_sorted` blob, `[u32; string_count]`, a permutation of
+/// `0..string_count`.
+///
+/// This is what lets a reader answer "which id is this string?" with a binary
+/// search against `strings_data` through the mapping, instead of building an
+/// owned `HashMap<String, u32>` of the whole pool on the heap the first time a
+/// predicate asks a segment that question.
+///
+/// [`SegmentBuilder::intern`] holds each string once, so no two entries of the
+/// permutation compare equal and a search finds one id or none — the same two
+/// answers the map gave.
+fn encode_sorted_strings(strings: &[String]) -> Result<Vec<u8>> {
+    let count = u32::try_from(strings.len()).context("string count overflow")?;
+    let mut ids: Vec<u32> = (0..count).collect();
+    ids.sort_unstable_by(|&a, &b| strings[a as usize].cmp(&strings[b as usize]));
+    Ok(cast_slice::<u32, u8>(&ids).to_vec())
 }
 
 /// Encode `postings_fql_kind` bytes.

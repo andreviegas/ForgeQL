@@ -5,28 +5,38 @@
 //!
 //! # Architecture
 //!
-//! - [`SegmentBuilder`]: assembles and flushes one segment directory from a
+//! - [`SegmentBuilder`]: assembles and flushes one segment file from a
 //!   slice of `IndexRow`s that all belong to the same source file.
 //! - [`ShadowWriter`]: iterates over a fully-built [`SymbolTable`] and drives
 //!   one [`SegmentBuilder`] per source file.
 //!
 //! # On-disk layout
 //!
+//! One `.fqsf` file per segment, every blob behind a table of contents that
+//! names it (`write_segment_file`), under a directory named for `ENRICH_VER`:
+//!
 //! ```text
-//! <bare-repo>/forgeql/segments/<provider_id>/<content_id_hex>/
-//! ├── header.bin            # 80-byte preamble + column entries
-//! ├── col_name_id.bin       # [u32; row_count]
-//! ├── col_fql_kind_id.bin   # [u32; row_count]
-//! ├── col_line.bin          # [u32; row_count]
-//! ├── col_byte_start.bin    # [u32; row_count]
-//! ├── col_byte_end.bin      # [u32; row_count]
-//! ├── col_usages_count.bin  # [u32; row_count]
-//! ├── col_language_id.bin   # [u32; row_count]
-//! ├── strings_offsets.bin   # [u32; string_count + 1]
-//! ├── strings_data.bin      # UTF-8 bytes, concatenated
-//! ├── postings_fql_kind.bin # (kind_id: u32, len: u32, bytes)* per kind
-//! ├── name.fst              # fst::Map — name → packed (count | byte_offset<<32)
-//! └── name_postings.bin     # flat [u32] row IDs referenced by name.fst
+//! <bare-repo>/forgeql/segments/<provider_id>-v<ENRICH_VER>/<hex[0..2]>/<hex[2..]>-<path_key>.fqsf
+//!   header                # row_count, string_count, the column list
+//!   col_<field>           # [u32; row_count] — the fixed columns (name id,
+//!                         #   fql_kind id, line, ordinals, byte range,
+//!                         #   usages_count, language id) and one per
+//!                         #   enrichment field the file produced
+//!   strings_offsets       # [u32; string_count + 1]
+//!   strings_data          # UTF-8 bytes, concatenated
+//!   strings_sorted        # [u32; string_count] — the ids in the order of the
+//!                         #   bytes they name, so string → id is a binary
+//!                         #   search on the mapping and not a heap map
+//!   postings_fql_kind     # (kind_id: u32, len: u32, bytes)* per kind
+//!   postings_<field>      # the same, per posted enrichment field
+//!   zonemap_<field>       # min/max per numeric column
+//!   name_fst              # fst::Map — name → packed (count | byte_offset<<32)
+//!   name_postings         # flat [u32] row IDs referenced by name_fst
+//!   name_prefix           # prefix index over the same names
+//!   usages_fst            # a reference's text → its 1-based source lines,
+//!   usages_postings       #   omitted when the file produced no usage site
+//!   mentions_<role>_fst   # the same pair per occurrence role the file
+//!   mentions_<role>_postings  #   produced
 //! ```
 //!
 //! [`SymbolTable`]: crate::ast::index::SymbolTable
@@ -410,7 +420,16 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        last one DOES change a stored value, which is why a v69 segment
 ///        must not be reused: it would keep serving whichever order it
 ///        happened to record.
-pub const ENRICH_VER: u32 = 70;
+///   71 — segments gain a `strings_sorted` blob: the string pool's ids in the
+///        order of the bytes they name. A reader answers `string → id` by
+///        binary searching it against `strings_data` on the mapping, where it
+///        used to build an owned `HashMap<String, u32>` of the whole pool the
+///        first time a predicate touched the segment and keep it for the life
+///        of the open. A v70 segment carries no such blob and is REFUSED at
+///        open rather than falling back to the map, which is why the bump has
+///        to land with the writer: it is what puts the new segments under a
+///        directory of their own, so nothing ever opens a v70 one.
+pub const ENRICH_VER: u32 = 71;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";
