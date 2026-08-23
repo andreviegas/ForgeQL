@@ -6,6 +6,41 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.182.0] — 2026-08-23 — a missing value fails a negation, and a shadowed name is answered from the columns
+
+### Fixed
+
+- **`NOT MATCHES` kept every row that had no value for the field, where every
+  other negation drops them.** `!=` and `NOT LIKE` fail on an absent value; a
+  regular expression alone passed it, so two spellings of one question answered
+  differently by every row in the index lacking the field. On a 3M-symbol corpus
+  `WHERE num_format NOT MATCHES 'hex'` answered 2,723,965 rows against
+  `NOT LIKE '%hex%'`'s 311,362 — the difference being exactly the rows carrying
+  no `num_format`. Both now answer 311,362. **This moves a published answer**: a
+  `NOT MATCHES` that was returning rows with nothing to match against returns
+  fewer rows, and the same query against the same corpus will not answer as it
+  did before.
+
+- `SHOW COMMITS` reported the size of the page a `LIMIT` left it holding as its
+  total. The count is now taken before the clauses cut the page, as everywhere
+  else.
+
+### Performance
+
+- A `WHERE` on `name`, `path` or another struct-backed name is answered from a
+  segment's columns even where the segment also carries an enrichment column of
+  that name. Those two are read through different accessors — a string
+  comparison reads the struct's own column, a numeric one reaches the enrichment
+  column — and the reader that decides the route was previously asked a question
+  missing that distinction, so it declined. Declining took three quarters of
+  every scan off the cheap route: 308 of 411 segments of this repository carry a
+  column called `name`, because every tree-sitter grammar field of every emitted
+  node is written as one and `name` is a grammar field on essentially every
+  definition. Measured as route taken, not as time: `WHERE name` deferred on 292
+  of 293 segments here and 7,267 of 9,278 on a 3M-symbol corpus, both now zero,
+  with candidate counts unchanged.
+
+
 ### Notes
 
 - Two defects found while landing the page cut are pinned rather than fixed,
