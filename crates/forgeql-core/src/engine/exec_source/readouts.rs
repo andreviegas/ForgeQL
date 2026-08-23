@@ -123,9 +123,12 @@ impl ForgeQLEngine {
             })
             .collect();
 
-        crate::filter::apply_clauses(&mut rows, clauses);
+        // Count what the clauses matched, not what the page kept. `apply_clauses`
+        // has applied the LIMIT by the time the rows come back, so a `total` taken
+        // from the survivors is the page size — it would tell an agent that its
+        // five rows were every commit the session made.
+        let total = crate::filter::apply_clauses_counted(&mut rows, clauses);
         let mut results: Vec<SymbolMatch> = rows.into_iter().map(|row| row.0).collect();
-        let total = results.len();
         if clauses.limit.is_none() {
             results.truncate(find_limit);
         }

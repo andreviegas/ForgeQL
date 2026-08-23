@@ -241,39 +241,37 @@ fn nested_checkpoints_rollback() {
     );
 }
 
-/// `SHOW COMMITS` reports the page size as its total under an explicit `LIMIT`.
+/// `SHOW COMMITS` reports every commit the session made, not the size of the
+/// page a `LIMIT` or an `OFFSET` left it holding.
 ///
-/// **Known defect, ignored until fixed.** `readouts.rs` applies the clauses —
-/// which truncates to the `LIMIT` — and only then takes `total` from what
-/// survived, so a page of five reports five however many commits the session
-/// made. That is the "an early exit that assumes LIMIT bounds the answer"
-/// family the `total_counts_the_answer` golden suite exists to kill; this verb
-/// was never re-checked when the rest of it was.
-///
-/// It cannot be pinned as a golden case: `SHOW COMMITS` counts commits the
-/// session itself made, a golden session makes none, and one that committed
-/// would meet the commit gate. So it is pinned here, where a session can
-/// commit, and left `#[ignore]`d rather than asserting the wrong number.
-///
-/// The fix is one line, and `usage_page_from_sites` already shows it: take the
-/// count from `apply_clauses_counted`, which returns what matched before the
-/// page was cut, instead of from `results.len()` after.
+/// The count is taken before the clauses cut the page. Taking it after is the
+/// "an early exit that assumes LIMIT bounds the answer" shape the
+/// `total_counts_the_answer` golden suite exists to kill, and this is the one
+/// verb that suite cannot reach: `SHOW COMMITS` counts commits the session
+/// itself made, a golden session makes none, and one that committed would meet
+/// the commit gate. So the pin lives here, where a session can commit.
 #[test]
-#[ignore = "known defect: SHOW COMMITS reports the page size as its total"]
 fn show_commits_reports_every_commit_not_the_page_size() {
     let mut t = engine_with_git_session();
 
     // `register_local_session` names the session branch `test-branch`, which the
     // fixture's repo does not hold — and `SHOW COMMITS` counts commits since
-    // exactly that ref. Point it at the initial commit so the six below are what
-    // the verb has to count.
+    // exactly that ref. Point it at the initial commit so the ones below are
+    // what the verb has to count.
     {
         let repo = git2::Repository::open(t.workspace()).expect("open fixture repo");
         let head = repo.head().expect("HEAD").peel_to_commit().expect("commit");
         repo.branch("test-branch", &head, true).expect("branch");
     }
 
-    for i in 1..=6 {
+    // One past the default page, so the truncate that page comes from is
+    // reached at all. A handful of commits never crosses it, and a case that
+    // stays inside it stays green with the default paging deleted outright.
+    const MADE: usize = 21;
+    const DEFAULT_PAGE: usize = 20;
+    const SKIP: usize = 19;
+
+    for i in 1..=MADE {
         fs::write(
             t.workspace().join(format!("note_{i}.txt")),
             format!("{i}\n"),
@@ -285,7 +283,15 @@ fn show_commits_reports_every_commit_not_the_page_size() {
     let ForgeQLResult::Query(all) = t.exec("SHOW COMMITS") else {
         panic!("SHOW COMMITS did not answer with a query result");
     };
-    assert_eq!(all.total, 6, "the session made six commits");
+    assert_eq!(
+        all.results.len(),
+        DEFAULT_PAGE,
+        "with no LIMIT written the page is the session's find_limit"
+    );
+    assert_eq!(
+        all.total, MADE,
+        "and the default page does not clip the count"
+    );
 
     let ForgeQLResult::Query(page) = t.exec("SHOW COMMITS LIMIT 5") else {
         panic!("SHOW COMMITS LIMIT 5 did not answer with a query result");
@@ -296,8 +302,23 @@ fn show_commits_reports_every_commit_not_the_page_size() {
         "the page holds what the LIMIT asked for"
     );
     assert_eq!(
-        page.total, 6,
+        page.total, MADE,
         "and the total is still every commit — a total equal to the page size \
-         tells an agent it has seen everything when it has seen five of six"
+         tells an agent it has seen everything when it has seen five of many"
+    );
+
+    // An OFFSET cuts the same answer from the other end, and the count is taken
+    // before it as well: rows a skip removed are still part of the answer.
+    let ForgeQLResult::Query(skipped) = t.exec(&format!("SHOW COMMITS OFFSET {SKIP}")) else {
+        panic!("SHOW COMMITS OFFSET did not answer with a query result");
+    };
+    assert_eq!(
+        skipped.results.len(),
+        MADE - SKIP,
+        "the skip leaves the tail of the answer"
+    );
+    assert_eq!(
+        skipped.total, MADE,
+        "and an OFFSET is counted before the cut as much as a LIMIT is"
     );
 }
