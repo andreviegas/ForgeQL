@@ -1,20 +1,7 @@
 {
  "suite": "name_postings_are_canonical",
- "description": "The overlay's name postings now hold each segment's canonical rows instead of its raw ones -- the same intersection step5_build_kind_postings has always applied to the kind postings. Five readers take those postings, and this suite pins what each of them answers, because the change is only safe if the rows it removes were rows no answer carried: the pattern tier and the name-equality tier propose candidates a residual WHERE then verifies, the scan collapses duplicates before delivering, the ascending name streams deliver posting entries as rows, and symbol resolution picks among them. The counted GROUP BY that this makes possible is pinned in open_defects beside the scan it has to agree with.",
+ "description": "The overlay's name postings now hold each segment's canonical rows instead of its raw ones -- the same intersection step5_build_kind_postings has always applied to the kind postings. Seven readers take those postings, and this suite pins what they answer, because the change is only safe if the rows it removes were rows no answer carried. Every case here is aimed at a name that HAS an intra-segment duplicate group, or at a page a duplicate could shorten; a name with one row corpus-wide would answer identically either way and pin nothing about the change. The values were captured on the pre-change binary (0.182.0) before the postings moved, so a case that still passes is a before-and-after comparison rather than a restatement of the new behaviour. The counted GROUP BY this makes possible is pinned in open_defects beside the scan it has to agree with.",
  "cases": [
-  {
-   "name": "a_name_equality_answers_the_rows_it_answered",
-   "description": "prefilter_global proposes lookup_name_bitmap's rows for a name equality and the row filter decides them. Dropping the intra-segment duplicates from that bitmap cannot move the answer, because the duplicates agree with a survivor on name, kind and line, which is the key the delivered rows are collapsed on. Pinned by the row, not only the count, so a bitmap that lost the wrong row fails here.",
-   "use": "forgeql-pub.frozen",
-   "fql": "FIND symbols WHERE name = 'apply_clauses'",
-   "assert": {
-    "row_count": 1,
-    "total": 1,
-    "rows": [
-     { "name": "apply_clauses", "path": "crates/forgeql-core/src/filter.rs", "line": 303 }
-    ]
-   }
-  },
   {
    "name": "the_pattern_tier_answers_what_it_answered",
    "description": "prefilter_name_values unions the postings of every FST key the pattern accepts. The union is smaller now and still a superset of the answer, which is all a proposing tier has to be -- 1,201 rows match this pattern either way.",
@@ -27,9 +14,19 @@
   },
   {
    "name": "the_duplicates_the_postings_dropped_were_never_in_an_answer",
-   "description": "The file whose raw name postings carry 57 rows named '0' and whose canonical set carries 48. The scan reached 48 before the intersection and reaches 48 after it: the nine rows that left the postings are rows the dedupe pass had already been collapsing away. That is the whole safety argument for this change, on the corpus where the gap is known.",
+   "description": "The file whose raw name postings carry 57 rows named '0' and whose canonical set carries 48. The scan reached 48 before the intersection and reaches 48 after it: the nine rows that left the postings are rows the dedupe pass had already been collapsing away. That is the safety argument for this change, on the corpus where the gap is known.",
    "use": "forgeql-pub.frozen",
    "fql": "FIND symbols WHERE name = '0' IN 'crates/forgeql-core/src/transforms/diff.rs' LIMIT 60",
+   "assert": {
+    "row_count": 48,
+    "total": 48
+   }
+  },
+  {
+   "name": "a_residual_predicate_decides_the_same_rows",
+   "description": "prefilter_global proposes lookup_name_bitmap's rows for the name equality, and a predicate no tier serves is then evaluated per row against what it proposed. A regex is always such a predicate -- it is held back to the filter over built rows -- so this pair is the shape where a smaller candidate set could show: a residual that matched only a duplicate would have answered one row before and nothing now. Same 48 either way. The boundary is worth stating rather than leaving implied: duplicates agree on name, kind and line, so the only fields that could tell them apart are the byte range, the ordinal and the handle, and no result row surfaces any of them (that is the open dedupe_row_identity case), which means a residual predicate that separates a duplicate from its survivor cannot be written from outside the engine today.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE name = '0' WHERE name MATCHES '^0$' IN 'crates/forgeql-core/src/transforms/diff.rs' LIMIT 60",
    "assert": {
     "row_count": 48,
     "total": 48
@@ -47,11 +44,15 @@
   },
   {
    "name": "resolution_reaches_the_node_it_reached",
-   "description": "Symbol resolution takes lookup_name_bitmap's rows and picks among them. step45_dedup_segments keeps the LOWEST row id of each (name, fql_kind, line) group, so the first candidate in any segment is the one that survives and resolution lands where it landed. What it can no longer reach is a strictly later row agreeing with that survivor on all three -- which is the anomaly, not the behaviour: those rows are one answer row, and a reader that resolved to the second of them was choosing by an accident of ordering.",
+   "description": "Resolution is LAST-wins: pick_best_resolved takes the last preferred candidate, then the last with a non-empty kind, then the last overall, over rows collect_resolve_candidates walked in ascending order. step45_dedup_segments keeps the LOWEST row id of a (name, fql_kind, line) group, so intersecting the postings changes which row wins wherever a group exists -- the highest raw row before, the highest canonical one now. This name is the one known to have such groups in this file (57 raw rows against 48 canonical), which is why it is the name this case resolves. byte_start is what the pin rests on: the two rows of a group share the line, so the signature text alone would read the same whichever won, and the byte range is where they differ. Captured at 40342 on the pre-change binary. A resolution that moved would show here as a different byte_start on the same line, and that would be changed-and-correct rather than a regression -- resolving to a row the index does not consider canonical is the anomaly.",
    "use": "forgeql-pub.frozen",
-   "fql": "SHOW signature OF 'apply_clauses'",
+   "fql": "SHOW signature OF '0' IN 'crates/forgeql-core/src/transforms/diff.rs'",
    "assert": {
-    "pointer": { "/content/signature": "pub fn apply_clauses<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Clauses)" }
+    "pointer": {
+     "/content/signature": "assert_eq!(ranges[0].new_end, 2);",
+     "/content/line": 1164,
+     "/content/byte_start": 40342
+    }
    }
   }
  ]

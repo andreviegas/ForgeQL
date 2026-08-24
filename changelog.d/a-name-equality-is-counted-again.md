@@ -16,12 +16,17 @@
   scan at every literal length — the structure serving them over-generates by
   construction, which no amount of literal is going to settle.
 
-  Nothing else moves. The tiers that only propose candidates propose fewer of
-  them and the row filter decides the same rows; the scan already collapsed
-  what the postings no longer carry; and symbol resolution keeps landing on the
-  same node, since the row that survives a collapse is the first of its group
-  and so the first candidate a resolver sees. What it can no longer land on is
-  a later row that agrees with that one on name, kind and line.
+  The tiers that only propose candidates propose fewer of them and the row
+  filter decides the same rows, and the scan already collapsed what the postings
+  no longer carry. Symbol resolution is the one place where a different node
+  could come back, and the direction is worth stating plainly: it picks the
+  LAST candidate, over rows walked in ascending order, so where a file held such
+  a pair the higher row used to win and the lower one wins now. The two agree on
+  name, kind and line and can differ in byte range, so the span a
+  `SHOW body OF '<name>'` returns could move. Forty function names swept through
+  `SHOW signature` before and after came back byte-identical, which is what the
+  names people resolve by look like — none of them duplicated. It is evidence
+  about those names rather than a property of the ordering.
 
   This changes the workspace index's stored content, so its schema version
   moves and every commit's index is rebuilt once.

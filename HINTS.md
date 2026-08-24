@@ -73,14 +73,27 @@ Short, durable facts discovered while working in this codebase.
   (`step6_build_name_fst` takes `seg_dedup` and probes `canonical.contains(row)`
   per posting entry — a sorted slice, so a probe rather than step 5's bitmap
   AND). That is what re-admitted `name = '<value>'` to `fast_group_by_file`
-  (`counts_exactly` is the one predicate list both gates read). Five readers
+  (`counts_exactly` is the one predicate list both gates read). **Seven readers**
   take those postings, all in `overlay.rs` via `decode_postings`/`_slice`:
   `prefilter_name_values`, `lookup_name_bitmap` (→ `prefilter_global` and
-  `query/resolve.rs`), and the five `stream_names_*`. Resolution lands where it
-  landed because `step45_dedup_segments` keeps the LOWEST row id of each group,
-  so the first candidate in a segment is the survivor. Dirty segments are NOT
-  intersected (no dedup pass runs for them) — harmless, because every counted
-  grouping already requires an empty dirty overlay.
+  `query/resolve.rs`), and the five `stream_names_*`.
+- **Resolution is LAST-wins, not first** — `pick_best_resolved`
+  (`query/resolve.rs`) says so itself ("mirroring the legacy last-write-wins
+  strategy: last preferred → last definition → last overall") and uses
+  `rposition`/`.last()`, while `collect_resolve_candidates` walks each segment's
+  bitmap ascending. `step45_dedup_segments` keeps the LOWEST row id of a
+  `(name, fql_kind, line)` group, so canonical-intersecting the postings means a
+  duplicate group's highest row used to win and its lowest wins now. Those two
+  rows share name, kind and line but can differ in byte range, ordinal and
+  handle, **so `SHOW body`/`signature`/`NODE OF '<name>'` can return a different
+  span.** What keeps it from moving in practice is that the names anyone
+  resolves by are not duplicated: Andre swept 40 function names through
+  `SHOW signature` on the pre-change and post-change binaries and every one was
+  byte-identical. That is evidence about the sampled names, NOT a guarantee from
+  the ordering — do not write it as one, which is what the first version of this
+  note did.
+- Dirty segments are NOT intersected (no dedup pass runs for them) — harmless,
+  because every counted grouping already requires an empty dirty overlay.
 - The name streams (`try_order_by_name_fast_paths`, query/find.rs) serve
   `ORDER BY name [DESC] [WHERE fql_kind =] LIMIT` and the bare `LIMIT`; they decline
   on a non-empty dirty overlay, duplicated source paths, and `need > find_max_rows()`.

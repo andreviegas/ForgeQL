@@ -2072,16 +2072,17 @@ pub(super) fn glob_to_path_prefix(glob: &str) -> Option<&str> {
 /// Condition: `GROUP BY` on the file/path field, an empty dirty overlay (dirty
 /// segments are not integrated into the overlay metadata yet), a `HAVING` and
 /// `ORDER BY` naming only `count` or the grouped field, and either no `WHERE` at
-/// all or one built entirely from `fql_kind = '<value>'`. That is the whole
-/// admitted set: [`counts_exactly`] is the authority on the predicate and says
-/// why every other tier is out, and [`only_the_group_row_is_read`] on the two
-/// aggregate clauses.
+/// all or one built entirely from `fql_kind = '<value>'` and `name = '<value>'`.
+/// That is the whole admitted set: [`counts_exactly`] is the authority on the
+/// predicate and says why every other tier is out, and
+/// [`only_the_group_row_is_read`] on the two aggregate clauses.
 ///
 /// With no `WHERE` a group's count is its segment's own `dedup_row_count`; with
-/// one it is that segment's share of a canonical-intersected kind bitmap.
-/// Neither counts a row the answer does not hold. Everything else — a `name`
-/// predicate, an enrichment predicate, a `HAVING` or `ORDER BY` on a field a
-/// group row does not carry — is answered by the scan, which reads each row.
+/// one it is that segment's share of a canonical-intersected bitmap — the kind
+/// postings or the name postings, both intersected at overlay build. Neither
+/// counts a row the answer does not hold. Everything else — a name PATTERN, an
+/// enrichment predicate, a `HAVING` or `ORDER BY` on a field a group row does
+/// not carry — is answered by the scan, which reads each row.
 pub(super) fn group_by_file_fast_path_eligible(clauses: &Clauses, dirty_empty: bool) -> bool {
     if !dirty_empty {
         return false;
