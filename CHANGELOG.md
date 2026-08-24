@@ -6,6 +6,48 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.183.0] — 2026-08-24 — a value lookup reads the mapping, and the name postings hold only answer rows
+
+**Re-indexes once on upgrade:** the enrichment version moves to 71 and the
+overlay schema to 16. Every corpus rebuilds its index on the first `USE` after
+this release.
+
+### Performance
+
+- A segment answers a value lookup from a sorted index in its mapping instead of
+  building a hash map of its whole string pool. The map was built lazily by the
+  first `WHERE <enrichment field> = …` to touch a segment and then held for as
+  long as the index was open — **per session**, so several agents on one corpus
+  each paid for their own copy. On a 3.06M-row corpus one such predicate touched
+  24,056 segments holding 5.7 million strings over 221 MB of string bytes; the
+  index is now `[u32; string_count]` written beside the pool and searched in
+  place, at 8.2 comparisons per lookup. Measured as memory, not as time: the one
+  benchmark class with this shape reads ~330 ms/query on both sides, inside the
+  harness's run-to-run spread.
+
+- `WHERE name = '<value>'` is counted from the index again beside `GROUP BY
+  file`, alongside `WHERE fql_kind = '<value>'`. It was withdrawn in 0.177.0
+  because the overlay's name postings carried rows the answer collapses; those
+  postings now hold only the rows an answer can contain, so the count is the
+  scan's. Name *patterns* are still scanned — the trigram tier proposes and does
+  not verify.
+
+### Notes
+
+- The golden harness refuses to judge a run whose sessions answered from the
+  legacy in-memory index, naming the corpora that need re-indexing. A stale or
+  foreign segment generation used to surface as dozens of unrelated row
+  mismatches; it is now one message saying what is actually wrong.
+
+- Resolution picks the **last** candidate for a name, not the first. Dropping
+  non-canonical duplicates from the name postings therefore changes which row
+  wins where a name has two rows agreeing on kind and line. No resolution moved
+  on the corpora tested, including on a name that has such a duplicate — the two
+  rows there share a byte range, so the answer is identical — and the pins now
+  rest on `byte_start` rather than on the source text, which reads the same
+  either way.
+
+
 ## [0.182.0] — 2026-08-23 — a missing value fails a negation, and a shadowed name is answered from the columns
 
 ### Fixed
