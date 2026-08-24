@@ -336,5 +336,176 @@
     ]
    }
   }
+  ,
+  {
+   "name": "control_zephyr_holds_negative_one_literals",
+   "description": "Anchors the case below at corpus scale: 3,859 -1 literals exist on zephyr-andre.frozen. Verified live 2026-08-24 on 0.183.0.",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'number' WHERE name = '-1' LIMIT 1",
+   "assert": {
+    "row_count": 1,
+    "total": 3859
+   }
+  },
+  {
+   "name": "a_negative_one_is_never_magic_on_a_c_corpus",
+   "description": "The fixture cases above show the mechanism narrowly; this shows the blast radius broadly: the documented exemption list says -1 is never magic, yet 3,446 of the 3,859 -1 literals on this corpus are stamped magic.",
+   "use": "zephyr-andre.frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "3,446 -1 literals stamped is_magic = true against the documented exemption; same mechanism as the fixture case (the exemption likely compares without absorbing the unary minus), measured at corpus scale so the fixing commit can see the smell-audit counts it moves",
+   "fql": "FIND symbols WHERE fql_kind = 'number' WHERE name = '-1' WHERE is_magic = 'true' LIMIT 1",
+   "assert": {
+    "total": 0
+   }
+  },
+  {
+   "name": "control_zephyr_holds_zero_literals",
+   "description": "Anchors the case below: 146,613 zero literals exist on this corpus.",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'number' WHERE name = '0' LIMIT 1",
+   "assert": {
+    "row_count": 1,
+    "total": 146613
+   }
+  },
+  {
+   "name": "a_zero_literal_is_never_magic_on_a_c_corpus",
+   "description": "Zero is the first value on the documented exemption list, and 122,256 of this corpus's 146,613 zero literals are stamped magic — five sixths of every zero an audit query returns is a contradiction of the doc.",
+   "use": "zephyr-andre.frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "zeros in condition and return position are stamped magic while initializer zeros are exempt; the doc promises a value-based exemption; 122,256 rows on this corpus alone",
+   "fql": "FIND symbols WHERE fql_kind = 'number' WHERE name = '0' WHERE is_magic = 'true' LIMIT 1",
+   "assert": {
+    "total": 0
+   }
+  },
+  {
+   "name": "control_pytorch_holds_negative_one_literals",
+   "description": "Anchors the case below on the Python/C++ corpus: 2,816 -1 literals.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'number' WHERE name = '-1' LIMIT 1",
+   "assert": {
+    "row_count": 1,
+    "total": 2816
+   }
+  },
+  {
+   "name": "a_negative_one_is_never_magic_on_a_python_corpus",
+   "description": "The same contradiction on a second language family: 2,625 of 2,816 -1 literals stamped magic, so the fix belongs in the shared enricher, not a per-grammar patch.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "2,625 -1 literals stamped is_magic = true on pytorch; same exemption list, same mechanism, second grammar",
+   "fql": "FIND symbols WHERE fql_kind = 'number' WHERE name = '-1' WHERE is_magic = 'true' LIMIT 1",
+   "assert": {
+    "total": 0
+   }
+  },
+  {
+   "name": "control_zephyr_has_todo_true_answers",
+   "description": "Anchors the false-value cases below: has_todo posts and answers its true value on this corpus — 949 functions.",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE has_todo = 'true' LIMIT 1",
+   "assert": {
+    "row_count": 1,
+    "total": 949
+   }
+  },
+  {
+   "name": "a_boolean_false_fills_a_page_on_a_big_corpus",
+   "description": "96,394 functions on this corpus and 949 carry a TODO, so has_todo = 'false' should fill any default page many thousands of times over; it answers zero rows, indistinguishable from a corpus claim. The page-full assert is deliberately count-agnostic so it survives whichever exact-count semantics the fix settles.",
+   "use": "zephyr-andre.frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "has_todo = 'false' answers 0 rows on a corpus with ~95k functions carrying no TODO; only the true value is posted; fix is answering the complement for stamp-only booleans or refusing the predicate with a hint — a silent empty page is the one wrong answer",
+   "fql": "FIND symbols WHERE has_todo = 'false'",
+   "assert": {
+    "row_count": 20
+   }
+  },
+  {
+   "name": "control_zephyr_has_shadow_true_answers",
+   "description": "Anchors the second-field case below: has_shadow answers its true value — 524 functions.",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE has_shadow = 'true' LIMIT 1",
+   "assert": {
+    "row_count": 1,
+    "total": 524
+   }
+  },
+  {
+   "name": "a_second_boolean_false_fills_a_page",
+   "description": "Breadth pin: the case above names four fields (has_todo, has_escape, has_shadow, is_recursive) and a fix that special-cased one would leave the others silently empty. This case holds a second field to the same contract.",
+   "use": "zephyr-andre.frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "has_shadow = 'false' answers 0 rows for the same reason has_todo does; the fix must cover every stamp-only boolean, not one",
+   "fql": "FIND symbols WHERE has_shadow = 'false'",
+   "assert": {
+    "row_count": 20
+   }
+  },
+  {
+   "name": "control_pytorch_has_todo_true_answers",
+   "description": "Anchors the case below on the second corpus: 2,770 functions with TODOs.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "FIND symbols WHERE has_todo = 'true' LIMIT 1",
+   "assert": {
+    "row_count": 1,
+    "total": 2770
+   }
+  },
+  {
+   "name": "a_boolean_false_fills_a_page_on_a_python_corpus",
+   "description": "Same gap, second language family.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "has_todo = 'false' answers 0 rows on pytorch too; the gap is in the shared posting layer, not a grammar",
+   "fql": "FIND symbols WHERE has_todo = 'false'",
+   "assert": {
+    "row_count": 20
+   }
+  },
+  {
+   "name": "control_a_known_kind_answers_on_find",
+   "description": "Anchors the case below on the FIND verb: a kind inside the closed universe answers rows on zephyr.",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'struct' LIMIT 1",
+   "assert": {
+    "row_count": 1
+   }
+  },
+  {
+   "name": "an_unknown_kind_is_refused_on_find_too",
+   "description": "The outline case above pins one verb; the defect is on every filtering verb. FIND at least prints a zero total, but zero is still a claim about the corpus where an error is the fact about the query.",
+   "use": "zephyr-andre.frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "FIND symbols WHERE fql_kind = 'impl' answers a silent zero on every corpus; the closed-universe validation must sit where every verb's WHERE passes, not in one verb",
+   "fql": "FIND symbols WHERE fql_kind = 'impl' LIMIT 1",
+   "assert": {
+    "error": true,
+    "error_contains": "fql_kind"
+   }
+  },
+  {
+   "name": "control_zephyr_locals_share_one_name_count",
+   "description": "Anchors the case below at corpus scale and documents the shape: 11,964 local bindings named ret, every row carrying the identical corpus-wide count of the NAME. Verified live 2026-08-24 on 0.183.0.",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE name = 'ret' WHERE fql_kind = 'variable' WHERE scope = 'local' LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "all_same": "usages"
+   }
+  },
+  {
+   "name": "a_local_usages_is_not_a_name_count_on_zephyr",
+   "description": "The fixture case above pins ten session_id bindings; this pins the same defect where it hurts most — ret, the most reused local name in C, where the number is not merely wrong but absurd, and the blast-radius recipe in every agent doc would read it as real references.",
+   "use": "zephyr-andre.frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "every local ret reports the same corpus-wide name count; suppress the field on local-scope variables or compute a per-binding count — re-aim this assert if the per-binding count is built",
+   "fql": "FIND symbols WHERE name = 'ret' WHERE fql_kind = 'variable' WHERE scope = 'local' LIMIT 3",
+   "assert": {
+    "pointer": {
+     "/results/0/usages": null
+    }
+   }
+  }
  ]
 }

@@ -1,0 +1,110 @@
+{
+ "suite": "having_order_by_name",
+ "description": "Regression pins for a fixed, never-attributed defect: found 2026-08-10, FIND symbols + HAVING + ORDER BY name silently dropped qualifying rows (ASC returned 3 of 7, DESC 1 of 7 on forgeql-pub.frozen, at limits both above and below the top-K threshold) while path/lines orderings answered correctly. Verified fixed on 0.183.0 across three corpora without ever being attributed to a change, which is exactly the state that regresses silently — these cases pin the shape narrow and broad, both directions, on all three golden corpora. If one of these goes red, the name-ordered route is dropping HAVING survivors again.",
+ "cases": [
+  {
+   "name": "having_with_name_asc_returns_every_survivor",
+   "description": "The original repro, broad: 7 functions have lines > 150 on this corpus; ORDER BY name ASC used to return 3. LIMIT 1001 is above TOPK_THRESHOLD, so the running trim is not armed — the loss was in the name-ordered path itself.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' HAVING lines > 150 ORDER BY name ASC LIMIT 1001",
+   "assert": {
+    "row_count": 7,
+    "pointer": {
+     "/results/0/name": "collect_nodes"
+    }
+   }
+  },
+  {
+   "name": "having_with_name_desc_returns_every_survivor",
+   "description": "The worse direction: DESC used to return 1 of 7. The first row pins that the ordering is really descending, not just complete.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' HAVING lines > 150 ORDER BY name DESC LIMIT 1001",
+   "assert": {
+    "row_count": 7,
+    "pointer": {
+     "/results/0/name": "sms_combinatorial"
+    }
+   }
+  },
+  {
+   "name": "having_with_name_asc_keeps_an_honest_total_on_a_narrow_page",
+   "description": "Narrow: a page smaller than the answer still reports the whole answer in total. The live-repo shape of the same defect returned 0 rows at small limits.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' HAVING lines > 150 ORDER BY name ASC LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "total": 7,
+    "pointer": {
+     "/results/0/name": "collect_nodes"
+    }
+   }
+  },
+  {
+   "name": "control_the_corpus_holds_seven_having_survivors",
+   "description": "Anchors the three cases above through an ordering that never dropped rows: if this control moves, the corpus drifted, not the fix.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' HAVING lines > 150 ORDER BY path ASC LIMIT 1001",
+   "assert": {
+    "row_count": 7
+   }
+  },
+  {
+   "name": "having_with_name_asc_is_complete_on_a_c_corpus",
+   "description": "Same shape at 3.06M rows: two functions exceed 900 lines on zephyr-andre.frozen.",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' HAVING lines > 900 ORDER BY name ASC LIMIT 1001",
+   "assert": {
+    "row_count": 2,
+    "pointer": {
+     "/results/0/name": "parser_execute"
+    }
+   }
+  },
+  {
+   "name": "having_with_name_desc_is_complete_on_a_c_corpus",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' HAVING lines > 900 ORDER BY name DESC LIMIT 1001",
+   "assert": {
+    "row_count": 2,
+    "pointer": {
+     "/results/0/name": "test_advx_main"
+    }
+   }
+  },
+  {
+   "name": "having_with_name_asc_narrow_page_keeps_the_total_on_a_c_corpus",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' HAVING lines > 900 ORDER BY name ASC LIMIT 1",
+   "assert": {
+    "row_count": 1,
+    "total": 2,
+    "pointer": {
+     "/results/0/name": "parser_execute"
+    }
+   }
+  },
+  {
+   "name": "having_with_name_asc_is_complete_on_a_python_corpus",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' HAVING lines > 14000 ORDER BY name ASC LIMIT 1001",
+   "assert": {
+    "row_count": 2,
+    "pointer": {
+     "/results/0/name": "CommonTemplate"
+    }
+   }
+  },
+  {
+   "name": "having_with_name_desc_narrow_page_keeps_the_total_on_a_python_corpus",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' HAVING lines > 14000 ORDER BY name DESC LIMIT 1",
+   "assert": {
+    "row_count": 1,
+    "total": 2,
+    "pointer": {
+     "/results/0/name": "TestExport"
+    }
+   }
+  }
+ ]
+}

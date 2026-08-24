@@ -1,0 +1,65 @@
+{
+ "suite": "regex_predicate_contract",
+ "description": "Regression pins for the regex predicate contract, settled in two parts — the invalid-pattern refusal in 0.168.0, the absent-value negation in 0.182.0 — and verified live 2026-08-24. Two halves: an invalid regex is refused as a fact about the query (it used to short-circuit before the field was read, so NOT MATCHES '[' passed every row while MATCHES '[' passed none); and a NOT MATCHES over an absent value drops the row exactly as every other negation does (before the fix the two spellings of one question differed by every row lacking the field: 2,723,965 vs 311,362 on zephyr). The paired-count cases pin the agreement by asserting the same number twice — if either pair splits, one reader moved without the other.",
+ "cases": [
+  {
+   "name": "an_invalid_regex_is_refused_on_matches",
+   "description": "An unparseable pattern can never be a property of the corpus, so it errors instead of silently matching nothing.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE num_format MATCHES '[' LIMIT 1",
+   "assert": {
+    "error": true,
+    "error_contains": "invalid regex"
+   }
+  },
+  {
+   "name": "an_invalid_regex_is_refused_on_not_matches",
+   "description": "The negation refuses identically — this was the dangerous side, which used to pass every row in the index.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE num_format NOT MATCHES '[' LIMIT 1",
+   "assert": {
+    "error": true,
+    "error_contains": "invalid regex"
+   }
+  },
+  {
+   "name": "not_matches_agrees_with_not_like_on_absent_values",
+   "description": "First half of the pair: 311,362 number rows on this corpus carry a num_format that does not contain 'hex'; rows with NO num_format are dropped by the negation, not kept.",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE num_format NOT MATCHES 'hex' LIMIT 1",
+   "assert": {
+    "row_count": 1,
+    "total": 311362
+   }
+  },
+  {
+   "name": "control_not_like_holds_the_same_count",
+   "description": "Second half: the same question spelled with NOT LIKE. Before 0.182.0 the NOT MATCHES spelling answered 2,723,965 — this pair differing again is the regression.",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE num_format NOT LIKE '%hex%' LIMIT 1",
+   "assert": {
+    "row_count": 1,
+    "total": 311362
+   }
+  },
+  {
+   "name": "matches_agrees_with_like_on_the_positive_spelling",
+   "description": "The positive pair, same contract: 222,815 hex-format number rows either way.",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE num_format MATCHES 'hex' LIMIT 1",
+   "assert": {
+    "row_count": 1,
+    "total": 222815
+   }
+  },
+  {
+   "name": "control_like_holds_the_same_positive_count",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE num_format LIKE '%hex%' LIMIT 1",
+   "assert": {
+    "row_count": 1,
+    "total": 222815
+   }
+  }
+ ]
+}
