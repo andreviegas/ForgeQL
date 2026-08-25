@@ -6,6 +6,15 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.189.0] — 2026-08-25 — every function population is held to the enrichment rule
+
+### Changed
+
+- The parity suite now covers every language that produces a function row on
+  a golden corpus — twelve populations across C, C++, Rust, Python, Make and
+  CMake — rather than the four the defect had been reasoned about. The other
+  seven had been measured once and guarded never.
+
 ## [0.188.0] — 2026-08-25 — a decorated Python definition stops hiding the one it wraps
 
 **Re-indexes once on upgrade:** the enrichment version moves to 72, so every
