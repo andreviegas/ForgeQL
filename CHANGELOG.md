@@ -6,6 +6,45 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.185.0] — 2026-08-25 — the magic-number rule is documented as the engine applies it
+
+### Fixed
+
+- Three documents described `is_magic` as exempting a set of values —
+  `0, 1, -1, 2`, powers of two, bitmasks. That list was deliberately removed
+  in 0.50.2, because a value in a comparison or a return is exactly the
+  magic number the field exists to find, and nothing has read it since. The
+  real rule is structural: a literal is magic unless it is a zero array
+  subscript or, in C and C++, is the immediate child of a declaration
+  initializer or enumerator — so `int x = 3;` is exempt and `int x = 3 * 2;`
+  is not. No other language configures a named-constant exemption, so on a
+  Rust or Python corpus every literal outside a zero subscript is magic,
+  including one defining a constant. A `#define` body indexes no number rows
+  at all, so its entry in the old list named something no query could ever
+  observe.
+
+### Changed
+
+- The nine golden pins asserting that `-1` and `0` are never magic are
+  withdrawn. They read the documentation above as the contract and the
+  engine as the defect; it was the other way round, and a fix promoted
+  against them would have restored the exemption 0.50.2 removed. The value
+  classes they covered are pinned across four languages already; the return
+  position they also covered was not, and now is — five `return -1;`
+  literals on the C++ fixture, so a narrow re-exemption cannot pass the gate.
+
+- A unit test named for the magic-number boundary asserted properties of a
+  Rust macro and never called the enricher. It could not fail for the reason
+  it existed, and its comment taught the removed exemption from inside the
+  file implementing the opposite. Removed.
+
+- The `HAVING` + `ORDER BY name` suite now names the release that fixed it.
+  0.159.0 gated the name streams, the running top-K trim, the segment fetch
+  cap and the in-memory backend early exit on `HAVING` being absent, through
+  one shared predicate. The new cases reach the columnar route only — every
+  golden corpus carries a `.forgeql.yaml` — so the in-memory backend's own
+  early exit stays unpinned, and the suite says so.
+
 ## [0.184.0] — 2026-08-25 — a corpus-scale pin for every open answer defect
 
 ### Added
