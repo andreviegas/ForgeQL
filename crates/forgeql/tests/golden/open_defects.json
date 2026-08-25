@@ -425,6 +425,44 @@
    "assert": {
     "row_count": 1
    }
+  },
+  {
+   "name": "control_a_todo_after_a_statement_is_found",
+   "description": "Anchors the pin below by ruling out the two explanations that are not the defect: `cat` is decorated too, and it is in the same file, so neither decoration nor the file is why the pin fails. Its body opens with a nested `def`, so its TODO is not the first thing in the body.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "FIND symbols IN 'torch/_refs/__init__.py' WHERE fql_kind = 'function' WHERE line = 2878 WHERE has_todo = 'true' LIMIT 2",
+   "assert": {
+    "row_count": 1
+   }
+  },
+  {
+   "name": "control_the_leading_todo_is_still_on_line_4818",
+   "description": "Anchors the pin's identity rather than only its row: the case below is addressed by line against a frozen snapshot, so a re-pin that shifted the file could turn it green while proving nothing.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "SHOW LINES 4818-4818 OF 'torch/_refs/__init__.py' WHERE text MATCHES 'TODO'",
+   "assert": {
+    "row_count": 1
+   }
+  },
+  {
+   "name": "control_the_function_holding_it_is_indexed",
+   "description": "And that the function whose body it opens is a row at all, so the pin below can only fail on the marker.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "FIND symbols IN 'torch/_refs/__init__.py' WHERE fql_kind = 'function' WHERE line = 4816 LIMIT 2",
+   "assert": {
+    "row_count": 1
+   }
+  },
+  {
+   "name": "a_todo_on_the_first_body_line_is_found",
+   "description": "A TODO that is the FIRST thing in a function body is not detected. `t` opens with `# TODO: Add sparse support` and answers no `has_todo`, while `cat` in the same file — also decorated — answers because its TODO comes after a statement. The shape is language-independent as far as it has been checked, and it is not about decoration: an undecorated Python function whose first body line is a TODO is missed the same way. Verified live 2026-08-25 on 0.188.0.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "a comment that is the first thing in a function body is not seen by the TODO scan, so `has_todo` is absent on every function that opens with one — a false negative on the query an agent uses to find unfinished work. Repairing it changes index output and needs an enrichment version bump.",
+   "fql": "FIND symbols IN 'torch/_refs/__init__.py' WHERE fql_kind = 'function' WHERE line = 4816 WHERE has_todo = 'true' LIMIT 2",
+   "assert": {
+    "row_count": 1
+   }
   }
  ]
 }
