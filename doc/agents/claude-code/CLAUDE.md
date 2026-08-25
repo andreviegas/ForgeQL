@@ -365,7 +365,7 @@ Computed at index time. Use in `WHERE` clauses like any other field.
 | Field | Applies to | Values / Notes |
 |---|---|---|
 | `num_format` | `number` | `dec`, `hex`, `bin`, `oct`, `float`, `scientific` |
-| `is_magic` | `number` | `"true"` unless the literal is a zero array subscript (`arr[0]`) or, in C/C++, sits in a named-constant definition (declaration initializer, enumerator, `#define`) — the value itself grants no exemption, and no other language configures a named-constant exemption |
+| `is_magic` | `number` | `"true"` unless the literal is a zero array subscript (`arr[0]`) or, in C/C++, is the immediate child of a declaration initializer or enumerator — `int x = 3;` is exempt, `int x = 3 * 2;` is not. The value itself grants no exemption, no other language configures one, and `#define` bodies index no numbers at all |
 | `num_suffix` | `number` | `u`, `l`, `ll`, `ul`, `ull`, `f`, `ld` |
 | `suffix_meaning` | `number` | `unsigned`, `long`, `float`, etc. |
 | `has_separator` | `number` | `"true"` if contains digit separators |
