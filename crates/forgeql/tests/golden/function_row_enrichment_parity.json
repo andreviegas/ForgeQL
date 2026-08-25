@@ -1,6 +1,6 @@
 {
  "suite": "function_row_enrichment_parity",
- "description": "Every `function` row must have been visited by the function-metrics enricher. `param_count` is the witness: the enricher stamps it unconditionally, even for a zero-argument function, so a function row that cannot answer it is a row no enricher examined. The booleans the same gate stamps are written only when TRUE, so such a row answers neither `has_todo = 'true'` nor `= 'false'` — it is missing from both sides of the question rather than answered wrongly on one, which is what let it go unnoticed. Python broke this until 0.188.0: `decorated_definition` was mapped to `function` and named after the definition it wraps, whose span is already folded back to the leading decorator, so the two rows were indistinguishable to the dedupe and the wrapper survived — 36,978 of 141,233 rows on pytorch, 26%. Held here for the four languages the golden corpora cover (C, C++, Rust, Python); a language outside them is unpinned. Each case pins an absolute count, so a corpus re-pin moves a pair together while a parity break moves only one of the two.",
+ "description": "Every `function` row must have been visited by the function-metrics enricher. `param_count` is the witness: the enricher stamps it unconditionally, even for a zero-argument function, so a function row that cannot answer it is a row no enricher examined. The booleans the same gate stamps are written only when TRUE, so such a row answers neither `has_todo = 'true'` nor `= 'false'` — it is missing from both sides of the question rather than answered wrongly on one, which is what let it go unnoticed. Python broke this until 0.188.0: `decorated_definition` was mapped to `function` and named after the definition it wraps, whose span is already folded back to the leading decorator, so the two rows were indistinguishable to the dedupe and the wrapper survived — 36,978 of 141,233 rows on pytorch, 26%. Held for EVERY language that produces a function row on any golden corpus — twelve populations across C, C++, Rust, Python, Make and CMake. The first version of this suite pinned only the four languages the defect had been reasoned about, which left seven populations measured once and guarded never; enumerating them from `GROUP BY language` rather than from memory is what closed that. Each case pins an absolute count, so a corpus re-pin moves a pair together while a parity break moves only one of the two.",
  "cases": [
   {
    "name": "every_python_function_row_was_enriched_on_pytorch",
@@ -84,6 +84,125 @@
    "fql": "FIND symbols WHERE language = 'rust' WHERE fql_kind = 'function' WHERE param_count >= 0 LIMIT 1",
    "assert": {
     "total": 3159
+   }
+  },
+  {
+   "name": "every_cpp_function_row_was_enriched_on_forgeql_pub",
+   "description": "the C++ fixtures in this repository",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE language = 'cpp' WHERE fql_kind = 'function' LIMIT 1",
+   "assert": {
+    "total": 110
+   }
+  },
+  {
+   "name": "control_forgeql_pub_cpp_functions_all_answer_param_count",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE language = 'cpp' WHERE fql_kind = 'function' WHERE param_count >= 0 LIMIT 1",
+   "assert": {
+    "total": 110
+   }
+  },
+  {
+   "name": "every_cpp_function_row_was_enriched_on_zephyr",
+   "description": "C++ on the C corpus — headers take the C++ grammar, so this is a distinct population from the .c one",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE language = 'cpp' WHERE fql_kind = 'function' LIMIT 1",
+   "assert": {
+    "total": 6393
+   }
+  },
+  {
+   "name": "control_zephyr_cpp_functions_all_answer_param_count",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE language = 'cpp' WHERE fql_kind = 'function' WHERE param_count >= 0 LIMIT 1",
+   "assert": {
+    "total": 6393
+   }
+  },
+  {
+   "name": "every_make_function_row_was_enriched_on_zephyr",
+   "description": "Makefile targets are function rows too, and the invariant is about rows rather than about languages anyone thought to check",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE language = 'make' WHERE fql_kind = 'function' LIMIT 1",
+   "assert": {
+    "total": 47
+   }
+  },
+  {
+   "name": "control_zephyr_make_functions_all_answer_param_count",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE language = 'make' WHERE fql_kind = 'function' WHERE param_count >= 0 LIMIT 1",
+   "assert": {
+    "total": 47
+   }
+  },
+  {
+   "name": "every_cmake_function_row_was_enriched_on_zephyr",
+   "description": "CMake functions, same reasoning",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE language = 'cmake' WHERE fql_kind = 'function' LIMIT 1",
+   "assert": {
+    "total": 355
+   }
+  },
+  {
+   "name": "control_zephyr_cmake_functions_all_answer_param_count",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE language = 'cmake' WHERE fql_kind = 'function' WHERE param_count >= 0 LIMIT 1",
+   "assert": {
+    "total": 355
+   }
+  },
+  {
+   "name": "every_c_function_row_was_enriched_on_pytorch",
+   "description": "the C population on the Python corpus",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "FIND symbols WHERE language = 'c' WHERE fql_kind = 'function' LIMIT 1",
+   "assert": {
+    "total": 426
+   }
+  },
+  {
+   "name": "control_pytorch_c_functions_all_answer_param_count",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "FIND symbols WHERE language = 'c' WHERE fql_kind = 'function' WHERE param_count >= 0 LIMIT 1",
+   "assert": {
+    "total": 426
+   }
+  },
+  {
+   "name": "every_make_function_row_was_enriched_on_pytorch",
+   "description": "Makefile targets",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "FIND symbols WHERE language = 'make' WHERE fql_kind = 'function' LIMIT 1",
+   "assert": {
+    "total": 85
+   }
+  },
+  {
+   "name": "control_pytorch_make_functions_all_answer_param_count",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "FIND symbols WHERE language = 'make' WHERE fql_kind = 'function' WHERE param_count >= 0 LIMIT 1",
+   "assert": {
+    "total": 85
+   }
+  },
+  {
+   "name": "every_cmake_function_row_was_enriched_on_pytorch",
+   "description": "CMake functions",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "FIND symbols WHERE language = 'cmake' WHERE fql_kind = 'function' LIMIT 1",
+   "assert": {
+    "total": 53
+   }
+  },
+  {
+   "name": "control_pytorch_cmake_functions_all_answer_param_count",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "FIND symbols WHERE language = 'cmake' WHERE fql_kind = 'function' WHERE param_count >= 0 LIMIT 1",
+   "assert": {
+    "total": 53
    }
   }
  ]
