@@ -1910,3 +1910,65 @@ fn the_value_universe_is_reached_through_the_field_as_written() {
     assert!(engine_owned_values("has_todo").is_none());
     assert!(engine_owned_values("a_field_no_plugin_declares").is_none());
 }
+
+/// The kindless row renders as `unknown` on BOTH backends, not as its raw
+/// tree-sitter kind on one of them.
+///
+/// The in-memory backend used to print `node_kind` under `fql_kind` where no
+/// language mapped the node. That was the one place a raw grammar name reached
+/// a column whose value set the engine owns — and since the outline's clause
+/// filter runs over the rendered entries, it was also a back door to filtering
+/// on `node_kind`, which every verb refuses. Nothing else in this change is
+/// reachable only through this backend, so without this case the render is
+/// unpinned.
+#[test]
+fn the_outline_renders_the_kindless_row_the_same_on_both_backends() {
+    for columnar in [false, true] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("shapes.rs"),
+            "pub fn mapped(\n    node: tree_sitter::Node<'_>,\n    source: &[u8],\n    config: &crate::ast::lang::LanguageConfig,\n) -> u32 {\n    let v: u32 = 1;\n    v\n}\n",
+        )
+        .expect("write fixture");
+        let mut t = if columnar {
+            common::columnar_session_in(dir)
+        } else {
+            common::legacy_session_in(dir)
+        };
+        let entries = outline_kinds(&mut t, "SHOW outline OF 'shapes.rs' ALL");
+        assert!(
+            !entries.is_empty(),
+            "columnar={columnar}: the outline answered nothing, so the rendering is untested"
+        );
+        // Without a kindless row the loop below inspects only mapped kinds and
+        // the changed branch is never reached — the fixture's typed parameters
+        // are what produce one, so this assert guards the fixture, not the code.
+        assert!(
+            entries
+                .iter()
+                .any(|k| k == forgeql_core::field_tiers::UNKNOWN_KIND),
+            "columnar={columnar}: the fixture produced no kindless row, so this case \
+             cannot exercise the rendering it exists for — got {entries:?}"
+        );
+        for kind in &entries {
+            assert!(
+                forgeql_core::field_tiers::FQL_KIND_VALUES.contains(&kind.as_str()),
+                "columnar={columnar}: outline printed {kind:?} under fql_kind, which is not a \
+                 value the engine owns — a raw grammar kind reached the column"
+            );
+        }
+    }
+}
+
+/// The `fql_kind` of every entry a `SHOW outline` answered with.
+fn outline_kinds(t: &mut common::TestSession, fql: &str) -> Vec<String> {
+    match t.try_fql(fql).unwrap_or_else(|e| panic!("`{fql}`: {e}")) {
+        ForgeQLResult::Show(show) => match show.content {
+            forgeql_core::result::ShowContent::Outline { entries } => {
+                entries.iter().map(|e| e.fql_kind.clone()).collect()
+            }
+            other => panic!("`{fql}` did not answer with an outline: {other:?}"),
+        },
+        other => panic!("`{fql}` did not answer with a show result: {other:?}"),
+    }
+}
