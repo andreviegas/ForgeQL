@@ -1508,7 +1508,7 @@ Computed at index time. Queryable with `WHERE` like any other field.
 | Field | Applies to | Description |
 |---|---|---|
 | `num_format` | `number` | `dec`, `hex`, `bin`, `oct`, `float`, `scientific` |
-| `is_magic` | `number` | `"true"` unless the literal sits in a named-constant definition (declaration initializer, enumerator, `#define`) or is a zero array subscript (`arr[0]`) — the value itself grants no exemption |
+| `is_magic` | `number` | `"true"` unless the literal is a zero array subscript (`arr[0]`) or, in C/C++, sits in a named-constant definition (declaration initializer, enumerator, `#define`) — the value itself grants no exemption, and no other language configures a named-constant exemption |
 | `num_suffix` | `number` | Type suffix: `u`, `l`, `ll`, `ul`, `ull`, `f`, `ld` |
 | `suffix_meaning` | `number` | Semantic meaning of suffix: `unsigned`, `long`, `float`, etc. |
 | `has_separator` | `number` | `"true"` if contains digit separators |
