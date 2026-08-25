@@ -3,37 +3,6 @@
  "description": "Soft pins for known-open defects. Every expect_fail case here asserts the behaviour that is CORRECT per the documentation or the engine's own stated doctrine, and is expected to fail until the defect is fixed — the runner reports it without going red, and a PASS fails the gate so the fixing commit must promote the case (and tighten its assert where the fix settles a shape this case had to leave open). Each expect_fail travels with a control on the same fixture, so corpus drift or an unregistered corpus fails a control loudly instead of masquerading as the expected failure.",
  "cases": [
   {
-   "name": "control_the_fixture_holds_five_negative_one_literals",
-   "description": "Anchors the two magic-number cases below: the fixture's -1 literals exist and are countable. If this drifts, the cases below are asserting against a fixture that moved, not a fix.",
-   "use": "forgeql-pub.frozen",
-   "fql": "FIND symbols WHERE fql_kind = 'number' WHERE name = '-1' IN 'tests/fixtures/enrichment_patterns.cpp'",
-   "assert": {
-    "row_count": 5
-   }
-  },
-  {
-   "name": "a_negative_one_literal_is_never_magic",
-   "description": "The enrichment table documents is_magic as true for unexplained constants and lists -1 in the exemptions (not 0, 1, -1, 2, powers of 2, bitmasks). So no -1 literal may carry is_magic = true.",
-   "use": "forgeql-pub.frozen",
-   "enforcement": "expect_fail",
-   "expect_fail_reason": "all five -1 literals in the fixture are stamped is_magic = true against the documented exemption; the likely mechanism is that the exemption compares the literal without absorbing the unary minus, so -1 never matches the -1 exemption; either the enricher or the doc must move, and changing the enricher moves smell-audit counts on every corpus, so the direction is a behaviour call",
-   "fql": "FIND symbols WHERE fql_kind = 'number' WHERE name = '-1' WHERE is_magic = 'true' IN 'tests/fixtures/enrichment_patterns.cpp'",
-   "assert": {
-    "row_count": 0
-   }
-  },
-  {
-   "name": "a_zero_literal_is_never_magic",
-   "description": "Same exemption list, sharper contradiction: 0 is the first value on it, yet 39 zero literals in the fixture carry is_magic = true. The stamped zeros sit in conditions and returns (if (a > 0), return 0) while initializer zeros (int x = 0) are exempt — so the exemption is context-dependent where the doc says it is value-dependent.",
-   "use": "forgeql-pub.frozen",
-   "enforcement": "expect_fail",
-   "expect_fail_reason": "zeros in condition and return position are stamped magic while initializer zeros are not; the doc promises a value-based exemption (not 0, 1, -1, 2, powers of 2), so either the enricher stops stamping exempt values in those contexts or the doc says which contexts re-arm the exemption",
-   "fql": "FIND symbols WHERE fql_kind = 'number' WHERE name = '0' WHERE is_magic = 'true' IN 'tests/fixtures/enrichment_patterns.cpp'",
-   "assert": {
-    "row_count": 0
-   }
-  },
-  {
    "name": "control_a_true_valued_boolean_field_is_queryable",
    "description": "Anchors the false-value case below: the has_todo field exists, posts, and answers for its true value on this corpus.",
    "use": "forgeql-pub.frozen",
@@ -337,69 +306,6 @@
    }
   }
   ,
-  {
-   "name": "control_zephyr_holds_negative_one_literals",
-   "description": "Anchors the case below at corpus scale: 3,859 -1 literals exist on zephyr-andre.frozen. Verified live 2026-08-24 on 0.183.0.",
-   "use": "zephyr-andre.frozen",
-   "fql": "FIND symbols WHERE fql_kind = 'number' WHERE name = '-1' LIMIT 1",
-   "assert": {
-    "row_count": 1,
-    "total": 3859
-   }
-  },
-  {
-   "name": "a_negative_one_is_never_magic_on_a_c_corpus",
-   "description": "The fixture cases above show the mechanism narrowly; this shows the blast radius broadly: the documented exemption list says -1 is never magic, yet 3,446 of the 3,859 -1 literals on this corpus are stamped magic.",
-   "use": "zephyr-andre.frozen",
-   "enforcement": "expect_fail",
-   "expect_fail_reason": "3,446 -1 literals stamped is_magic = true against the documented exemption; same mechanism as the fixture case (the exemption likely compares without absorbing the unary minus), measured at corpus scale so the fixing commit can see the smell-audit counts it moves",
-   "fql": "FIND symbols WHERE fql_kind = 'number' WHERE name = '-1' WHERE is_magic = 'true' LIMIT 1",
-   "assert": {
-    "total": 0
-   }
-  },
-  {
-   "name": "control_zephyr_holds_zero_literals",
-   "description": "Anchors the case below: 146,613 zero literals exist on this corpus.",
-   "use": "zephyr-andre.frozen",
-   "fql": "FIND symbols WHERE fql_kind = 'number' WHERE name = '0' LIMIT 1",
-   "assert": {
-    "row_count": 1,
-    "total": 146613
-   }
-  },
-  {
-   "name": "a_zero_literal_is_never_magic_on_a_c_corpus",
-   "description": "Zero is the first value on the documented exemption list, and 122,256 of this corpus's 146,613 zero literals are stamped magic — five sixths of every zero an audit query returns is a contradiction of the doc.",
-   "use": "zephyr-andre.frozen",
-   "enforcement": "expect_fail",
-   "expect_fail_reason": "zeros in condition and return position are stamped magic while initializer zeros are exempt; the doc promises a value-based exemption; 122,256 rows on this corpus alone",
-   "fql": "FIND symbols WHERE fql_kind = 'number' WHERE name = '0' WHERE is_magic = 'true' LIMIT 1",
-   "assert": {
-    "total": 0
-   }
-  },
-  {
-   "name": "control_pytorch_holds_negative_one_literals",
-   "description": "Anchors the case below on the Python/C++ corpus: 2,816 -1 literals.",
-   "use": "pytorch-andre.pytorch-frozen",
-   "fql": "FIND symbols WHERE fql_kind = 'number' WHERE name = '-1' LIMIT 1",
-   "assert": {
-    "row_count": 1,
-    "total": 2816
-   }
-  },
-  {
-   "name": "a_negative_one_is_never_magic_on_a_python_corpus",
-   "description": "The same contradiction on a second language family: 2,625 of 2,816 -1 literals stamped magic, so the fix belongs in the shared enricher, not a per-grammar patch.",
-   "use": "pytorch-andre.pytorch-frozen",
-   "enforcement": "expect_fail",
-   "expect_fail_reason": "2,625 -1 literals stamped is_magic = true on pytorch; same exemption list, same mechanism, second grammar",
-   "fql": "FIND symbols WHERE fql_kind = 'number' WHERE name = '-1' WHERE is_magic = 'true' LIMIT 1",
-   "assert": {
-    "total": 0
-   }
-  },
   {
    "name": "control_zephyr_has_todo_true_answers",
    "description": "Anchors the false-value cases below: has_todo posts and answers its true value on this corpus — 949 functions.",

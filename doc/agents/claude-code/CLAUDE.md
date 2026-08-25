@@ -365,7 +365,7 @@ Computed at index time. Use in `WHERE` clauses like any other field.
 | Field | Applies to | Values / Notes |
 |---|---|---|
 | `num_format` | `number` | `dec`, `hex`, `bin`, `oct`, `float`, `scientific` |
-| `is_magic` | `number` | `"true"` for unexplained constants (not 0, 1, -1, 2, powers of 2, bitmasks) |
+| `is_magic` | `number` | `"true"` unless the literal sits in a named-constant definition (declaration initializer, enumerator, `#define`) or is a zero array subscript (`arr[0]`) — the value itself grants no exemption |
 | `num_suffix` | `number` | `u`, `l`, `ll`, `ul`, `ull`, `f`, `ld` |
 | `suffix_meaning` | `number` | `unsigned`, `long`, `float`, etc. |
 | `has_separator` | `number` | `"true"` if contains digit separators |
