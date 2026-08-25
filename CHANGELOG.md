@@ -6,6 +6,50 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.188.0] — 2026-08-25 — a decorated Python definition stops hiding the one it wraps
+
+**Re-indexes once on upgrade:** the enrichment version moves to 72, so every
+corpus rebuilds its segments on first use after this release.
+
+### Fixed
+
+- **26% of Python `function` rows answered no function metric at all.**
+  `decorated_definition` was mapped to `fql_kind = 'function'` and named after
+  the definition it wraps. That definition already produces a row whose span is
+  folded back to the leading decorator, so the two agreed on name, kind, path
+  and line — indistinguishable to the dedupe, which kept the wrapper. The
+  wrapper is not a function kind, so nothing enriched it: 36,978 of 141,233
+  rows on one corpus and 1,273 of 6,249 on another answered no `param_count`,
+  `has_todo`, `has_shadow` or `is_recursive`. Those booleans are stamped only
+  when true, so such a row answered neither `has_todo = 'true'` nor
+  `= 'false'` — missing from both sides of the question rather than wrong on
+  one, which is why nothing surfaced it. Any count of "functions without a
+  TODO" derived by subtracting from `fql_kind = 'function'` would have
+  published a confident no for all of them. The wrapper is now neither named
+  nor mapped, and the definition it wraps is the row.
+
+- **A decorated class answered as a function.** The same mapping gave every
+  decorated `class` a second row of kind `function`, so `fql_kind = 'function'`
+  on Python counted classes — 3,107 of them on one corpus, two of which were
+  the only "functions" over 14,000 lines.
+
+### Changed
+
+- `depth` inside a decorated definition is one lower, because the wrapper is no
+  longer a level of nesting between the definition and its body.
+
+- A TODO that is the first line of a function body is recorded as an open
+  defect: it is not detected, so `has_todo` is absent on every function that
+  opens with one. It is unrelated to the fix above — a decorated function
+  whose TODO comes after a statement answers correctly, and an undecorated one
+  whose TODO leads does not.
+
+- A new golden suite holds every language to one invariant: a `function` row
+  must answer `param_count`, which the metrics enricher stamps unconditionally.
+  A row that cannot is a row nothing examined, and every boolean the same gate
+  stamps reads false on it. The invariant is unconditional — C, C++, Rust and
+  Python, no exemption list — so it has one reason to be red.
+
 ## [0.187.0] — 2026-08-25 — a value the engine could never produce is refused, not answered with zero
 
 ### Changed
