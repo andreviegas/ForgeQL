@@ -259,7 +259,7 @@ any seam yourself. Steps marked `commit_gate: true` in `.forgeql.yaml` must pass
 
 `MATCHES` / `NOT MATCHES` use Rust `regex` crate syntax. Prefix `(?i)` for case-insensitive matching.
 
-A row that does not carry the field fails **every** operator naming it, negations included: `!=`, `NOT LIKE` and `NOT MATCHES` return only rows that have a value to differ from, so a negation is not a way to reach the rows that lack the field. The exception is a pattern operator handed something it cannot use — `NOT LIKE`/`NOT MATCHES` with a non-string value, or `NOT MATCHES` with a regex that does not compile — which passes before any field is read.
+A row that does not carry the field fails **every** operator naming it, negations included: `!=`, `NOT LIKE` and `NOT MATCHES` return only rows that have a value to differ from, so a negation is not a way to reach the rows that lack the field. The exception is a pattern operator handed a value it cannot use — `NOT LIKE`/`NOT MATCHES` with a non-string value — which passes before any field is read. A regex that does not compile is refused instead, on `MATCHES` and `NOT MATCHES` alike.
 
 `SHOW body`, `SHOW NODE`, `SHOW LINES`, `SHOW context` and `SHOW MORE` accept
 `WHERE` on source lines. `SHOW signature` does not — it renders one line rather

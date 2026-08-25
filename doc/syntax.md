@@ -1300,11 +1300,11 @@ IN → EXCLUDE → WHERE → GROUP BY → HAVING → ORDER BY → OFFSET → LIM
 A row that does not carry the field fails **every** operator naming it, so a
 negation is not a way to reach the rows that lack it: `WHERE naming != 'x'`,
 `NOT LIKE` and `NOT MATCHES` all return only rows that have a `naming` to
-differ from. The one exception is a **pattern** operator handed something it
-cannot use: `NOT LIKE` or `NOT MATCHES` with a non-string value, or
-`NOT MATCHES` with a regex that does not compile, passes before any field is
-read. `!=` is not in that set and fails on a missing value whatever its value
-type.
+differ from. The one exception is a **pattern** operator handed a value it
+cannot use: `NOT LIKE` or `NOT MATCHES` with a non-string value passes before
+any field is read. A regex that does not compile is not in that set — it is
+refused, on `MATCHES` and `NOT MATCHES` alike. `!=` is not in that set either
+and fails on a missing value whatever its value type.
 
 | Value syntax | Type |
 |---|---|

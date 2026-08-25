@@ -233,7 +233,7 @@ Applied in order: `IN → EXCLUDE → WHERE → GROUP BY → HAVING → ORDER BY
 
 **Operators:** `=`, `!=`, `LIKE`, `NOT LIKE`, `MATCHES`, `NOT MATCHES` (regex), `>`, `>=`, `<`, `<=`
 
-A row that does not carry the field fails **every** operator naming it, negations included: `!=`, `NOT LIKE` and `NOT MATCHES` return only rows that have a value to differ from, so a negation is not a way to reach the rows that lack the field. The exception is a pattern operator handed something it cannot use — `NOT LIKE`/`NOT MATCHES` with a non-string value, or `NOT MATCHES` with a regex that does not compile — which passes before any field is read.
+A row that does not carry the field fails **every** operator naming it, negations included: `!=`, `NOT LIKE` and `NOT MATCHES` return only rows that have a value to differ from, so a negation is not a way to reach the rows that lack the field. The exception is a pattern operator handed a value it cannot use — `NOT LIKE`/`NOT MATCHES` with a non-string value — which passes before any field is read. A regex that does not compile is refused instead, on `MATCHES` and `NOT MATCHES` alike.
 
 `MATCHES` / `NOT MATCHES` use Rust `regex` crate syntax. Prefix `(?i)` for case-insensitive. Examples:
 - `WHERE name MATCHES '^(get|set)_'`
