@@ -35,6 +35,10 @@ use tempfile::tempdir;
 /// `RustLanguage`, `PythonLanguage`) plus `text_languages()`.
 pub fn make_registry() -> Arc<LanguageRegistry> {
     let mut langs = forgeql_lang_text::text_languages();
+    // `.c` is claimed by no other plugin — cpp.json takes cpp/cc/cxx/h/hpp/hxx.
+    // Without this the C fixtures index nothing at all, and any test over them
+    // that asserts an empty result passes without exercising anything.
+    langs.push(Arc::new(forgeql_lang_c::CLanguage));
     langs.push(Arc::new(forgeql_lang_cpp::CppLanguage));
     langs.push(Arc::new(forgeql_lang_rust::RustLanguage));
     langs.push(Arc::new(forgeql_lang_python::PythonLanguage));

@@ -709,6 +709,7 @@ dependencies = [
  "criterion",
  "fd-lock",
  "forgeql-core",
+ "forgeql-lang-c",
  "forgeql-lang-cpp",
  "forgeql-lang-python",
  "forgeql-lang-rust",
