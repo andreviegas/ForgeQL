@@ -1,6 +1,9 @@
 //! The field/tier table must agree with the code it describes.
 //!
-//! The table is a parallel declaration: nothing reads it at query time yet.
+//! The table is a parallel declaration in almost every respect: four of its
+//! facts are read at query time — the canonical spelling of an alias, a
+//! refusal's text, whether a field is written after materialisation, and
+//! whether a field's value universe belongs to the engine — and nothing else.
 //! What makes it worth having before the collapse is this file — every claim
 //! it makes is checked here against the const lists, against the builder's
 //! own budget functions, and against what a query actually returns. A
@@ -13,7 +16,7 @@ use std::fmt::Write as _;
 
 use forgeql_core::field_tiers::{
     ALL_OPS, CATCH_ALL_FIELD, Exactness, FIELD_TIERS, FieldTier, Gap, OpClass, Serving, Source,
-    Then, Tier, canonical, lookup, refused_fields,
+    Then, Tier, ValueUniverse, canonical, engine_owned_values, lookup, refused_fields,
 };
 use forgeql_core::filter::{CORE_WHERE_FIELDS, ClauseTarget};
 use forgeql_core::result::{CallGraphEntry, FileEntry, MemberEntry, OutlineEntry, SymbolMatch};
@@ -1866,4 +1869,41 @@ fn find_usages_refuses_a_field_its_rows_cannot_carry() {
     // And the verb still answers what it can.
     let sites = query(&mut t, "FIND usages OF 'helper_c'");
     assert!(sites.total > 0, "FIND usages stopped finding real sites");
+}
+
+#[test]
+fn only_the_two_engine_owned_fields_declare_a_value_universe() {
+    // Widening is the direction that hurts. A field whose values the CORPUS
+    // owns must keep its empty answer — `guard_kind = 'ifdef'` on a corpus with
+    // no such guard is the release note that says so — and declaring `Engine`
+    // on a third field turns every unrecognised value there into a refusal.
+    // That is a deliberate act, and this is where it has to be noticed.
+    let engine_owned: Vec<&str> = FIELD_TIERS
+        .iter()
+        .filter(|t| matches!(t.values, ValueUniverse::Engine(_)))
+        .map(|t| t.field)
+        .collect();
+    assert_eq!(engine_owned, ["fql_kind", "role"]);
+
+    // The catch-all row stands for every field a language plugin declares, so
+    // it is exactly where a corpus-owned universe has to stay corpus-owned.
+    assert!(matches!(CATCH_ALL_FIELD.values, ValueUniverse::Corpus));
+}
+
+#[test]
+fn the_value_universe_is_reached_through_the_field_as_written() {
+    // The refusal canonicalises before it looks the universe up, so the alias
+    // reaches the same list; and a field the table does not know at all — every
+    // language-declared enrichment field — answers `None`, which is what keeps
+    // the check off them.
+    assert_eq!(
+        engine_owned_values("kind"),
+        engine_owned_values("fql_kind"),
+        "the alias must reach the same universe as the canonical spelling"
+    );
+    assert!(engine_owned_values("fql_kind").is_some_and(|v| v.contains(&"class")));
+    assert!(engine_owned_values("role").is_some_and(|v| v.contains(&"code")));
+    assert!(engine_owned_values("guard_kind").is_none());
+    assert!(engine_owned_values("has_todo").is_none());
+    assert!(engine_owned_values("a_field_no_plugin_declares").is_none());
 }

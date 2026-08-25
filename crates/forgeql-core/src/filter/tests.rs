@@ -264,6 +264,216 @@ fn reject_invalid_patterns_leaves_a_compilable_pattern_alone() {
     };
     assert!(reject_invalid_patterns(&op).is_ok());
 }
+
+#[test]
+fn reject_unknown_enum_values_refuses_a_kind_no_language_maps() {
+    // `impl` reads like a kind and is not one: Rust's `impl_item` maps to
+    // `class`. Before this check the query answered a confident zero, which an
+    // agent cannot tell from "this repository has no impls".
+    let op = crate::ir::ForgeQLIR::FindSymbols {
+        backend: crate::ir::Backend::default(),
+        clauses: Clauses {
+            where_predicates: vec![Predicate {
+                field: "fql_kind".into(),
+                op: CompareOp::Eq,
+                value: PredicateValue::String("impl".into()),
+            }],
+            ..Default::default()
+        },
+    };
+    let err = reject_unknown_enum_values(&op).unwrap_err().to_string();
+    assert!(err.contains("'impl'"), "unexpected message: {err}");
+    // The refusal has to hand back the universe, or it only says no.
+    assert!(err.contains("Accepted:"), "unexpected message: {err}");
+    assert!(err.contains("class"), "unexpected message: {err}");
+}
+
+#[test]
+fn reject_unknown_enum_values_names_the_field_the_agent_wrote() {
+    // `kind` is an alias for `fql_kind`. The membership test canonicalises, but
+    // the message must quote back what was typed, or it reads as being about a
+    // field the agent did not write.
+    let op = crate::ir::ForgeQLIR::FindSymbols {
+        backend: crate::ir::Backend::default(),
+        clauses: Clauses {
+            where_predicates: vec![Predicate {
+                field: "kind".into(),
+                op: CompareOp::Eq,
+                value: PredicateValue::String("impl".into()),
+            }],
+            ..Default::default()
+        },
+    };
+    let err = reject_unknown_enum_values(&op).unwrap_err().to_string();
+    assert!(
+        err.contains("WHERE kind = 'impl'"),
+        "unexpected message: {err}"
+    );
+}
+
+#[test]
+fn reject_unknown_enum_values_covers_the_negation_too() {
+    // `!= 'impl'` is the more dangerous direction: it excludes nothing and
+    // returns everything, so the wrong answer looks like a legitimate one.
+    let op = crate::ir::ForgeQLIR::FindSymbols {
+        backend: crate::ir::Backend::default(),
+        clauses: Clauses {
+            where_predicates: vec![Predicate {
+                field: "fql_kind".into(),
+                op: CompareOp::NotEq,
+                value: PredicateValue::String("impl".into()),
+            }],
+            ..Default::default()
+        },
+    };
+    assert!(reject_unknown_enum_values(&op).is_err());
+}
+
+#[test]
+fn reject_unknown_enum_values_refuses_an_unknown_occurrence_role() {
+    // `role` is the second engine-owned universe, so the check cannot be a
+    // one-field special case for `fql_kind`.
+    let op = crate::ir::ForgeQLIR::FindUsages {
+        of: "ClauseTarget".into(),
+        backend: crate::ir::Backend::default(),
+        clauses: Clauses {
+            where_predicates: vec![Predicate {
+                field: "role".into(),
+                op: CompareOp::Eq,
+                value: PredicateValue::String("banana".into()),
+            }],
+            ..Default::default()
+        },
+    };
+    let err = reject_unknown_enum_values(&op).unwrap_err().to_string();
+    assert!(
+        err.contains("code, comment, string, config, doc, text"),
+        "unexpected message: {err}"
+    );
+}
+
+#[test]
+fn reject_unknown_enum_values_leaves_a_corpus_owned_value_alone() {
+    // The boundary of the whole change, and it is load-bearing.
+    // `guard_kind = 'ifdef'` on a corpus holding no `#ifdef` answers empty and
+    // the empty answer is correct: the corpus owns which guard kinds exist, so
+    // that zero is a fact about the code. Nothing here may refuse it.
+    let op = crate::ir::ForgeQLIR::FindSymbols {
+        backend: crate::ir::Backend::default(),
+        clauses: Clauses {
+            where_predicates: vec![Predicate {
+                field: "guard_kind".into(),
+                op: CompareOp::Eq,
+                value: PredicateValue::String("ifdef".into()),
+            }],
+            ..Default::default()
+        },
+    };
+    assert!(reject_unknown_enum_values(&op).is_ok());
+}
+
+#[test]
+fn reject_unknown_enum_values_leaves_a_pattern_alone() {
+    // A pattern names no value: `LIKE '%_block'` is a legitimate question about
+    // the block kinds, and a regex matching none of them is a legitimate
+    // question with an empty answer.
+    for op_kind in [
+        CompareOp::Like,
+        CompareOp::NotLike,
+        CompareOp::Matches,
+        CompareOp::NotMatches,
+    ] {
+        let op = crate::ir::ForgeQLIR::FindSymbols {
+            backend: crate::ir::Backend::default(),
+            clauses: Clauses {
+                where_predicates: vec![Predicate {
+                    field: "fql_kind".into(),
+                    op: op_kind,
+                    value: PredicateValue::String("impl".into()),
+                }],
+                ..Default::default()
+            },
+        };
+        assert!(
+            reject_unknown_enum_values(&op).is_ok(),
+            "a {op_kind:?} pattern must not be read as a value"
+        );
+    }
+}
+
+#[test]
+fn reject_unknown_enum_values_accepts_the_kindless_value() {
+    // `GROUP BY fql_kind` publishes the rows carrying no kind under the empty
+    // name, so `= ''` is a question the engine put into the agent's hands and
+    // must not then refuse.
+    //
+    // This is the ONLY non-vacuous pin of that acceptance. The golden case for
+    // the empty kind is an expect_fail in `open_defects.json` — the equality
+    // answers no rows while the grouping counts thousands — and an expect_fail
+    // counts ANY error as its expected failure, so a refusal here would satisfy
+    // it silently. The acceptance has to be asserted where an error is a
+    // failure.
+    let op = crate::ir::ForgeQLIR::FindSymbols {
+        backend: crate::ir::Backend::default(),
+        clauses: Clauses {
+            where_predicates: vec![Predicate {
+                field: "fql_kind".into(),
+                op: CompareOp::Eq,
+                value: PredicateValue::String(String::new()),
+            }],
+            ..Default::default()
+        },
+    };
+    assert!(reject_unknown_enum_values(&op).is_ok());
+}
+
+#[test]
+fn reject_unknown_enum_values_reads_having_as_well_as_where() {
+    // HAVING runs after the grouping pass but is the same predicate shape, and
+    // an unknown value there fails the same way.
+    let op = crate::ir::ForgeQLIR::FindSymbols {
+        backend: crate::ir::Backend::default(),
+        clauses: Clauses {
+            group_by: Some(crate::ir::GroupBy::Field("file".into())),
+            having_predicates: vec![Predicate {
+                field: "fql_kind".into(),
+                op: CompareOp::Eq,
+                value: PredicateValue::String("impl".into()),
+            }],
+            ..Default::default()
+        },
+    };
+    let err = reject_unknown_enum_values(&op).unwrap_err().to_string();
+    assert!(
+        err.starts_with("HAVING fql_kind"),
+        "unexpected message: {err}"
+    );
+}
+
+#[test]
+fn reject_unknown_enum_values_reads_a_number_as_the_text_a_row_would_hold() {
+    // `fql_kind = 42` is not waved through for having the wrong type: a row
+    // stores its kind as text, so 42 is compared as "42" and refused like any
+    // other name no language maps.
+    let op = crate::ir::ForgeQLIR::FindSymbols {
+        backend: crate::ir::Backend::default(),
+        clauses: Clauses {
+            where_predicates: vec![Predicate {
+                field: "fql_kind".into(),
+                op: CompareOp::Eq,
+                value: PredicateValue::Number(42),
+            }],
+            ..Default::default()
+        },
+    };
+    assert!(reject_unknown_enum_values(&op).is_err());
+}
+
+#[test]
+fn reject_unknown_enum_values_passes_an_op_that_carries_no_clauses() {
+    let op = crate::ir::ForgeQLIR::ShowSources;
+    assert!(reject_unknown_enum_values(&op).is_ok());
+}
 #[test]
 fn apply_clauses_numeric_predicate_gte() {
     let mut items = vec![

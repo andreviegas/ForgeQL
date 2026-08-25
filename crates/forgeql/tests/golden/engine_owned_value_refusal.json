@@ -1,0 +1,103 @@
+{
+ "suite": "engine_owned_value_refusal",
+ "description": "Who owns a field's value universe decides what an unrecognised value MEANS. Where the ENGINE owns it — fql_kind, because a language plugin maps its grammar onto the kind vocabulary rather than extending it, and role on FIND usages, minted by the read pass — no corpus can hold a value outside the list, so naming one is a fact about the query and is refused naming what is accepted. Where the CORPUS owns it, an unstored value stays a fast, honest empty answer. Both halves are pinned here, because the boundary is as load-bearing as the rule: the commit that made fql_kind = 'impl' an error had to leave guard_kind = 'ifdef' answering nothing. Every case says which side of the line it stands on.",
+ "cases": [
+  {
+   "name": "control_a_known_kind_filters_the_outline",
+   "description": "Anchors the unknown-kind case below: a kind inside the universe filters the same file's outline to its one struct, so the refusal below is about the value and not about the verb.",
+   "use": "forgeql-pub.frozen",
+   "fql": "SHOW outline OF 'tests/fixtures/canonical/canonical.rs' WHERE fql_kind = 'struct'",
+   "assert": {
+    "row_count": 1
+   }
+  },
+  {
+   "name": "an_unknown_kind_value_is_refused_not_silently_empty",
+   "description": "'impl' reads like a kind and is not one — Rust's impl_item maps to 'class'. The outline used to answer header-only silence, indistinguishable from 'this file has none of those'. It is now refused, and the refusal hands back the whole accepted universe rather than only saying no.",
+   "use": "forgeql-pub.frozen",
+   "fql": "SHOW outline OF 'tests/fixtures/canonical/canonical.rs' WHERE fql_kind = 'impl'",
+   "assert": {
+    "error": true,
+    "error_contains": "fql_kind"
+   }
+  },
+  {
+   "name": "an_unknown_kind_is_refused_under_its_alias_too",
+   "description": "'kind' is the DSL alias for fql_kind. Membership is tested against the canonical field, so the alias cannot slip past — and the message quotes back the spelling the agent typed, or it reads as being about a field they did not write.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE kind = 'impl' LIMIT 1",
+   "assert": {
+    "error": true,
+    "error_contains": "WHERE kind = 'impl'"
+   }
+  },
+  {
+   "name": "the_negation_is_refused_as_well_as_the_equality",
+   "description": "!= 'impl' is the more dangerous direction: it excludes nothing and returns everything, so the wrong answer looks like a legitimate one rather than a suspicious zero.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind != 'impl' LIMIT 1",
+   "assert": {
+    "error": true,
+    "error_contains": "fql_kind"
+   }
+  },
+  {
+   "name": "a_pattern_on_an_engine_owned_field_is_not_a_value",
+   "description": "The refusal reads = and != only. A pattern names no value: LIKE '%_block' is a legitimate question about the block kinds, and a regex matching none of them would be a legitimate question with an empty answer. Refusing patterns would have closed a query shape the engine answers well.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind LIKE '%_block' LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "total": 2660
+   }
+  },
+  {
+   "name": "control_a_known_role_answers_on_find_usages",
+   "description": "Anchors the role case below, and pins that role is the second engine-owned universe rather than fql_kind with a special case. code is the resolved-identifier role, and the eighteen such sites sit in three files — which is why LIMIT 3 returns all eighteen rows rather than three: on FIND usages the limit counts FILES and every site of a selected file is returned. Those eighteen are what the refusal below must leave undisturbed.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND usages OF 'ClauseTarget' WHERE role = 'code' LIMIT 3",
+   "assert": {
+    "row_count": 18,
+    "total": 18
+   }
+  },
+  {
+   "name": "an_unknown_role_is_refused_on_find_usages",
+   "description": "The occurrence roles are minted by the read pass that finds the site, so they are engine-owned on the same terms as the kinds. 'banana' used to answer a silent zero, which on a blast-radius query reads as 'nothing references this that way'.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND usages OF 'ClauseTarget' WHERE role = 'banana' LIMIT 3",
+   "assert": {
+    "error": true,
+    "error_contains": "role"
+   }
+  },
+  {
+   "name": "control_a_corpus_owned_value_answers_empty_and_is_not_refused",
+   "description": "The boundary of the whole change, and it is as load-bearing as the rule. guard_kind takes its values from what the enrichers found in the code — this corpus stores 'attribute' and 'preprocessor' — so 'ifdef' is a value the corpus does not hold rather than one the engine cannot mint. Its empty answer is a fact about the code and must stay an answer. A refusal here would mean the check had leaked past the two fields that own their values.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE guard_kind = 'ifdef' LIMIT 3",
+   "assert": {
+    "row_count": 0
+   }
+  },
+  {
+   "name": "control_a_known_kind_answers_on_find",
+   "description": "Anchors the case below on the FIND verb at corpus scale: a kind inside the universe answers rows on zephyr.",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'struct' LIMIT 1",
+   "assert": {
+    "row_count": 1
+   }
+  },
+  {
+   "name": "an_unknown_kind_is_refused_on_find_too",
+   "description": "The outline case pins one verb; the defect was on every filtering verb. FIND at least printed a zero total, but zero is still a claim about the corpus where an error is the fact about the query. The check runs once per operation over the op's clauses, ahead of dispatch, so it reaches every verb that carries a clause and both storage backends — this case is what proves it did not land in one verb.",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'impl' LIMIT 1",
+   "assert": {
+    "error": true,
+    "error_contains": "fql_kind"
+   }
+  }
+ ]
+}

@@ -7,7 +7,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::ir::{Clauses, CompareOp, GroupBy, PredicateValue, SortDirection};
+use crate::ir::{Clauses, CompareOp, GroupBy, Predicate, PredicateValue, SortDirection};
 use regex::Regex;
 
 mod impls;
@@ -253,6 +253,92 @@ pub fn reject_invalid_patterns(op: &crate::ir::ForgeQLIR) -> anyhow::Result<()> 
         }
     }
     Ok(())
+}
+
+/// Refuse a `WHERE` or `HAVING` value the ENGINE's own vocabulary does not hold.
+///
+/// The doctrine this comes from — *zero rows is a claim about the corpus and an
+/// error is a fact about the query* — was adopted for field NAMES. It reaches a
+/// VALUE only where the engine, not the corpus, decides which values exist:
+/// `fql_kind`, because a language plugin maps its grammar onto the kind
+/// vocabulary rather than extending it, and `role` on `FIND usages`, minted by
+/// the read pass that finds the site. `WHERE fql_kind = 'impl'` cannot match a
+/// row of any corpus, so an empty answer would be a claim about the code that
+/// no code could falsify.
+///
+/// **Every other field keeps the absent-value fast path, and that is the point.**
+/// `guard_kind = 'ifdef'` on a corpus holding no `#ifdef` answers empty, and
+/// empty is correct — the corpus owns those values, so the answer is data.
+/// [`crate::field_tiers::ValueUniverse`] is where a field says which kind of
+/// universe it has, and only two rows say `Engine`.
+///
+/// Only `=` and `!=` are checked, because only they name a whole value. A
+/// pattern is not a value: `fql_kind LIKE '%_block'` names no kind, and a regex
+/// matching none of them is a legitimate query with an empty answer.
+///
+/// Called once per operation from `dispatch_op`, over [`crate::ir::clauses_of`],
+/// so it covers every verb that carries a clause and both storage backends —
+/// exactly as [`reject_invalid_patterns`] does, and for the same reason: a value
+/// is wrong or right before any verb looks at it.
+///
+/// # Errors
+///
+/// Returns an error naming the accepted values when a `WHERE` or `HAVING`
+/// predicate compares an engine-owned field with `=` or `!=` against a value
+/// the engine cannot produce.
+pub fn reject_unknown_enum_values(op: &crate::ir::ForgeQLIR) -> anyhow::Result<()> {
+    let Some(clauses) = crate::ir::clauses_of(op) else {
+        return Ok(());
+    };
+    for pred in &clauses.where_predicates {
+        check_enum_value("WHERE", pred)?;
+    }
+    for pred in &clauses.having_predicates {
+        check_enum_value("HAVING", pred)?;
+    }
+    Ok(())
+}
+
+/// One predicate against its field's engine-owned value list, where it has one.
+///
+/// The value is rendered the way the row would carry it, so a number or a
+/// boolean written against a kind is compared as the text a row could hold
+/// rather than waved through for having the wrong type.
+fn check_enum_value(clause: &str, pred: &Predicate) -> anyhow::Result<()> {
+    let op_word = match pred.op {
+        CompareOp::Eq => "=",
+        CompareOp::NotEq => "!=",
+        _ => return Ok(()),
+    };
+    let Some(accepted) = crate::field_tiers::engine_owned_values(&pred.field) else {
+        return Ok(());
+    };
+    let written = match &pred.value {
+        PredicateValue::String(s) => s.clone(),
+        PredicateValue::Number(n) => n.to_string(),
+        PredicateValue::Bool(b) => b.to_string(),
+    };
+    if accepted.contains(&written.as_str()) {
+        return Ok(());
+    }
+    let list = accepted
+        .iter()
+        .map(|v| {
+            if v.is_empty() {
+                "'' (a row carrying no kind)".to_string()
+            } else {
+                (*v).to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    anyhow::bail!(
+        "{clause} {field} {op_word} '{written}' cannot match anything: {field} takes its \
+         values from the engine, not from the corpus, so '{written}' is a value no row of \
+         any corpus can carry — answering zero would be a claim about the code rather than \
+         about the query. Accepted: {list}.",
+        field = pred.field,
+    );
 }
 
 /// Refuse any universal clause on a verb that reads none of them.

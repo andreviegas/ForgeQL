@@ -158,3 +158,38 @@ Short, durable facts discovered while working in this codebase.
   type. There is no shadow mask: it existed to decline such a name outright, and
   declining cost 292 of the 293 segments a `WHERE name …` scan selects on this
   repository.
+
+## Engine-owned value universes (`fql_kind`, `role`)
+
+- Who owns a field's VALUES is declared on `FieldTier.values`
+  (`field_tiers::ValueUniverse`): `Corpus` for almost everything, `Engine(list)`
+  for `fql_kind` and `role` only. `filter::reject_unknown_enum_values` reads it
+  and refuses an `=`/`!=` value outside an engine-owned list.
+- It is called from `ForgeQLEngine::dispatch_op` over `ir::clauses_of`, beside
+  `reject_invalid_patterns` — one call, so every clause-carrying verb and both
+  storage backends are covered and a new verb inherits it. Do not add a
+  per-verb copy.
+- A field whose values the CORPUS owns must stay `ValueUniverse::Corpus`:
+  `guard_kind = 'ifdef'` answering empty is blessed behaviour, pinned by
+  `control_a_corpus_owned_value_answers_empty_and_is_not_refused` in
+  `engine_owned_value_refusal.json` and by a table test that fails if a third
+  field declares `Engine`.
+- `FQL_KIND_VALUES` must be a SUPERSET of what the plugins can produce — a kind
+  missing from it refuses a legitimate query. `tests/engine_owned_value_universes.rs`
+  reads every `crates/*/config/*.json` by walking the crate directories (not a
+  list of crates) and fails on a kind or role the declaration does not carry.
+  `error`, `guard`, `cast`, `macro_call` and `''` are written by the indexer as
+  literals rather than read out of a `kind_map`, and `code`/`text` likewise for
+  roles, so all of them are asserted separately. Three of the five DO also
+  appear in a `kind_map` today — which is the point: the config sweep passing
+  says nothing about the core route they actually travel.
+- A third hardcoded kind list exists, `file_indexer::ADDRESSABLE_FQL_KINDS`
+  (which kinds get an ordinal and a `node_id`). Its own module asserts it is a
+  SUBSET of `FQL_KIND_VALUES` — a kind added there and not to the universe
+  would refuse rows that exist. Subset, not equality: a number, a cast or an
+  operator row is queryable without being addressable by handle.
+- `WHERE fql_kind = ''` is ACCEPTED but answers 0 rows while `GROUP BY fql_kind`
+  counts thousands under the empty name — the kind prefilter resolves the value
+  through the segment string pool, which holds no empty value. Pinned as an
+  open defect (`the_kindless_rows_answer_their_own_equality`); do not read it as
+  the refusal swallowing the shape.

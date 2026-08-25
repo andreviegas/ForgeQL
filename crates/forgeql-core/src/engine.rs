@@ -367,9 +367,15 @@ impl ForgeQLEngine {
         ExecOutcome { result, coach }
     }
 
-    /// Dispatch a parsed operation to its handler. Pure routing — the
+    /// Dispatch a parsed operation to its handler, after the two clause checks
+    /// that are the same question for every verb: an unusable regex pattern,
+    /// and a value outside a set the engine itself owns. Both read the op's
+    /// clauses through `ir::clauses_of`, so a verb added to that function is
+    /// covered without being named here, and both storage backends are covered
+    /// because neither has run yet. Everything else is routing — the
     /// surrounding session/worktree guards, path relativization, and budget
-    /// accounting live in `execute`.
+    /// accounting live in `execute`, and the per-verb field checks live where
+    /// each verb executes.
     fn dispatch_op(
         &mut self,
         user_id: &str,
@@ -377,6 +383,7 @@ impl ForgeQLEngine {
         op: &ForgeQLIR,
     ) -> Result<ForgeQLResult> {
         crate::filter::reject_invalid_patterns(op)?;
+        crate::filter::reject_unknown_enum_values(op)?;
         match op {
             // --- Source / session management ---
             ForgeQLIR::CreateSource { name, url } => self.create_source(name, url),

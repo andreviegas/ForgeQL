@@ -9,8 +9,10 @@
 //! [`FIELD_TIERS`] is that declaration. Each row records where the value is
 //! stored, which structure serves each operator class, whether that structure
 //! decides the answer or only proposes candidates, what it cannot see and
-//! which mechanism covers that, the budgets bounding it, and the measurement
-//! (or the bench class that would produce one).
+//! which mechanism covers that, the budgets bounding it, the measurement
+//! (or the bench class that would produce one), and who owns the set of values
+//! the field can take — the corpus, whose unstored values answer empty, or the
+//! engine, whose unknown values are refused ([`ValueUniverse`]).
 //!
 //! # Scope
 //!
@@ -31,11 +33,18 @@
 //! that does answer it. That family was the defect this table was built to
 //! surface: each of those names was accepted and answered a confident zero.
 //!
-//! # This table is declarative
+//! # This table is checked, and in four places consulted
 //!
-//! Nothing reads it at query time. The tests in `tests/field_tier_table.rs`
-//! assert that it agrees with the const lists and the behaviour it describes,
-//! so a disagreement is a test failure rather than a silent wrong answer.
+//! Most of it nothing reads while a query runs: the tests in
+//! `tests/field_tier_table.rs` assert that it agrees with the const lists and
+//! the behaviour it describes, so a disagreement is a test failure rather than
+//! a silent wrong answer. Four things ARE read at query time, named here so
+//! the list stays closed — [`canonical`] resolves an alias to the field it
+//! spells, [`FieldTier::refusal`] is the text an agent is shown when a field
+//! is declined, [`written_after_materialisation`] keeps the early and late
+//! predicate readers agreeing about a field no column holds, and
+//! [`engine_owned_values`] decides whether an unrecognised VALUE is a refusal
+//! or an honest empty answer.
 
 /// Where a field's value comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -337,6 +346,128 @@ pub struct Budget {
     pub per_workspace: usize,
 }
 
+/// Who owns the set of values a field can take.
+///
+/// This is what decides what a value OUTSIDE the set means. Where the CORPUS
+/// owns the universe, a value it never stored is a legitimate question with an
+/// empty answer — `guard_kind = 'ifdef'` on a corpus holding no `#ifdef`
+/// answers nothing, and nothing is the truth about that corpus. Where the
+/// ENGINE owns it, no corpus anywhere can hold a value outside the list, so
+/// naming one is a fact about the query rather than about the code, and it is
+/// refused at validation with the accepted values named
+/// ([`crate::filter::reject_unknown_enum_values`]).
+///
+/// Corpus-owned is the default and stays the default: the distinction exists to
+/// keep the refusal OFF every field whose empty answer is honest, not to widen
+/// it.
+#[derive(Debug, Clone, Copy)]
+pub enum ValueUniverse {
+    /// The corpus decides which values exist, so an unrecognised one answers
+    /// empty and the empty answer is correct.
+    Corpus,
+    /// The engine decides, and these are the values it can produce.
+    Engine(&'static [&'static str]),
+}
+
+/// Every `fql_kind` the engine can put on a row.
+///
+/// The engine owns this universe because a language plugin does not invent
+/// kinds — it MAPS its grammar's node kinds onto the names here (`kind_map`,
+/// `block_groups`) — and the indexer mints a handful itself as literals:
+/// `guard`, `error`, `cast`, `macro_call`, and the empty kind a row carries
+/// when nothing maps its grammar node. A name outside this list therefore
+/// cannot appear on a row of any corpus — not "by construction", but because
+/// nothing can put one there without a core edit that this list is part of.
+///
+/// This list being a SUPERSET is safe; being short is not — a kind missing here
+/// would refuse a legitimate query. `tests/engine_owned_value_universes.rs`
+/// reads every language config in the workspace (by glob, so a new plugin crate
+/// is covered without being named) and fails if one maps to a kind this list
+/// does not carry; it names the core-minted kinds separately, since no config
+/// declares them and the sweep cannot see that route. A third list,
+/// `file_indexer::ADDRESSABLE_FQL_KINDS`, is asserted to be a subset of this
+/// one in its own module, for the same reason.
+pub const FQL_KIND_VALUES: &[&str] = &[
+    // The kindless row. `GROUP BY fql_kind` publishes these rows under the
+    // empty name, so `= ''` is a question the engine puts into an agent's hands
+    // and must not refuse. It is accepted here and NOT yet served: the equality
+    // path resolves `''` through the segment string pool, which holds no such
+    // value, so it answers no rows while the grouping counts thousands. That
+    // gap is pinned as an open defect
+    // (`the_kindless_rows_answer_their_own_equality`) — the one value in this
+    // list whose empty answer is not yet a fact about the corpus.
+    "",
+    // Definitions and declarations.
+    "function",
+    "class",
+    "struct",
+    "union",
+    "interface",
+    "enum",
+    "enumerator",
+    "field",
+    "method",
+    "variable",
+    "global_variable",
+    "local_declaration",
+    "namespace",
+    "type_alias",
+    "macro",
+    "macro_call",
+    "import",
+    // Statements and expressions.
+    "call_statement",
+    "return_expression",
+    "if",
+    "for",
+    "while",
+    "switch",
+    "do",
+    "do_while",
+    "number",
+    "cast",
+    "increment",
+    "compound_assignment",
+    "shift_expression",
+    // Structured text: JSON, YAML, TOML, INI, XML, Markdown, reStructuredText,
+    // CMake, Make, just, Kconfig, DBC.
+    "object",
+    "array",
+    "pair",
+    "section",
+    "heading",
+    "paragraph",
+    "list_item",
+    "code_block",
+    "table",
+    "block_quote",
+    // Comments, and the runs of adjacent siblings a language groups into one
+    // addressable node.
+    "comment",
+    "comment_block",
+    "include_block",
+    "include_group",
+    "macro_block",
+    "import_block",
+    "type_alias_block",
+    "array_block",
+    // Written by the indexer as literals rather than read out of a `kind_map`:
+    // a conditional directive with its guarded region, and a span the parser
+    // could not parse. `cast` and `macro_call` above travel the same route —
+    // they are grouped by what they mean rather than by where their name comes
+    // from — and the empty kind at the top of this list is the fifth.
+    "guard",
+    "error",
+];
+
+/// Every `role` an occurrence row can carry on `FIND usages`.
+///
+/// Engine-owned on the same terms as [`FQL_KIND_VALUES`]: `code` is a resolved
+/// identifier, `text` is a site found by reading the file rather than by a
+/// posting, and the rest are the mention roles a language config may declare
+/// (`mention_text_kinds`). The same glob test checks the configs against this
+/// list.
+pub const USAGE_ROLE_VALUES: &[&str] = &["code", "comment", "string", "config", "doc", "text"];
 /// One queryable field: where it lives, what serves it, what that cannot see.
 #[derive(Debug, Clone, Copy)]
 pub struct FieldTier {
@@ -371,6 +502,10 @@ pub struct FieldTier {
     /// every row and matches none of them. One name, answerable in two clauses
     /// and refused in the third.
     pub post_group: bool,
+    /// Who owns the set of values this field takes, and therefore what a value
+    /// outside that set means — an empty answer about the corpus, or a refusal
+    /// naming the accepted values. See [`ValueUniverse`].
+    pub values: ValueUniverse,
 }
 
 impl FieldTier {
@@ -522,6 +657,7 @@ const fn posted(field: &'static str, per_file: usize, per_workspace: usize) -> F
         }),
         elsewhere: None,
         post_group: false,
+        values: ValueUniverse::Corpus,
     }
 }
 
@@ -716,6 +852,7 @@ const fn refused(
         budget: None,
         elsewhere,
         post_group: false,
+        values: ValueUniverse::Corpus,
     }
 }
 
@@ -740,6 +877,7 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         budget: None,
         elsewhere: None,
         post_group: false,
+        values: ValueUniverse::Corpus,
     },
     FieldTier {
         field: "fql_kind",
@@ -751,6 +889,7 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         budget: None,
         elsewhere: None,
         post_group: false,
+        values: ValueUniverse::Engine(FQL_KIND_VALUES),
     },
     FieldTier {
         field: "language",
@@ -762,6 +901,7 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         budget: None,
         elsewhere: None,
         post_group: false,
+        values: ValueUniverse::Corpus,
     },
     FieldTier {
         field: "path",
@@ -775,6 +915,7 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         budget: None,
         elsewhere: None,
         post_group: false,
+        values: ValueUniverse::Corpus,
     },
     FieldTier {
         field: "line",
@@ -786,6 +927,7 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         budget: None,
         elsewhere: None,
         post_group: false,
+        values: ValueUniverse::Corpus,
     },
     FieldTier {
         field: "usages",
@@ -797,6 +939,7 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         budget: None,
         elsewhere: None,
         post_group: false,
+        values: ValueUniverse::Corpus,
     },
     FieldTier {
         field: "node_id",
@@ -808,6 +951,7 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         budget: None,
         elsewhere: None,
         post_group: false,
+        values: ValueUniverse::Corpus,
     },
     FieldTier {
         field: "body",
@@ -821,6 +965,7 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         budget: None,
         elsewhere: None,
         post_group: false,
+        values: ValueUniverse::Corpus,
     },
     FieldTier {
         field: "role",
@@ -836,6 +981,7 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         budget: None,
         elsewhere: None,
         post_group: false,
+        values: ValueUniverse::Engine(USAGE_ROLE_VALUES),
     },
     // `value` and `type` are named in CORE_WHERE_FIELDS but resolve through
     // the enrichment extras like any other enrichment column, so they are
@@ -853,6 +999,7 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         }),
         elsewhere: None,
         post_group: false,
+        values: ValueUniverse::Corpus,
     },
     FieldTier {
         field: "type",
@@ -867,6 +1014,7 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         }),
         elsewhere: None,
         post_group: false,
+        values: ValueUniverse::Corpus,
     },
     // ── Refused: no symbol row can carry these, and the query says so ─────
     //
@@ -1051,6 +1199,7 @@ pub const CATCH_ALL_FIELD: FieldTier = FieldTier {
     }),
     elsewhere: None,
     post_group: false,
+    values: ValueUniverse::Corpus,
 };
 
 /// The declared serving path for `field`, by canonical name or alias, falling
@@ -1084,6 +1233,23 @@ pub fn lookup(field: &str) -> Option<&'static FieldTier> {
 #[must_use]
 pub fn canonical(field: &str) -> &str {
     lookup(field).map_or(field, |tier| tier.field)
+}
+
+/// The accepted values for a field whose value universe the ENGINE owns.
+///
+/// `None` for every field whose values the CORPUS decides, and that is most of
+/// them: those keep the absent-value fast path, where a value the corpus never
+/// stored answers empty and the empty answer is a fact about the code. A
+/// `Some` here is the narrower claim that no corpus can ever hold a value
+/// outside the list, which is what makes refusing one a fact about the query.
+///
+/// The field is canonicalised by the caller, as everywhere else in this module.
+#[must_use]
+pub fn engine_owned_values(field: &str) -> Option<&'static [&'static str]> {
+    match lookup(field)?.values {
+        ValueUniverse::Corpus => None,
+        ValueUniverse::Engine(values) => Some(values),
+    }
 }
 
 /// Every field the symbol query refuses outright, in table order.

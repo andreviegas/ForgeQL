@@ -103,62 +103,72 @@ pub struct IndexContext<'a> {
 /// Phase A policy: only addressable semantic nodes get `node_ids`; analysis-only
 /// fragments (number/cast/operators/etc.) must not.
 fn is_addressable_fql_kind(fql_kind: &str) -> bool {
-    matches!(
-        fql_kind,
-        "function"
-            | "struct"
-            | "union"
-            | "class"
-            | "interface"
-            | "enum"
-            | "enumerator"
-            | "field"
-            | "method"
-            | "import"
-            | "namespace"
-            | "type_alias"
-            | "macro"
-            | "include_group"
-            | "variable"
-            | "global_variable"
-            | "local_declaration"
-            | "if"
-            | "for"
-            | "while"
-            | "switch"
-            | "do"
-            | "do_while"
-            | "call_statement"
-            | "return_expression"
-            | "comment"
-            | "comment_block"
-            | "section"
-            | "heading"
-            | "list_item"
-            | "paragraph"
-            | "code_block"
-            | "table"
-            | "block_quote"
-            | "pair"
-            | "object"
-            | "array"
-            | "macro_call"
-            // `#ifdef` / `#if` / `#elif`. Addressable so a config flag's guard
-            // sites answer to `fql_kind = 'guard'` and can be read and edited
-            // by handle, the same as any other construct. Note `guard` is also
-            // an enrichment FIELD name — see the doc table.
-            | "guard"
-            // A region the parser could not parse.  Addressable ON PURPOSE:
-            // mapping the damage was only half the contract — an agent must be
-            // able to `SHOW NODE` it and `CHANGE NODE` it to repair it.  The
-            // engine still never repairs it itself (P1).
-            //
-            // This CONSUMES ordinals, so node_ids shift in every file that holds
-            // an error.  That is why no golden case may hardcode a node_id: they
-            // all capture handles from a FIND at run time now.
-            | "error"
-    )
+    ADDRESSABLE_FQL_KINDS.contains(&fql_kind)
 }
+
+/// The kinds a row gets an ordinal and a `node_id` for.
+///
+/// A list rather than a `matches!` chain so it can be compared with
+/// [`crate::field_tiers::FQL_KIND_VALUES`], the set a clause value is refused
+/// against: a kind addressable here and absent there would make
+/// `WHERE fql_kind = '<it>'` refuse rows that demonstrably exist. The test
+/// below is what ties the two. The value universe is deliberately the wider of
+/// the two — a number, a cast or an operator row is queryable without being
+/// addressable by handle — so the relation asserted is subset, not equality.
+const ADDRESSABLE_FQL_KINDS: &[&str] = &[
+    "function",
+    "struct",
+    "union",
+    "class",
+    "interface",
+    "enum",
+    "enumerator",
+    "field",
+    "method",
+    "import",
+    "namespace",
+    "type_alias",
+    "macro",
+    "include_group",
+    "variable",
+    "global_variable",
+    "local_declaration",
+    "if",
+    "for",
+    "while",
+    "switch",
+    "do",
+    "do_while",
+    "call_statement",
+    "return_expression",
+    "comment",
+    "comment_block",
+    "section",
+    "heading",
+    "list_item",
+    "paragraph",
+    "code_block",
+    "table",
+    "block_quote",
+    "pair",
+    "object",
+    "array",
+    "macro_call",
+    // `#ifdef` / `#if` / `#elif`. Addressable so a config flag's guard
+    // sites answer to `fql_kind = 'guard'` and can be read and edited
+    // by handle, the same as any other construct. Note `guard` is also
+    // an enrichment FIELD name — see the doc table.
+    "guard",
+    // A region the parser could not parse.  Addressable ON PURPOSE:
+    // mapping the damage was only half the contract — an agent must be
+    // able to `SHOW NODE` it and `CHANGE NODE` it to repair it.  The
+    // engine still never repairs it itself (P1).
+    //
+    // This CONSUMES ordinals, so node_ids shift in every file that holds
+    // an error.  That is why no golden case may hardcode a node_id: they
+    // all capture handles from a FIND at run time now.
+    "error",
+];
 
 // -----------------------------------------------------------------------
 // Index one file (second pass)
@@ -225,4 +235,42 @@ pub(super) fn index_file_from_source(
     }
 
     Ok(ctx.table.rows.len() - before)
+}
+#[cfg(test)]
+mod addressable_kinds_are_in_the_value_universe {
+    /// Every addressable kind is a kind the value universe accepts.
+    ///
+    /// Two hardcoded kind lists live in core now — this one and
+    /// [`crate::field_tiers::FQL_KIND_VALUES`], which is what
+    /// `filter::reject_unknown_enum_values` refuses against. Nothing else ties
+    /// them, and the direction that hurts is a kind added HERE and not there:
+    /// rows of it would exist, be addressable, and `WHERE fql_kind = '<new>'`
+    /// would be refused — the exact failure the refusal was built to prevent,
+    /// arriving through the door it opened.
+    ///
+    /// Subset, not equality: the universe is deliberately wider, because a
+    /// number, a cast or an operator row is queryable without being addressable
+    /// by handle.
+    #[test]
+    fn every_addressable_kind_is_a_value_the_universe_accepts() {
+        use super::{ADDRESSABLE_FQL_KINDS, is_addressable_fql_kind};
+        let missing: Vec<&str> = ADDRESSABLE_FQL_KINDS
+            .iter()
+            .copied()
+            .filter(|k| !crate::field_tiers::FQL_KIND_VALUES.contains(k))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "addressable kinds absent from FQL_KIND_VALUES, so a query naming one \
+             would be refused although rows of it exist: {missing:?}"
+        );
+        // The list this walks must be the list the predicate answers from, or
+        // the assertion is about a copy nothing consults.
+        for kind in ADDRESSABLE_FQL_KINDS {
+            assert!(
+                is_addressable_fql_kind(kind),
+                "{kind} is enumerated here but is_addressable_fql_kind says no"
+            );
+        }
+    }
 }
