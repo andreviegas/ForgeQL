@@ -165,6 +165,19 @@ Short, durable facts discovered while working in this codebase.
   (`field_tiers::ValueUniverse`): `Corpus` for almost everything, `Engine(list)`
   for `fql_kind` and `role` only. `filter::reject_unknown_enum_values` reads it
   and refuses an `=`/`!=` value outside an engine-owned list.
+- **`!=` is the one shape where a COMPLETE answer became a refusal.**
+  `fql_kind != 'impl'` returned every row (57,467 on forgeql-pub.frozen), not
+  zero — so the "zero rows is a claim about the corpus" doctrine does not reach
+  it. The ground is different: the predicate was inert, and an inert filter is
+  invisible the way an empty one is. Say so wherever the change is described;
+  the `=` framing does not cover it.
+- **A value universe must cover what the engine RENDERS, not only what it
+  stores.** Three emit paths substitute a literal: `query/outline.rs` (×2) and
+  `ast/show/members.rs` render `unknown` for the kindless row, and `compact.rs`
+  renders `''` for a site with no role. All three spellings are accepted
+  values. `ast/show/members.rs` used to print the RAW tree-sitter kind there —
+  a back door to `node_kind`, which is refused as a clause field everywhere —
+  and now renders `unknown` like the other two.
 - It is called from `ForgeQLEngine::dispatch_op` over `ir::clauses_of`, beside
   `reject_invalid_patterns` — one call, so every clause-carrying verb and both
   storage backends are covered and a new verb inherits it. Do not add a
@@ -188,7 +201,7 @@ Short, durable facts discovered while working in this codebase.
   do NOT reuse that family blindly — `FQL_COMPOUND_ASSIGN`/`FQL_SHIFT` there
   do not match the kinds rows carry).
 - **`unknown` is the RENDERED spelling of the kindless row**
-  (`query/outline.rs`, both emit paths); the stored value is `''`. Both are
+  (`query/outline.rs` ×2 and `ast/show/members.rs`); the stored value is `''`. Both are
   accepted values, because the outline filters on what it printed. A refusal
   that knows one spelling and a renderer that emits the other is the regression
   `the_rendered_spelling_of_the_kindless_row_is_inside_the_universe` guards.

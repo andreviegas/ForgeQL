@@ -1892,10 +1892,13 @@ fn only_the_two_engine_owned_fields_declare_a_value_universe() {
 
 #[test]
 fn the_value_universe_is_reached_through_the_field_as_written() {
-    // The refusal canonicalises before it looks the universe up, so the alias
-    // reaches the same list; and a field the table does not know at all — every
-    // language-declared enrichment field — answers `None`, which is what keeps
-    // the check off them.
+    // The refusal passes the field AS WRITTEN; `lookup` is what matches a row's
+    // aliases as well as its canonical name, so `kind` reaches `fql_kind`'s
+    // list without anyone canonicalising first. That is the arrangement this
+    // asserts: tightening `lookup` to an exact match would drop the alias from
+    // the check with nothing else noticing. A field the table does not know at
+    // all — every language-declared enrichment field — answers `None`, which is
+    // what keeps the check off them.
     assert_eq!(
         engine_owned_values("kind"),
         engine_owned_values("fql_kind"),

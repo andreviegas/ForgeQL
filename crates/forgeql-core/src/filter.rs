@@ -276,6 +276,16 @@ pub fn reject_invalid_patterns(op: &crate::ir::ForgeQLIR) -> anyhow::Result<()> 
 /// pattern is not a value: `fql_kind LIKE '%_block'` names no kind, and a regex
 /// matching none of them is a legitimate query with an empty answer.
 ///
+/// **`!=` rests on a different argument from `=`, and it is worth being exact
+/// about which.** The doctrine above is about a ZERO — and `!=` never answered
+/// zero. `WHERE fql_kind != 'impl'` returned every row, a complete and correct
+/// answer to the question as asked. It is refused all the same because the
+/// PREDICATE was inert: it excluded nothing, and an inert filter is invisible
+/// in exactly the way an empty one is — the agent reads a filtered result and
+/// it is the unfiltered corpus. This is the one shape in this check where an
+/// answer, not a silence, becomes an error, so it is stated in every agent doc
+/// rather than left inside the `=` framing that does not cover it.
+///
 /// Called once per operation from `dispatch_op`, over [`crate::ir::clauses_of`],
 /// so it covers every verb that carries a clause and both storage backends —
 /// exactly as [`reject_invalid_patterns`] does, and for the same reason: a value

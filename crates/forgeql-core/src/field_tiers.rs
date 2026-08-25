@@ -428,7 +428,7 @@ pub const FQL_KIND_VALUES: &[&str] = &[
     // Stored it is the empty string, and `GROUP BY fql_kind` publishes those
     // rows under the empty name — so `= ''` is a question the engine puts into
     // an agent's hands and must not refuse. `SHOW outline` renders the same row
-    // as `unknown` (`query/outline.rs`, both emit paths), and
+    // as `unknown` (`query/outline.rs` twice, `ast/show/members.rs` once), and
     // `SHOW outline … WHERE fql_kind = 'unknown'` matches what it rendered and
     // answers rows. A refusal that knew only one spelling would contradict a
     // value the engine had just printed, so both are accepted here; only the
@@ -512,7 +512,16 @@ pub const FQL_KIND_VALUES: &[&str] = &[
 /// posting, and the rest are the mention roles a language config may declare
 /// (`mention_text_kinds`). The same glob test checks the configs against this
 /// list.
-pub const USAGE_ROLE_VALUES: &[&str] = &["code", "comment", "string", "config", "doc", "text"];
+pub const USAGE_ROLE_VALUES: &[&str] = &[
+    "code", "comment", "string", "config", "doc", "text",
+    // The spelling the renderer emits where a site carries no role at all.
+    // The in-memory backend tags none of them (`SiteView.role` is `None`
+    // there) and the CSV renderer prints that as the empty string, so `''` is
+    // a value an agent can read off an answer — and therefore one they can
+    // filter on. Accepted for the same reason `unknown` is on the kinds: a
+    // universe that refuses what the engine just printed contradicts itself.
+    "",
+];
 /// One queryable field: where it lives, what serves it, what that cannot see.
 #[derive(Debug, Clone, Copy)]
 pub struct FieldTier {
@@ -1288,7 +1297,10 @@ pub fn canonical(field: &str) -> &str {
 /// `Some` here is the narrower claim that no corpus can ever hold a value
 /// outside the list, which is what makes refusing one a fact about the query.
 ///
-/// The field is canonicalised by the caller, as everywhere else in this module.
+/// The field is taken AS WRITTEN — the caller does not canonicalise, and does
+/// not need to: `lookup` matches a row's aliases as well as its canonical name,
+/// which is how `kind` reaches `fql_kind`'s universe. Tightening `lookup` to an
+/// exact match would silently drop every alias from the check.
 #[must_use]
 pub fn engine_owned_values(field: &str) -> Option<&'static [&'static str]> {
     match lookup(field)?.values {

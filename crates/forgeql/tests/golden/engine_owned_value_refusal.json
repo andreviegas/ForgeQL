@@ -53,7 +53,7 @@
   },
   {
    "name": "the_rendered_spelling_of_the_kindless_row_is_inside_the_universe",
-   "description": "A row nothing maps stores the empty kind, and SHOW outline renders it as 'unknown' (query/outline.rs, both emit paths). Filtering on what the engine just printed answered these three rows before this check existed, so a universe that knew only the stored spelling would have refused a query the engine's own output invites — the engine contradicting a value it had printed. Both spellings are accepted; the rendering decides which one an agent sees. This case is the regression guard: it fails the moment the refusal knows one spelling and the renderer another.",
+   "description": "A row nothing maps stores the empty kind, and SHOW outline renders it as 'unknown' — all three emit paths do, the columnar outline twice and the in-memory one once. Filtering on what the engine just printed answered these three rows before this check existed, so a universe that knew only the stored spelling would have refused a query the engine's own output invites — the engine contradicting a value it had printed. Both spellings are accepted; the rendering decides which one an agent sees. This case is the regression guard: it fails the moment the refusal knows one spelling and the renderer another.",
    "use": "forgeql-pub.frozen",
    "fql": "SHOW outline OF 'crates/forgeql-core/src/ast/enrich/casts.rs' ALL WHERE fql_kind = 'unknown'",
    "assert": {
@@ -68,6 +68,15 @@
    "assert": {
     "row_count": 18,
     "total": 18
+   }
+  },
+  {
+   "name": "the_rendered_empty_role_is_inside_the_universe",
+   "description": "A site with no role at all renders as the empty string — the in-memory backend tags none of them, and the CSV renderer prints that. It is a value an agent can read off an answer, so it must be a value they can filter on: a universe that refuses what the engine printed contradicts itself, the same lesson the outline's 'unknown' spelling taught. On this indexed corpus the answer is legitimately empty, because the columnar read pass tags every site it finds — so what this case pins is the ACCEPTANCE, and the zero is the corpus speaking rather than a refusal.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND usages OF 'ClauseTarget' WHERE role = '' LIMIT 3",
+   "assert": {
+    "row_count": 0
    }
   },
   {

@@ -5,7 +5,11 @@
   WHERE fql_kind = 'impl'` printed a header and no rows at all, which reads as
   "this file has none of those". Both now fail with the accepted kinds named.
   The same holds for `role` on `FIND usages`, whose values (`code`, `comment`,
-  `string`, `config`, `doc`, `text`) are minted by the pass that finds the site.
+  `string`, `config`, `doc`, `text`, and the empty string a site with no role at
+  all renders as) are minted by the pass that finds the site. Only the in-memory
+  backend leaves a site untagged, and there every `role = …` filter is empty —
+  an empty answer to one is a fact about that backend rather than about the
+  code.
 
 - **The boundary is the other half of the change.** This applies only where the
   ENGINE owns the set of values a field can take. Where the CORPUS owns it, a
@@ -14,8 +18,14 @@
   not an error. Exactly two fields declare an engine-owned value set, and a test
   fails if a third is added without that being a deliberate decision.
 
-- What moved, per operator. `=` and `!=` are checked — `!=` because it excludes
-  nothing and returns everything, which is the harder wrong answer to notice.
+- What moved, per operator. `=` and `!=` are checked. **`!=` is the one shape
+  where a complete answer became a refusal**, and it is worth being exact about
+  why: `WHERE fql_kind != 'impl'` did not answer zero, it answered every row —
+  57,467 of them on this repository — which is the correct answer to the
+  question as asked and a useless one to the question meant. The predicate
+  excluded nothing, and an inert filter is invisible in exactly the way an empty
+  one is: you read a filtered result and you are holding the whole corpus. The
+  same goes for `role != …`.
   Patterns are untouched, because a pattern names no value: `fql_kind LIKE
   '%_block'` still answers, 2,660 rows on this repository. `ORDER BY` and
   `GROUP BY` name a field rather than a value and are unaffected.

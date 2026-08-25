@@ -143,8 +143,19 @@ pub fn show_outline(index: &SymbolTable, workspace: &Workspace, file: &str) -> R
         let rel = workspace.relative(row_path).display().to_string();
         let ln = line_for(&mut byte_cache, row_path, row.byte_range.start);
         let fql = index.fql_kind_of(row);
-        let nk = index.node_kind_of(row);
-        let kind = if fql.is_empty() { nk } else { fql };
+        // The same rendering the columnar outline uses: a node no language maps
+        // reads as `unknown`, not as its raw tree-sitter kind. It matters
+        // because that rendered string is what a clause filters on here — the
+        // filter runs over the entries after they are built — and `fql_kind` is
+        // an engine-owned value set, so a raw grammar name printed into it
+        // would be a value the refusal cannot accept. `node_kind` is refused as
+        // a clause field everywhere, and printing one under `fql_kind` was the
+        // back door to it.
+        let kind = if fql.is_empty() {
+            crate::field_tiers::UNKNOWN_KIND
+        } else {
+            fql
+        };
         let node_id = row
             .ordinal
             .map(|ord| crate::node_id::make_node_id(&rel, ord));
