@@ -1349,7 +1349,7 @@ Applies to: `SHOW outline OF`
 | Field | Type | Description |
 |---|---|---|
 | `name` | string | Symbol name |
-| `fql_kind` / `kind` | string | Universal kind (e.g. `function`, `class`). Falls back to raw tree-sitter name for unmapped nodes. Rows are printed under `fql_kind`; `kind` filters and sorts the same column. |
+| `fql_kind` / `kind` | string | Universal kind (e.g. `function`, `class`). A node no language maps is stored with no kind at all and **rendered here as `unknown`** — not as its raw tree-sitter name — so `WHERE fql_kind = 'unknown'` on an outline matches what the outline printed. On a symbol row the same node reads as the empty kind: `GROUP BY fql_kind` groups it under the empty name. Both spellings are accepted values; a kind that is neither is refused naming every accepted one, because the engine and not the corpus owns this set. Rows are printed under `fql_kind`; `kind` filters and sorts the same column. |
 | `path` / `file` | string | Relative file path |
 | `line` | integer | 1-based start line |
 | `depth` | integer | Nesting depth in the structural tree (0 = top-level). Filterable and sortable. |

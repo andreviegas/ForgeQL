@@ -280,7 +280,7 @@ fn push_outline_tree(
                 "name": reader
                     .extra_field_str("block_label", r)
                     .unwrap_or_else(|| reader.name_of(r)),
-                "fql_kind": if kind.is_empty() { "unknown" } else { kind },
+                "fql_kind": if kind.is_empty() { crate::field_tiers::UNKNOWN_KIND } else { kind },
                 "path": rel_path,
                 "line": lines[r as usize],
                 "node_id": ords[r as usize].map(|o| {
@@ -360,7 +360,7 @@ fn push_outline_all_source_order(
             "name": reader
                 .extra_field_str("block_label", r)
                 .unwrap_or_else(|| reader.name_of(r)),
-            "fql_kind": if kind.is_empty() { "unknown" } else { kind },
+            "fql_kind": if kind.is_empty() { crate::field_tiers::UNKNOWN_KIND } else { kind },
             "path": rel_path,
             "line": reader.line_of(r) as usize,
             "node_id": reader.ordinal_of(r).map(|o| {

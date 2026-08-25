@@ -170,7 +170,7 @@ pub(super) fn process_node_rows(
                     &enrich_ctx,
                     ts_language,
                     &func_name,
-                    "macro_call",
+                    crate::field_tiers::MACRO_CALL_KIND,
                     parent_ordinal,
                     None,
                     key_path,

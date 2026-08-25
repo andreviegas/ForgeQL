@@ -20,10 +20,15 @@
   '%_block'` still answers, 2,660 rows on this repository. `ORDER BY` and
   `GROUP BY` name a field rather than a value and are unaffected.
 
-- `fql_kind = ''` — the kind a row carries when nothing maps its grammar node —
-  is **accepted**, because `GROUP BY fql_kind` publishes those rows under that
-  name and refusing the equality would close a shape the grouping had just
-  opened. It is not yet ANSWERED: the equality returns no rows where the
+- The kindless row — a node no language maps — is accepted under **both** the
+  spellings the engine publishes for it. Stored it is the empty kind, which is
+  how `GROUP BY fql_kind` groups it; `SHOW outline` renders it as `unknown`,
+  and `SHOW outline … WHERE fql_kind = 'unknown'` matches what the outline
+  printed and answers rows. A refusal that knew only the stored spelling would
+  have contradicted a value the engine had just put on screen.
+
+- `fql_kind = ''` is accepted for that reason and is not yet ANSWERED: the
+  equality returns no rows where the
   grouping counts 2,169 on this repository, because the kind lookup resolves a
   predicate value through the segment string pool and the empty kind is not a
   pooled value. That is now recorded as an open defect rather than left

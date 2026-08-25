@@ -493,7 +493,7 @@ forgeql (binary)
 
 ## Adding a New Language
 
-For a structured-text format, add a module + `config/<lang>.json` kind map inside `forgeql-lang-text` — no new crate needed. For a full programming language, add a single new crate with no changes to `forgeql-core`:
+For a structured-text format, add a module + `config/<lang>.json` kind map inside `forgeql-lang-text` — no new crate needed. For a full programming language, add a single new crate, with no changes to `forgeql-core` beyond the two value lists noted after the steps:
 
 The JSON is deserialized strictly: a key the loader does not recognise is a hard
 error that names the offending key, not a silently ignored line. A correctly
@@ -513,4 +513,16 @@ off.
    ]));
    ```
 
-Everything else — indexing, enrichment, the clause pipeline, MCP tools, query functions — works without modification.
+Everything else — indexing, enrichment, the clause pipeline, MCP tools, query
+functions — works without modification, with **one obligation on the core
+side**: a plugin may only map its grammar onto `fql_kind` names, and declare
+`mention_text_kinds` roles, that `field_tiers::FQL_KIND_VALUES` and
+`USAGE_ROLE_VALUES` already carry. Those two lists are what a clause VALUE is
+refused against, so a kind or role a plugin introduces and core does not know
+would be refused on `WHERE` although rows of it exist.
+`crates/forgeql-core/tests/engine_owned_value_universes.rs` reads every
+`crates/*/config/*.json` and fails on exactly that, so the omission is a red
+gate rather than a wrong answer — but it does mean a genuinely new kind is a
+two-file change, and the sentence above is true of everything except those two
+lists. (Deriving both from the `LanguageRegistry` at query time would remove
+the obligation; it is not what ships today.)

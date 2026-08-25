@@ -369,34 +369,79 @@ pub enum ValueUniverse {
     Engine(&'static [&'static str]),
 }
 
+/// The `fql_kind` strings the indexer writes as literals rather than reading
+/// out of a language config's `kind_map`.
+///
+/// Spelled once and used at the site that writes them, because the config sweep
+/// in `tests/engine_owned_value_universes.rs` cannot see this route: a rename at
+/// the writing site would leave [`FQL_KIND_VALUES`] behind, and a kind the
+/// engine mints but the universe does not carry refuses a legitimate query.
+///
+/// Two of them already had a name in `ast::lang`'s older `FQL_*` family and are
+/// aliased to it rather than respelled. Note that family is not a safe blanket
+/// source: `FQL_COMPOUND_ASSIGN` and `FQL_SHIFT` there read `compound_assign`
+/// and `shift`, while the kinds rows actually carry are `compound_assignment`
+/// and `shift_expression` — so only the two verified below are reused.
+pub const ERROR_KIND: &str = crate::ast::lang::FQL_ERROR;
+/// See [`ERROR_KIND`].
+pub const GUARD_KIND: &str = "guard";
+/// See [`ERROR_KIND`].
+pub const CAST_KIND: &str = crate::ast::lang::FQL_CAST;
+/// See [`ERROR_KIND`].
+pub const MACRO_CALL_KIND: &str = "macro_call";
+/// How `SHOW outline` renders a row that carries no kind at all.
+///
+/// The stored value is the empty string; this is the spelling an agent sees and
+/// therefore the spelling they filter on, so both are accepted values. See
+/// [`ERROR_KIND`] for why it is spelled once.
+pub const UNKNOWN_KIND: &str = "unknown";
 /// Every `fql_kind` the engine can put on a row.
 ///
 /// The engine owns this universe because a language plugin does not invent
 /// kinds — it MAPS its grammar's node kinds onto the names here (`kind_map`,
 /// `block_groups`) — and the indexer mints a handful itself as literals:
-/// `guard`, `error`, `cast`, `macro_call`, and the empty kind a row carries
-/// when nothing maps its grammar node. A name outside this list therefore
-/// cannot appear on a row of any corpus — not "by construction", but because
-/// nothing can put one there without a core edit that this list is part of.
+/// `guard`, `error`, `cast`, `macro_call`, the empty kind a row carries when
+/// nothing maps its grammar node, and `unknown`, which is how `SHOW outline`
+/// renders that same row.
+///
+/// **The ownership is a convention this list does not enforce.**
+/// `LanguageConfig::kind_map_lookup` returns whatever the config JSON says,
+/// with no validation, so a config-only edit CAN put an unlisted kind on rows —
+/// and it would then be refused on `WHERE` although its rows exist. What stops
+/// that is a test, not the mechanism: `tests/engine_owned_value_universes.rs`
+/// reads every `crates/*/config/*.json` (by glob, so a new plugin crate is
+/// covered without being named) and fails if one maps to a kind this list does
+/// not carry. A config outside that path, or a kind a plugin computes rather
+/// than declares, is outside what the test can see. Deriving this list from the
+/// `LanguageRegistry` at query time would make the claim mechanical; it does
+/// not today.
 ///
 /// This list being a SUPERSET is safe; being short is not — a kind missing here
-/// would refuse a legitimate query. `tests/engine_owned_value_universes.rs`
-/// reads every language config in the workspace (by glob, so a new plugin crate
-/// is covered without being named) and fails if one maps to a kind this list
-/// does not carry; it names the core-minted kinds separately, since no config
-/// declares them and the sweep cannot see that route. A third list,
-/// `file_indexer::ADDRESSABLE_FQL_KINDS`, is asserted to be a subset of this
-/// one in its own module, for the same reason.
+/// refuses a legitimate query, which is worse than the silence the refusal
+/// replaces. The core-minted kinds are named separately in that test, since no
+/// config declares them and the config sweep cannot see that route. A third
+/// list, `file_indexer::ADDRESSABLE_FQL_KINDS`, is asserted to be a subset of
+/// this one in its own module, for the same reason.
 pub const FQL_KIND_VALUES: &[&str] = &[
-    // The kindless row. `GROUP BY fql_kind` publishes these rows under the
-    // empty name, so `= ''` is a question the engine puts into an agent's hands
-    // and must not refuse. It is accepted here and NOT yet served: the equality
-    // path resolves `''` through the segment string pool, which holds no such
-    // value, so it answers no rows while the grouping counts thousands. That
-    // gap is pinned as an open defect
-    // (`the_kindless_rows_answer_their_own_equality`) — the one value in this
-    // list whose empty answer is not yet a fact about the corpus.
+    // The kindless row, under BOTH the spellings the engine publishes for it.
+    //
+    // Stored it is the empty string, and `GROUP BY fql_kind` publishes those
+    // rows under the empty name — so `= ''` is a question the engine puts into
+    // an agent's hands and must not refuse. `SHOW outline` renders the same row
+    // as `unknown` (`query/outline.rs`, both emit paths), and
+    // `SHOW outline … WHERE fql_kind = 'unknown'` matches what it rendered and
+    // answers rows. A refusal that knew only one spelling would contradict a
+    // value the engine had just printed, so both are accepted here; only the
+    // rendering decides which one an agent sees.
+    //
+    // `''` is accepted and NOT yet served: the equality resolves the value
+    // through the segment string pool, which holds no empty value, so it
+    // answers no rows while the grouping counts thousands. That gap is pinned
+    // as an open defect (`the_kindless_rows_answer_their_own_equality`) — the
+    // one value in this list whose empty answer is not yet a fact about the
+    // corpus. `unknown` has no such gap: it is filtered where it is rendered.
     "",
+    UNKNOWN_KIND,
     // Definitions and declarations.
     "function",
     "class",
@@ -413,7 +458,7 @@ pub const FQL_KIND_VALUES: &[&str] = &[
     "namespace",
     "type_alias",
     "macro",
-    "macro_call",
+    MACRO_CALL_KIND,
     "import",
     // Statements and expressions.
     "call_statement",
@@ -425,7 +470,7 @@ pub const FQL_KIND_VALUES: &[&str] = &[
     "do",
     "do_while",
     "number",
-    "cast",
+    CAST_KIND,
     "increment",
     "compound_assignment",
     "shift_expression",
@@ -456,8 +501,8 @@ pub const FQL_KIND_VALUES: &[&str] = &[
     // could not parse. `cast` and `macro_call` above travel the same route —
     // they are grouped by what they mean rather than by where their name comes
     // from — and the empty kind at the top of this list is the fifth.
-    "guard",
-    "error",
+    GUARD_KIND,
+    ERROR_KIND,
 ];
 
 /// Every `role` an occurrence row can carry on `FIND usages`.

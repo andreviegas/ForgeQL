@@ -178,11 +178,20 @@ Short, durable facts discovered while working in this codebase.
   missing from it refuses a legitimate query. `tests/engine_owned_value_universes.rs`
   reads every `crates/*/config/*.json` by walking the crate directories (not a
   list of crates) and fails on a kind or role the declaration does not carry.
-  `error`, `guard`, `cast`, `macro_call` and `''` are written by the indexer as
-  literals rather than read out of a `kind_map`, and `code`/`text` likewise for
-  roles, so all of them are asserted separately. Three of the five DO also
-  appear in a `kind_map` today — which is the point: the config sweep passing
-  says nothing about the core route they actually travel.
+  `error`, `guard`, `cast`, `macro_call`, `''` and `unknown` are written by the
+  indexer as literals rather than read out of a `kind_map`, and `code`/`text`
+  likewise for roles, so all of them are asserted separately. Three of them DO
+  also appear in a `kind_map` today — which is the point: the config sweep
+  passing says nothing about the core route they actually travel. Each is
+  spelled once, as a `field_tiers::*_KIND` const used at the site that writes
+  it (`ERROR_KIND` and `CAST_KIND` alias the older `ast::lang::FQL_*` names;
+  do NOT reuse that family blindly — `FQL_COMPOUND_ASSIGN`/`FQL_SHIFT` there
+  do not match the kinds rows carry).
+- **`unknown` is the RENDERED spelling of the kindless row**
+  (`query/outline.rs`, both emit paths); the stored value is `''`. Both are
+  accepted values, because the outline filters on what it printed. A refusal
+  that knows one spelling and a renderer that emits the other is the regression
+  `the_rendered_spelling_of_the_kindless_row_is_inside_the_universe` guards.
 - A third hardcoded kind list exists, `file_indexer::ADDRESSABLE_FQL_KINDS`
   (which kinds get an ordinal and a `node_id`). Its own module asserts it is a
   SUBSET of `FQL_KIND_VALUES` — a kind added there and not to the universe

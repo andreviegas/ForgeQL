@@ -146,7 +146,7 @@ fn build_cast_row(
         node_kind: ctx.node.kind().to_string(),
         // Always "cast" — this is a synthetic cast row regardless of the
         // raw node kind (e.g. `call_expression` for C++ named casts).
-        fql_kind: "cast".to_string(),
+        fql_kind: crate::field_tiers::CAST_KIND.to_string(),
         byte_range: ctx.node.byte_range(),
         line: ctx.node.start_position().row + 1,
         fields,

@@ -281,6 +281,16 @@ pub fn reject_invalid_patterns(op: &crate::ir::ForgeQLIR) -> anyhow::Result<()> 
 /// exactly as [`reject_invalid_patterns`] does, and for the same reason: a value
 /// is wrong or right before any verb looks at it.
 ///
+/// **The ordering is a deliberate trade, not an oversight.** Running here means
+/// running before each verb's own field check, so on a verb whose rows carry no
+/// `fql_kind` at all — `FIND files`, `SHOW COMMITS` — a query that is wrong
+/// twice over gets this refusal rather than the sharper "that row carries no
+/// such field". The alternative is to gate on the verb's row shape, which is
+/// the per-verb enumeration this call site exists to avoid: every such list in
+/// this engine has at some point gone stale, and a stale one here means a value
+/// silently unchecked on the verb that was forgotten. One correct-everywhere
+/// message is worth more than a sharper one that can lapse.
+///
 /// # Errors
 ///
 /// Returns an error naming the accepted values when a `WHERE` or `HAVING`

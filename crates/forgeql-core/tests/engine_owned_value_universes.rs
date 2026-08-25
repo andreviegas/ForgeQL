@@ -23,7 +23,10 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use forgeql_core::field_tiers::{FQL_KIND_VALUES, USAGE_ROLE_VALUES};
+use forgeql_core::field_tiers::{
+    CAST_KIND, ERROR_KIND, FQL_KIND_VALUES, GUARD_KIND, MACRO_CALL_KIND, UNKNOWN_KIND,
+    USAGE_ROLE_VALUES,
+};
 use serde_json::Value;
 
 /// The configs shipped when this was written.
@@ -33,6 +36,14 @@ use serde_json::Value;
 /// trusted to have found something. It is a floor, not an equality: adding a
 /// language must not fail this file.
 const CONFIGS_AT_LEAST: usize = 16;
+
+/// How many of those configs declare occurrence roles.
+///
+/// Ten of the sixteen do; the other six index no `mention_text_kinds` at all,
+/// so the role sweep gets a floor rather than a per-file assertion. Without it
+/// a schema move would leave one surviving config keeping the global counter
+/// non-zero while the rest were skipped in silence.
+const ROLE_DECLARING_CONFIGS_AT_LEAST: usize = 10;
 
 /// Every `crates/*/config/*.json` in the workspace.
 fn language_config_files() -> Vec<PathBuf> {
@@ -79,7 +90,23 @@ fn parsed_configs() -> Vec<(PathBuf, Value)> {
 fn every_kind_a_language_config_maps_to_is_in_the_engines_kind_universe() {
     let mut checked = 0usize;
     for (path, json) in parsed_configs() {
-        if let Some(map) = json.get("kind_map").and_then(Value::as_object) {
+        // Per FILE, not just globally. A single global `checked > 0` would let
+        // a config whose key was renamed or re-nested be skipped in silence
+        // while one surviving file kept the counter non-zero — the sweep
+        // reporting success over a plugin it never read. All sixteen configs
+        // carry a `kind_map` today.
+        let map = json
+            .get("kind_map")
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{}: no kind_map object — either the schema moved and this sweep now \
+                     reads nothing, or a language config genuinely maps no kinds; either \
+                     way the sweep must not pass in silence",
+                    path.display()
+                )
+            });
+        {
             for (raw_kind, mapped) in map {
                 let kind = mapped.as_str().unwrap_or_else(|| {
                     panic!("{}: kind_map {raw_kind} is not a string", path.display())
@@ -121,6 +148,7 @@ fn every_kind_a_language_config_maps_to_is_in_the_engines_kind_universe() {
 #[test]
 fn every_role_a_language_config_declares_is_in_the_engines_role_universe() {
     let mut checked = 0usize;
+    let mut configs_with_roles = 0usize;
     for (path, json) in parsed_configs() {
         let Some(kinds) = json
             .get("syntax")
@@ -129,6 +157,7 @@ fn every_role_a_language_config_declares_is_in_the_engines_role_universe() {
         else {
             continue;
         };
+        configs_with_roles += 1;
         for (raw_kind, spec) in kinds {
             // Two spellings: the bare role, and the positioned form that names
             // the grammar field the role applies under.
@@ -158,6 +187,17 @@ fn every_role_a_language_config_declares_is_in_the_engines_role_universe() {
             checked += 1;
         }
     }
+    // Per-file coverage, not just a global count: one surviving config would
+    // otherwise keep `checked` non-zero while a schema move silenced the rest.
+    // Ten of the sixteen configs declare mention kinds; the other six index no
+    // occurrence roles at all, so this is a floor rather than a per-file
+    // assertion.
+    assert!(
+        configs_with_roles >= ROLE_DECLARING_CONFIGS_AT_LEAST,
+        "only {configs_with_roles} config(s) declared syntax.mention_text_kinds, expected at \
+         least {ROLE_DECLARING_CONFIGS_AT_LEAST} — a schema move would silence this sweep \
+         while one surviving file kept it green"
+    );
     assert!(
         checked > 0,
         "no role was checked — no config declared a mention kind"
@@ -184,7 +224,14 @@ fn the_kinds_the_indexer_mints_are_in_the_universe_too() {
     // `macro_call` in the C/C++/Rust configs), which is exactly why they are
     // named here: the config sweep passing says nothing about the core route
     // they actually travel.
-    for kind in ["error", "guard", "cast", "macro_call", ""] {
+    for kind in [
+        ERROR_KIND,
+        GUARD_KIND,
+        CAST_KIND,
+        MACRO_CALL_KIND,
+        "",
+        UNKNOWN_KIND,
+    ] {
         assert!(
             FQL_KIND_VALUES.contains(&kind),
             "the indexer mints fql_kind '{kind}' and FQL_KIND_VALUES does not carry it"

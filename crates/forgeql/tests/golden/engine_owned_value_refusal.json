@@ -52,6 +52,15 @@
    }
   },
   {
+   "name": "the_rendered_spelling_of_the_kindless_row_is_inside_the_universe",
+   "description": "A row nothing maps stores the empty kind, and SHOW outline renders it as 'unknown' (query/outline.rs, both emit paths). Filtering on what the engine just printed answered these three rows before this check existed, so a universe that knew only the stored spelling would have refused a query the engine's own output invites — the engine contradicting a value it had printed. Both spellings are accepted; the rendering decides which one an agent sees. This case is the regression guard: it fails the moment the refusal knows one spelling and the renderer another.",
+   "use": "forgeql-pub.frozen",
+   "fql": "SHOW outline OF 'crates/forgeql-core/src/ast/enrich/casts.rs' ALL WHERE fql_kind = 'unknown'",
+   "assert": {
+    "row_count": 3
+   }
+  },
+  {
    "name": "control_a_known_role_answers_on_find_usages",
    "description": "Anchors the role case below, and pins that role is the second engine-owned universe rather than fql_kind with a special case. code is the resolved-identifier role, and the eighteen such sites sit in three files — which is why LIMIT 3 returns all eighteen rows rather than three: on FIND usages the limit counts FILES and every site of a selected file is returned. Those eighteen are what the refusal below must leave undisturbed.",
    "use": "forgeql-pub.frozen",
