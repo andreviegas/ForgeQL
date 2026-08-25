@@ -341,11 +341,14 @@ fn check_enum_value(clause: &str, pred: &Predicate) -> anyhow::Result<()> {
     if accepted.contains(&written.as_str()) {
         return Ok(());
     }
+    // The empty value's gloss is derived from the field, not written out per
+    // field: a second engine-owned universe already exists (`role`), and a
+    // hardcoded "no kind" told a `role` query the wrong noun.
     let list = accepted
         .iter()
         .map(|v| {
             if v.is_empty() {
-                "'' (a row carrying no kind)".to_string()
+                format!("'' (a row carrying no {})", pred.field)
             } else {
                 (*v).to_string()
             }
