@@ -1330,7 +1330,7 @@ Applies to: `FIND symbols`, `FIND usages OF`, `FIND callees OF`
 | Field | Type | Description |
 |---|---|---|
 | `name` | string | Symbol name |
-| `fql_kind` | string | Universal kind: `function`, `class`, `struct`, `enum`, `variable`, `field`, and the rest. The engine owns this set — a language plugin maps its grammar onto these names rather than adding to them — so a kind outside it is **refused** naming every accepted one, not answered with a zero. One exception to read that refusal by: the empty kind (a row nothing maps) is INSIDE the set and so is accepted, but the equality answers no rows today even though `GROUP BY fql_kind` reports thousands under it — a known-open defect, and the one place an empty answer on this field is not yet a fact about the corpus. |
+| `fql_kind` | string | Universal kind: `function`, `class`, `struct`, `enum`, `variable`, `field`, and the rest. The engine owns this set — a language plugin maps its grammar onto these names rather than adding to them — so a kind outside it is **refused** naming every accepted one, not answered with a zero. One exception to read that refusal by, and it has two spellings: a row nothing maps is stored with the empty kind and RENDERED by `SHOW outline` as `unknown`. Both are INSIDE the set and so accepted — but on a verb that reads the stored value, `= ''` and `= 'unknown'` each answer no rows even though `GROUP BY fql_kind` reports thousands under that row. A known-open defect, and the only place an empty answer on this field is not yet a fact about the corpus. |
 | `language` | string | Language name: `cpp`, `rust`, `python`, etc. |
 | `path` | string | Relative file path (also used by `IN`/`EXCLUDE` globs) |
 | `line` | integer | 1-based start line |

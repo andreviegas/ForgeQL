@@ -12,21 +12,19 @@
 //! crates, so a new language crate is covered the day its config lands rather
 //! than the day someone remembers this file.
 //!
-//! Two things the configs cannot show are asserted separately: the kinds the
-//! indexer mints itself (`error`, and the empty kind a row carries when nothing
-//! maps it) and the roles the read pass mints (`code`, `text`). A universe
-//! built only from what the configs declare would refuse the commonest role
-//! there is.
+//! What the configs cannot show — the kinds and roles the engine mints itself —
+//! is deliberately NOT asserted here. Those are tied to the two lists by a
+//! compile-time reference at the site that writes them, so any assertion this
+//! file could make about them would be a tautology over the list it is
+//! checking. The comment further down says it at length, because the tautology
+//! is the tempting thing to write.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use forgeql_core::field_tiers::{
-    CAST_KIND, ERROR_KIND, FQL_KIND_VALUES, GUARD_KIND, MACRO_CALL_KIND, UNKNOWN_KIND,
-    USAGE_ROLE_VALUES,
-};
+use forgeql_core::field_tiers::{FQL_KIND_VALUES, USAGE_ROLE_VALUES};
 use serde_json::Value;
 
 /// The configs shipped when this was written.
@@ -204,54 +202,29 @@ fn every_role_a_language_config_declares_is_in_the_engines_role_universe() {
     );
 }
 
-#[test]
-fn the_kinds_the_indexer_mints_are_in_the_universe_too() {
-    // The indexer writes these `fql_kind` strings itself rather than reading
-    // them out of a `kind_map`, so the config sweep above does not decide
-    // whether they are covered — a rename on the core side would slip past it.
-    //
-    // - `error` is minted for a span the parser could not parse.
-    // - `guard` is minted for a conditional directive's region.
-    // - `cast` is written as a literal by the cast enricher, because a named
-    //   cast's raw node is a call expression rather than a cast one.
-    // - `macro_call` is written as a literal by the row emitter for a macro
-    //   invocation.
-    // - the empty kind is what a row carries when nothing maps its grammar
-    //   node, and `GROUP BY fql_kind` publishes those rows under it — so `= ''`
-    //   is a question the engine puts into an agent's hands.
-    //
-    // Three of the five ALSO appear in a `kind_map` today (`guard`, `cast` and
-    // `macro_call` in the C/C++/Rust configs), which is exactly why they are
-    // named here: the config sweep passing says nothing about the core route
-    // they actually travel.
-    for kind in [
-        ERROR_KIND,
-        GUARD_KIND,
-        CAST_KIND,
-        MACRO_CALL_KIND,
-        "",
-        UNKNOWN_KIND,
-    ] {
-        assert!(
-            FQL_KIND_VALUES.contains(&kind),
-            "the indexer mints fql_kind '{kind}' and FQL_KIND_VALUES does not carry it"
-        );
-    }
-}
-
-#[test]
-fn the_roles_the_read_pass_mints_are_in_the_universe_too() {
-    // `code` is a resolved identifier and `text` is a site found by reading the
-    // file rather than by a posting. No config declares either, and `code` is
-    // the commonest role a `FIND usages` answer carries.
-    for role in ["code", "text"] {
-        assert!(
-            USAGE_ROLE_VALUES.contains(&role),
-            "the read pass mints role '{role}' and USAGE_ROLE_VALUES does not carry it"
-        );
-    }
-}
-
+// The kinds and roles the engine mints itself are NOT asserted here, and the
+// reason is worth writing down because the obvious test is a trap.
+//
+// `assert!(FQL_KIND_VALUES.contains(&ERROR_KIND))` cannot fail: the list is
+// built from that very constant. It reads like a cross-check and is a
+// tautology, and a green tautology beside a real sweep is worse than no test —
+// it reports coverage of a route nothing checked.
+//
+// What actually ties a minted value to its universe is a compile-time
+// reference. `casts.rs` writes `field_tiers::CAST_KIND`, `rows.rs` writes
+// `MACRO_CALL_KIND`, `outline.rs` and `members.rs` write `UNKNOWN_KIND`, and
+// `find.rs` tags sites with its own `ROLE_CODE` / `ROLE_TEXT` — every one of
+// them a constant the two lists are built from. Rename one and both ends move
+// together; there is no state in which they can disagree, so there is nothing
+// for a test to catch.
+//
+// `guard` is not minted at all: the C and C++ `kind_map`s name it, so the
+// config sweep above is what covers it.
+//
+// The route that WOULD want a behavioural test is the one no reference can
+// tie: a kind or role an enricher composes at run time rather than naming.
+// None exists today — every `ExtraRow` either goes through `map_kind` or names
+// one of those constants — which is why this file sweeps configs and stops.
 #[test]
 fn neither_universe_repeats_a_value() {
     // A repeat would not change what is accepted, but it would make the refusal

@@ -254,6 +254,19 @@
   }
 ,
   {
+   "name": "the_rendered_kindless_spelling_answers_its_own_equality_too",
+   "description": "Second half of the case above, and the reason it is here: 'unknown' is the spelling SHOW outline renders for a row that stores no kind, and it is an accepted value everywhere — but only the outline filters on what it rendered. On FIND, which reads the stored value, both spellings answer nothing where GROUP BY fql_kind counts 2,169. So the caveat is not 'the empty string is the one place an empty answer is not yet a fact about the corpus'; it is both spellings of the same row, on every verb that reads the stored kind. Serving one without the other would leave the docs wrong in the other direction.",
+   "use": "forgeql-pub.frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "same mechanism as the case above — the kind lookup resolves a predicate value through the segment's string pool, and neither the empty kind nor its rendered spelling is a pooled value; whichever fix serves one must serve the other, since they name the same rows. Red for the right reason only while 'unknown' stays ACCEPTED: a refusal would satisfy this expect_fail vacuously, which is why the acceptance is pinned by the outline case in engine_owned_value_refusal.json, where an error is a failure",
+   "fql": "FIND symbols WHERE fql_kind = 'unknown' LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "total": 2169
+   }
+  }
+,
+  {
    "name": "control_the_scan_answers_a_having_on_a_row_field",
    "description": "Anchors the two cases below. HAVING runs after the grouping pass, over whatever the retained row carries. On the scan that row is the first row of its group, so HAVING lines >= 2 keeps the six kinds whose representative is a multi-line node."
    ,

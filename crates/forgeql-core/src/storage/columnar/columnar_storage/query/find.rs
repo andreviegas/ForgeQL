@@ -534,7 +534,10 @@ impl ColumnarStorage {
     /// `code` for a posting in the usages blob — a posting there can be nothing
     /// else — and its stored role for a mention.
     fn sites_of(&self, token: &str) -> Vec<Site> {
-        const ROLE_CODE: &str = "code";
+        // Named through `field_tiers` so the role this pass mints and the set a
+        // `WHERE role = …` is refused against cannot drift apart: the universe
+        // is built from these constants, so renaming one moves both ends.
+        const ROLE_CODE: &str = crate::field_tiers::ROLE_CODE;
 
         let mut sites = Vec::new();
         for (idx, meta) in self.overlay().segments().iter().enumerate() {
@@ -615,7 +618,7 @@ impl ColumnarStorage {
         clauses: &Clauses,
         root: &Path,
     ) -> (Vec<Site>, HashSet<std::path::PathBuf>, Option<String>) {
-        const ROLE_TEXT: &str = "text";
+        const ROLE_TEXT: &str = crate::field_tiers::ROLE_TEXT;
 
         // What the postings can say about the lines this is about to read:
         // which of them a recorder tokenised, and as what. It is a lookup, not

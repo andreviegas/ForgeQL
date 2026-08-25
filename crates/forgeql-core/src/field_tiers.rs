@@ -372,19 +372,26 @@ pub enum ValueUniverse {
 /// The `fql_kind` strings the indexer writes as literals rather than reading
 /// out of a language config's `kind_map`.
 ///
-/// Spelled once and used at the site that writes them, because the config sweep
-/// in `tests/engine_owned_value_universes.rs` cannot see this route: a rename at
-/// the writing site would leave [`FQL_KIND_VALUES`] behind, and a kind the
-/// engine mints but the universe does not carry refuses a legitimate query.
+/// Each is spelled once HERE and referenced at the site that writes it, so the
+/// tie between a writing site and [`FQL_KIND_VALUES`] is a compile-time one.
+/// That matters because the config sweep in
+/// `tests/engine_owned_value_universes.rs` cannot see this route, and a kind
+/// the engine mints but the universe does not carry refuses a legitimate query.
+/// The compile-time reference IS the guard — a test asserting
+/// `FQL_KIND_VALUES.contains(&ERROR_KIND)` would be asserting that a list
+/// contains an element it is built from, and could not fail.
 ///
 /// Two of them already had a name in `ast::lang`'s older `FQL_*` family and are
 /// aliased to it rather than respelled. Note that family is not a safe blanket
 /// source: `FQL_COMPOUND_ASSIGN` and `FQL_SHIFT` there read `compound_assign`
 /// and `shift`, while the kinds rows actually carry are `compound_assignment`
 /// and `shift_expression` — so only the two verified below are reused.
+///
+/// `guard` is deliberately NOT here. It reads like a minted kind and is not
+/// one: the C and C++ configs map `preproc_ifdef`/`preproc_if`/`preproc_elif`
+/// onto it, so the config sweep covers it and a constant would have claimed a
+/// tie that does not exist.
 pub const ERROR_KIND: &str = crate::ast::lang::FQL_ERROR;
-/// See [`ERROR_KIND`].
-pub const GUARD_KIND: &str = "guard";
 /// See [`ERROR_KIND`].
 pub const CAST_KIND: &str = crate::ast::lang::FQL_CAST;
 /// See [`ERROR_KIND`].
@@ -434,12 +441,17 @@ pub const FQL_KIND_VALUES: &[&str] = &[
     // value the engine had just printed, so both are accepted here; only the
     // rendering decides which one an agent sees.
     //
-    // `''` is accepted and NOT yet served: the equality resolves the value
-    // through the segment string pool, which holds no empty value, so it
-    // answers no rows while the grouping counts thousands. That gap is pinned
-    // as an open defect (`the_kindless_rows_answer_their_own_equality`) — the
-    // one value in this list whose empty answer is not yet a fact about the
-    // corpus. `unknown` has no such gap: it is filtered where it is rendered.
+    // NEITHER spelling is served everywhere it is accepted, and that is the
+    // one honest caveat on this list. `SHOW outline … WHERE fql_kind =
+    // 'unknown'` matches what the outline rendered and answers rows; on a verb
+    // that renders the STORED value instead, both spellings answer nothing —
+    // `FIND symbols WHERE fql_kind = ''` and `= 'unknown'` each return no rows
+    // where `GROUP BY fql_kind` counts thousands, because the kind lookup
+    // resolves a predicate value through the segment string pool and neither
+    // spelling is pooled. Both are pinned as one open defect
+    // (`the_kindless_rows_answer_their_own_equality`), and they are the only
+    // values in this list whose empty answer is not yet a fact about the
+    // corpus.
     "",
     UNKNOWN_KIND,
     // Definitions and declarations.
@@ -496,30 +508,49 @@ pub const FQL_KIND_VALUES: &[&str] = &[
     "import_block",
     "type_alias_block",
     "array_block",
-    // Written by the indexer as literals rather than read out of a `kind_map`:
-    // a conditional directive with its guarded region, and a span the parser
-    // could not parse. `cast` and `macro_call` above travel the same route —
-    // they are grouped by what they mean rather than by where their name comes
-    // from — and the empty kind at the top of this list is the fifth.
-    GUARD_KIND,
+    // A conditional directive with its guarded region, and a span the parser
+    // could not parse. `guard` is config-derived (the C and C++ `kind_map`s
+    // name it) and `error` is minted; `cast` and `macro_call` above are minted
+    // too — they sit up there because this list groups by what a kind MEANS,
+    // not by where its name comes from.
+    "guard",
     ERROR_KIND,
 ];
 
+/// The two occurrence roles the read pass writes itself, rather than reading
+/// them out of a language config's `mention_text_kinds`.
+///
+/// Spelled here and referenced at the writing site (`query/find.rs`), for the
+/// reason [`ERROR_KIND`] gives: the config sweep cannot see this route, and the
+/// compile-time reference is what keeps a rename from leaving
+/// [`USAGE_ROLE_VALUES`] behind.
+pub const ROLE_CODE: &str = "code";
+/// See [`ROLE_CODE`].
+pub const ROLE_TEXT: &str = "text";
+
 /// Every `role` an occurrence row can carry on `FIND usages`.
 ///
-/// Engine-owned on the same terms as [`FQL_KIND_VALUES`]: `code` is a resolved
-/// identifier, `text` is a site found by reading the file rather than by a
-/// posting, and the rest are the mention roles a language config may declare
-/// (`mention_text_kinds`). The same glob test checks the configs against this
-/// list.
+/// Engine-owned on the same terms as [`FQL_KIND_VALUES`]: [`ROLE_CODE`] is a
+/// resolved identifier, [`ROLE_TEXT`] a site found by reading the file rather
+/// than by a posting, and the rest are the mention roles a language config may
+/// declare (`mention_text_kinds`). The glob test checks the configs against
+/// this list; the two minted roles are tied to it by the constants above.
 pub const USAGE_ROLE_VALUES: &[&str] = &[
-    "code", "comment", "string", "config", "doc", "text",
-    // The spelling the renderer emits where a site carries no role at all.
-    // The in-memory backend tags none of them (`SiteView.role` is `None`
-    // there) and the CSV renderer prints that as the empty string, so `''` is
-    // a value an agent can read off an answer — and therefore one they can
-    // filter on. Accepted for the same reason `unknown` is on the kinds: a
-    // universe that refuses what the engine just printed contradicts itself.
+    ROLE_CODE, "comment", "string", "config", "doc", ROLE_TEXT,
+    // The spelling the renderer emits where a site carries no role at all: the
+    // in-memory backend tags none of them (`SiteView.role` is `None` there) and
+    // the CSV renderer prints that as the empty string. Accepted for the same
+    // reason `unknown` is on the kinds — a universe that refuses what the
+    // engine just printed contradicts itself.
+    //
+    // Accepted is all it is. `role = ''` MATCHES nothing on either backend, and
+    // not because no site qualifies: the `Eq` arm of `eval_predicate_on` is
+    // `is_some_and`, so a field the row does not carry fails every equality,
+    // empty string included. On the indexed backend that answer is also the
+    // right one — every site there is tagged — but on the in-memory backend it
+    // is the same false zero the kindless kinds have, and for the same reason:
+    // a value the engine renders and the predicate cannot reach. Pinned with
+    // them in `the_kindless_rows_answer_their_own_equality`.
     "",
 ];
 /// One queryable field: where it lives, what serves it, what that cannot see.

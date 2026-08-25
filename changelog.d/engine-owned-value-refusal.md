@@ -30,6 +30,14 @@
   '%_block'` still answers, 2,660 rows on this repository. `ORDER BY` and
   `GROUP BY` name a field rather than a value and are unaffected.
 
+- **One rendered answer changed.** `SHOW outline` on the in-memory backend used
+  to print the raw tree-sitter node kind under `fql_kind` for a node no
+  language maps; it prints `unknown` now, as the indexed backend already did.
+  That retires filters there that named a raw grammar kind — a shape the syntax
+  reference described as the contract until this change corrected it — and it
+  closes a back door to `node_kind`, which is refused as a clause field on
+  every verb. Nothing stored changes: this is a render path.
+
 - The kindless row — a node no language maps — is accepted under **both** the
   spellings the engine publishes for it. Stored it is the empty kind, which is
   how `GROUP BY fql_kind` groups it; `SHOW outline` renders it as `unknown`,
