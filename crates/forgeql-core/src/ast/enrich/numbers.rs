@@ -266,15 +266,6 @@ mod tests {
         assert_eq!(parse_value("3.14", "float"), 3);
     }
 
-    #[test]
-    fn magic_number_boundary() {
-        // 0, 1 are not magic
-        assert!(!matches!(0_i64, v if !matches!(v, -1..=1)));
-        assert!(!matches!(1_i64, v if !matches!(v, -1..=1)));
-        // 2 is magic
-        assert!(matches!(2_i64, v if !matches!(v, -1..=1)));
-    }
-
     // -- detect_format edge cases ------------------------------------
 
     #[test]
