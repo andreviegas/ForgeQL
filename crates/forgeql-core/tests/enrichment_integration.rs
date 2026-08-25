@@ -469,23 +469,85 @@ fn number_is_magic_true_zero_in_comparison() {
     );
 }
 
+// The zero-subscript exemption has no passing pin here on purpose: it does not
+// fire on this fixture. `enrichment_patterns.cpp` is C++, and tree-sitter-cpp
+// wraps a subscript index in a `subscript_argument_list`, so the literal's
+// parent is never the `subscript_expression` the exemption compares against.
+// The defect is pinned as an expected failure in the open-defect golden suite,
+// against `arr[0] = 1;` in this same fixture. The test that used to sit here
+// asserted only a non-empty result, which the dozen `int x = 0;` declarations
+// satisfied on their own, so it stayed green with the exemption dead.
+
+/// `int x = arr[64];` in `enrichment_patterns.cpp` — a subscript index that is
+/// not zero, and must stay magic however the exemption above is repaired.
+const SUBSCRIPT_NONZERO_LINE: usize = 832;
+
+/// `buf[1] = buf[0];` in `enrichment_subscript.c` — the assignment form, so no
+/// `init_declarator` can stand in for the subscript rule.
+const C_SUBSCRIPT_LINE: usize = 14;
+
 #[test]
-fn number_is_magic_false_subscript_zero() {
-    // `buf[0]` — first-element subscript access is a structural idiom.
-    // 0 as a subscript index must NOT be magic.
-    let (mut e, sid, _d) = engine_enrichment_only();
+fn number_is_magic_false_subscript_zero_in_c() {
+    // The live half of the exemption. Without a C fixture the docs assert a
+    // behaviour that nothing in this repository exercises, so a change to the
+    // C grammar key or to `constant_def_parent_kinds` could kill it silently.
+    let (mut e, sid, _d) = common::legacy_session(&["enrichment_subscript.c"]).into_parts();
     let r = exec(
         &mut e,
         &sid,
         "FIND symbols WHERE node_kind = 'number_literal' WHERE name = '0' \
-         WHERE is_magic = 'false' LIMIT 100",
+         WHERE is_magic = 'false' LIMIT 20",
+    );
+    let exempt = common::as_query(&r);
+    assert!(
+        exempt
+            .results
+            .iter()
+            .any(|m| m.line == Some(C_SUBSCRIPT_LINE)),
+        "the 0 in `buf[0]` must be is_magic='false' in a .c file — got {:?}",
+        exempt.results.iter().map(|m| m.line).collect::<Vec<_>>()
+    );
+    let r2 = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE name = '1' \
+         WHERE is_magic = 'true' LIMIT 20",
+    );
+    let magic = common::as_query(&r2);
+    assert!(
+        magic
+            .results
+            .iter()
+            .any(|m| m.line == Some(C_SUBSCRIPT_LINE)),
+        "the 1 in `buf[1]` is not a subscript index of zero and must stay magic \
+         — got {:?}",
+        magic.results.iter().map(|m| m.line).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn number_is_magic_true_nonzero_subscript() {
+    // The exemption is for the value zero in a subscript, not for subscripts.
+    // Note this case does not discriminate TODAY: the fixture is C++, where the
+    // branch never fires, so 64 stays magic however the condition is written.
+    // The live guard against widening is the `buf[1]` half of the C test above.
+    // This one starts discriminating the moment the C++ path is repaired, which
+    // is why it is worth keeping rather than deleting.
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE name = '64' \
+         WHERE is_magic = 'true' LIMIT 100",
     );
     let qr = common::as_query(&r);
-    // At least one '0' must be non-magic (the one in buf[0] subscript context,
-    // plus any zeros in init_declarator contexts).
     assert!(
-        !qr.results.is_empty(),
-        "0 in array subscript `buf[0]` must be is_magic='false' (Bug 2a subscript exemption)"
+        qr.results
+            .iter()
+            .any(|m| m.line == Some(SUBSCRIPT_NONZERO_LINE)),
+        "the 64 in `int x = arr[64];` (fixture line {SUBSCRIPT_NONZERO_LINE}) must \
+         stay is_magic='true' — got lines {:?}",
+        qr.results.iter().map(|m| m.line).collect::<Vec<_>>()
     );
 }
 
@@ -520,6 +582,22 @@ fn number_not_indexed_inside_error_recovery_node() {
     // Without the inside_error guard in NumberEnricher, these phantom
     // number_literal nodes would be indexed as real magic numbers.
     let (mut e, sid, _d) = engine_bug2b_only();
+    // Anchor first: this test asserts an ABSENCE, so it passes trivially if the
+    // fixture indexes nothing at all — which is exactly what happened while no
+    // C grammar was registered. The three `module_param(..., 0)` literals are
+    // real rows; if they are gone, the absence below proves nothing.
+    let anchor = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE name = '0'",
+    );
+    assert!(
+        common::as_query(&anchor)
+            .results
+            .iter()
+            .any(|m| m.line == Some(17)),
+        "the fixture must index its real literals before an absence means anything"
+    );
     for sentinel in ["8881", "8882"] {
         let q =
             format!("FIND symbols WHERE node_kind = 'number_literal' WHERE name = '{sentinel}'");

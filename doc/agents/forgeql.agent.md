@@ -505,7 +505,7 @@ Computed at index time. Use in `WHERE` clauses like any other field.
 | Field | Applies to | Values / Notes |
 |---|---|---|
 | `num_format` | `number` | `dec`, `hex`, `bin`, `oct`, `float`, `scientific` |
-| `is_magic` | `number` | `"true"` unless the literal is a zero array subscript (`arr[0]`) or, in C/C++, is the immediate child of a declaration initializer or enumerator — `int x = 3;` is exempt, `int x = 3 * 2;` is not. The value itself grants no exemption, no other language configures one, and `#define` bodies index no numbers at all |
+| `is_magic` | `number` | `"true"` unless the literal is the immediate child of a declaration initializer or enumerator, which only C and C++ configure — `int x = 3;` is exempt, `int x = 3 * 2;` is not — or is a zero index whose immediate parent is the plugin's configured subscript node, which holds in C, Rust and Python (`arr[0]`, `dp[0][0]`). The value itself grants no exemption and `#define` bodies index no numbers at all. **Known defect:** the subscript exemption does not fire under the C++ grammar — `.cpp`, `.cc`, `.cxx`, `.h`, `.hpp`, `.hxx`, `.ino` — which interposes a node between the index and the subscript, so `arr[0]` reads as magic there, including in the headers of a pure-C project. Repairing it will change these values |
 | `num_suffix` | `number` | `u`, `l`, `ll`, `ul`, `ull`, `f`, `ld` |
 | `suffix_meaning` | `number` | `unsigned`, `long`, `float`, etc. |
 | `has_separator` | `number` | `"true"` if contains digit separators |

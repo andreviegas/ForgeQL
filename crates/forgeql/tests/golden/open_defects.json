@@ -412,6 +412,35 @@
      "/results/0/usages": null
     }
    }
+  },
+  {
+   "name": "control_line_463_is_still_the_subscript",
+   "description": "Anchors the identity of the line, not just the row: the pin below is addressed by line number against a frozen snapshot, so a re-pin that shifts the fixture could put an `int x = 0;` declaration on 463 and turn the pin green while proving nothing.",
+   "use": "forgeql-pub.frozen",
+   "fql": "SHOW LINES 463-463 OF 'tests/fixtures/enrichment_patterns.cpp' WHERE text MATCHES 'arr\\[0\\] = 1'",
+   "assert": {
+    "row_count": 1
+   }
+  },
+  {
+   "name": "control_the_fixture_holds_its_subscript_zero",
+   "description": "Anchors the case below: `arr[0] = 1;` at line 463 of the C++ fixture is indexed as a number row at all. If this control moves, the fixture changed, not the exemption.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols IN 'tests/fixtures/enrichment_patterns.cpp' WHERE fql_kind = 'number' WHERE name = '0' WHERE line = 463 LIMIT 5",
+   "assert": {
+    "row_count": 1
+   }
+  },
+  {
+   "name": "a_zero_array_subscript_is_exempt_in_cpp",
+   "description": "The documented exemption for `arr[0]` does not fire on a C++ file. tree-sitter-cpp wraps a subscript index in a `subscript_argument_list`, so the literal's parent is that node and never the `subscript_expression` the enricher compares against. Every other grammar that declares a subscript kind names the index as a direct child, so the rule works in C, Rust and Python — it is the C++ grammar that is the exception, and it also claims `.h`, `.hpp` and the rest. Verified live 2026-08-25 on 0.185.0.",
+   "use": "forgeql-pub.frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "the zero-subscript exemption is dead under the C++ grammar — the enricher matches the parent kind against the configured subscript node while that grammar interposes `subscript_argument_list`; it fires correctly in C, Rust and Python, whose grammars name the index as a direct child. The unit test meant to cover this asserted only a non-empty result, which the fixture's `int x = 0;` declarations satisfied on their own, so nothing reported the dead branch. Fixing it changes index output and needs an enrichment version bump.",
+   "fql": "FIND symbols IN 'tests/fixtures/enrichment_patterns.cpp' WHERE fql_kind = 'number' WHERE name = '0' WHERE line = 463 WHERE is_magic = 'false' LIMIT 5",
+   "assert": {
+    "row_count": 1
+   }
   }
  ]
 }
