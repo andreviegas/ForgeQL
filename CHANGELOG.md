@@ -6,6 +6,36 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.186.0] — 2026-08-25 — a dead exemption is named instead of hidden by its own test
+
+### Fixed
+
+- The `is_magic` exemption for a zero array index is dead under the C++
+  grammar. The enricher exempts a zero whose immediate parent is the language
+  plugin's configured subscript node, which is how C, Rust and Python declare
+  it — but the C++ grammar interposes another node between the index and the
+  subscript, so the parent is never what the check expects. That grammar also
+  claims `.h`, `.hpp` and `.hxx`, so a header in a pure-C project answers
+  `arr[0]` as a magic number. The three field tables now describe the rule by
+  the mechanism rather than by language, and name the C++ behaviour as a defect
+  rather than a contract; the open-defect suite pins it. Repairing it changes
+  index output, so it needs an enrichment version bump and a re-index.
+
+- The unit test covering that exemption asserted only that some literal
+  somewhere was exempt. The fixture holds a dozen `int x = 0;` declarations
+  that are exempt for a different reason, so it stayed green with the rule it
+  was named for dead. It is replaced by pins that name their row: the `0` in
+  `buf[0]` of a new C fixture must be exempt and the `1` beside it must not,
+  and — as an expected failure — the `0` in the C++ fixture's `arr[0]` must be
+  exempt.
+
+- The test language registry had no C plugin, and no other plugin claims `.c`,
+  so every C fixture indexed nothing. The test guarding against phantom numbers
+  emitted during parser error recovery asserted an empty result over a file
+  that produced no rows at all, and had never exercised anything. C is
+  registered now, that test runs against the fixture for the first time, and it
+  anchors on a real literal before asserting the phantom ones are absent.
+
 ## [0.185.0] — 2026-08-25 — the magic-number rule is documented as the engine applies it
 
 ### Fixed
