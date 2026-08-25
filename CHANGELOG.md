@@ -6,6 +6,40 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.184.0] — 2026-08-25 — a corpus-scale pin for every open answer defect
+
+### Added
+
+- Two new golden suites pin answers that are now correct and were never
+  attributed to a change. `having_order_by_name` covers `FIND symbols` with
+  `HAVING` and `ORDER BY name`, which used to drop qualifying rows silently
+  (7 survivors returned as 3 ascending, 1 descending), narrow and broad, both
+  directions, on all three golden corpora. `regex_predicate_contract` covers
+  the two halves of the regex contract: an unparseable pattern is refused on
+  `MATCHES` and on `NOT MATCHES`, and the `NOT MATCHES` / `NOT LIKE` spellings
+  of one question return the same count on rows that have no value for the
+  field.
+
+- The open-defect suite gains corpus-scale twins, each with a control that
+  proves the corpus really holds the rows: the magic-number exemption list on
+  two grammars (3,446 of 3,859 `-1` literals and 122,256 of 146,613 zeroes are
+  stamped magic against the documented exemption), the boolean fields whose
+  `false` value answers an empty page on a corpus of ~95,000 functions, the
+  unknown `fql_kind` that `FIND` answers with a silent zero instead of an
+  error, and the local binding whose `usages` is a corpus-wide count of the
+  name (11,964 locals named `ret`, every one reporting 83,611). Each is
+  recorded as expected-to-fail, so fixing one turns its pin green and the
+  fixing commit has to promote it.
+
+### Fixed
+
+- Five agent-facing documents still described an uncompilable regex as passing
+  every row before any field is read. That stopped being true when the
+  refusal shipped: `MATCHES` and `NOT MATCHES` both reject a pattern that does
+  not compile. The absent-value rule beside it is unchanged — a `NOT LIKE` or
+  `NOT MATCHES` handed a non-string value still passes before any field is
+  read.
+
 ## [0.183.0] — 2026-08-24 — a value lookup reads the mapping, and the name postings hold only answer rows
 
 **Re-indexes once on upgrade:** the enrichment version moves to 71 and the
