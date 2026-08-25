@@ -2574,3 +2574,60 @@ fn parameter_fql_kind_variable_filter() {
         "parameter 'a' should match fql_kind = 'variable', got: {names:?}",
     );
 }
+
+// -- a decorated definition is not a row of its own -----------------------
+
+/// A decorated `def` answers the function metrics, and a decorated `class` does
+/// not become a second `function` row.
+///
+/// Both failures had one cause. `decorated_definition` was mapped to
+/// `fql_kind = 'function'` and named after the definition it wraps, while that
+/// definition's own span is folded back to the leading decorator — so the two
+/// rows agreed on name, kind, path and line, the dedupe kept one, and the one
+/// it kept was the wrapper. The wrapper is not in `function_kinds`, so every
+/// function-gated field was absent from it: 36,978 of 141,233 Python `function`
+/// rows on one corpus, 26%. Those rows answered neither `has_todo = 'true'`
+/// nor `= 'false'` — the stamp is written only when true, so an absent field
+/// fails both — which is what made them invisible rather than wrong. Wrapping
+/// a class was worse than absent: it added a `function` row for something that
+/// is not one.
+#[test]
+fn a_decorated_definition_does_not_shadow_the_definition_it_wraps() {
+    let (mut e, sid, _d) = common::legacy_session(&["enrichment_decorated.py"]).into_parts();
+
+    // Both functions answer param_count, with their own arity — the decorated
+    // one is the regression: it answered nothing before.
+    for (name, params) in [("plain", "2"), ("decorated", "3")] {
+        let q = format!("FIND symbols WHERE fql_kind = 'function' WHERE name = '{name}'");
+        let r = exec(&mut e, &sid, &q);
+        let qr = common::as_query(&r);
+        assert_eq!(
+            qr.results.len(),
+            1,
+            "{name}: expected exactly one function row"
+        );
+        assert_eq!(
+            field(&qr.results[0], "param_count"),
+            params,
+            "{name}: a function row that answers no param_count was never visited by the \
+             metrics enricher, which is what made the boolean fields silently false"
+        );
+    }
+
+    // A decorated class is a class and nothing else.
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE name = 'Decorated' ORDER BY line ASC LIMIT 10",
+    );
+    let kinds: Vec<String> = common::as_query(&r)
+        .results
+        .iter()
+        .map(|m| m.fql_kind.clone().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        kinds,
+        vec!["class".to_string()],
+        "a decorated class must not also answer as a function"
+    );
+}

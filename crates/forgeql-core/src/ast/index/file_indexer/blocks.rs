@@ -175,9 +175,12 @@ pub(super) fn emit_block_row(
 /// first attribute, so a node's span folds in its operational attributes.
 /// Falls back to the node's own start when there are none.
 ///
-/// Matches `collect_attribute_guard_frames`' detection (`attribute_item` via
-/// `prev_named_sibling`), so today this only folds Rust attributes; other
-/// languages' attribute kinds don't match and are left unchanged.
+/// Matches `collect_attribute_guard_frames`' detection (the language's
+/// `decorator_kind` via `prev_named_sibling`), so it folds Rust attributes and
+/// Python decorators alike — inside a `decorated_definition` the decorators are
+/// the inner definition's preceding named siblings. That is load-bearing: the
+/// wrapper produces no row, and this is what gives the definition's row a span
+/// that still starts at its first decorator.
 pub(super) fn attr_extended_start(
     node: tree_sitter::Node<'_>,
     decorator_kind: Option<&str>,

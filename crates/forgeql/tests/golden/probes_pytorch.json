@@ -18,14 +18,14 @@
           "capture": { "FN": "results.0.node_id" }
         },
         {
-          "fql": "SHOW outline OF '${FN}' WHERE fql_kind = 'if' WHERE depth >= 7",
+          "fql": "SHOW outline OF '${FN}' WHERE fql_kind = 'if' WHERE depth >= 6",
           "assert": {
             "row_count": 3,
             "all_same": "path",
             "rows": [
-              { "name": "(a!=bandc<=b)", "line": 577, "depth": 7 },
-              { "name": "ab", "line": 590, "depth": 7 },
-              { "name": "ab", "line": 602, "depth": 8 }
+              { "name": "(a!=bandc<=b)", "line": 577, "depth": 6 },
+              { "name": "ab", "line": 590, "depth": 6 },
+              { "name": "ab", "line": 602, "depth": 7 }
             ]
           }
         }

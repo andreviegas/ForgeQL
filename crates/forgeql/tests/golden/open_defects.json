@@ -318,7 +318,7 @@
    "fql": "FIND symbols WHERE has_todo = 'true' LIMIT 1",
    "assert": {
     "row_count": 1,
-    "total": 949
+    "total": 951
    }
   },
   {
@@ -339,7 +339,7 @@
    "fql": "FIND symbols WHERE has_shadow = 'true' LIMIT 1",
    "assert": {
     "row_count": 1,
-    "total": 524
+    "total": 534
    }
   },
   {
@@ -360,7 +360,7 @@
    "fql": "FIND symbols WHERE has_todo = 'true' LIMIT 1",
    "assert": {
     "row_count": 1,
-    "total": 2770
+    "total": 3398
    }
   },
   {

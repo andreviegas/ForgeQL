@@ -155,7 +155,6 @@
   "kind_map": {
     "function_definition": "function",
     "class_definition": "class",
-    "decorated_definition": "function",
     "assignment": "variable",
     "augmented_assignment": "variable",
     "import_statement": "import",

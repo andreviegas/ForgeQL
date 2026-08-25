@@ -1,0 +1,90 @@
+{
+ "suite": "function_row_enrichment_parity",
+ "description": "Every `function` row must have been visited by the function-metrics enricher. `param_count` is the witness: the enricher stamps it unconditionally, even for a zero-argument function, so a function row that cannot answer it is a row no enricher examined. The booleans the same gate stamps are written only when TRUE, so such a row answers neither `has_todo = 'true'` nor `= 'false'` — it is missing from both sides of the question rather than answered wrongly on one, which is what let it go unnoticed. Python broke this until 0.188.0: `decorated_definition` was mapped to `function` and named after the definition it wraps, whose span is already folded back to the leading decorator, so the two rows were indistinguishable to the dedupe and the wrapper survived — 36,978 of 141,233 rows on pytorch, 26%. Held here for the four languages the golden corpora cover (C, C++, Rust, Python); a language outside them is unpinned. Each case pins an absolute count, so a corpus re-pin moves a pair together while a parity break moves only one of the two.",
+ "cases": [
+  {
+   "name": "every_python_function_row_was_enriched_on_pytorch",
+   "description": "The corpus the defect was found on. Both totals must be the same number; if they part again, some Python function shape is producing a row the metrics gate does not recognise.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "FIND symbols WHERE language = 'python' WHERE fql_kind = 'function' LIMIT 1",
+   "assert": {
+    "total": 138126
+   }
+  },
+  {
+   "name": "control_pytorch_python_functions_all_answer_param_count",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "FIND symbols WHERE language = 'python' WHERE fql_kind = 'function' WHERE param_count >= 0 LIMIT 1",
+   "assert": {
+    "total": 138126
+   }
+  },
+  {
+   "name": "every_python_function_row_was_enriched_on_zephyr",
+   "description": "A second, independent Python population — the defect was 20% here, so one corpus agreeing is not evidence.",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE language = 'python' WHERE fql_kind = 'function' LIMIT 1",
+   "assert": {
+    "total": 6159
+   }
+  },
+  {
+   "name": "control_zephyr_python_functions_all_answer_param_count",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE language = 'python' WHERE fql_kind = 'function' WHERE param_count >= 0 LIMIT 1",
+   "assert": {
+    "total": 6159
+   }
+  },
+  {
+   "name": "every_c_function_row_was_enriched",
+   "description": "C never had the defect — no wrapper node maps to `function` there. Held to the same invariant so the pin is a rule rather than a Python special case.",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE language = 'c' WHERE fql_kind = 'function' LIMIT 1",
+   "assert": {
+    "total": 83350
+   }
+  },
+  {
+   "name": "control_c_functions_all_answer_param_count",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE language = 'c' WHERE fql_kind = 'function' WHERE param_count >= 0 LIMIT 1",
+   "assert": {
+    "total": 83350
+   }
+  },
+  {
+   "name": "every_cpp_function_row_was_enriched",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "FIND symbols WHERE language = 'cpp' WHERE fql_kind = 'function' LIMIT 1",
+   "assert": {
+    "total": 55424
+   }
+  },
+  {
+   "name": "control_cpp_functions_all_answer_param_count",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "FIND symbols WHERE language = 'cpp' WHERE fql_kind = 'function' WHERE param_count >= 0 LIMIT 1",
+   "assert": {
+    "total": 55424
+   }
+  },
+  {
+   "name": "every_rust_function_row_was_enriched",
+   "description": "Rust attributes are siblings of the item rather than a wrapping node, which is why it was never affected — the shape that broke Python cannot occur here.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE language = 'rust' WHERE fql_kind = 'function' LIMIT 1",
+   "assert": {
+    "total": 3159
+   }
+  },
+  {
+   "name": "control_rust_functions_all_answer_param_count",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE language = 'rust' WHERE fql_kind = 'function' WHERE param_count >= 0 LIMIT 1",
+   "assert": {
+    "total": 3159
+   }
+  }
+ ]
+}

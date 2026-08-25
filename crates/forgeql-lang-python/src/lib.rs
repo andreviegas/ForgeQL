@@ -67,14 +67,16 @@ impl LanguageSupport for PythonLanguage {
             }
         }
 
+        // `decorated_definition` is deliberately absent from the arms below, so
+        // it falls through to `None` and produces no row of its own. The
+        // definition it wraps already produces one, and that row's span is
+        // folded back to the leading decorator, so naming the wrapper gave two
+        // rows agreeing on name, kind, path and line — indistinguishable to the
+        // dedupe, which kept the wrapper. The wrapper is not in
+        // `function_kinds`, so the surviving row answered no function metric at
+        // all: 36,978 of 141,233 Python `function` rows on one corpus, 26%.
+        // Naming it also made a decorated CLASS a second `function` row.
         match node.kind() {
-            // Decorated definitions: delegate to the inner definition.
-            "decorated_definition" => node
-                .child_by_field_name("definition")
-                .and_then(|def| def.child_by_field_name("name"))
-                .map(|n| node_text(source, n))
-                .filter(|s| !s.is_empty()),
-
             // import X, import X as Y
             "import_statement" => {
                 let mut names = Vec::new();
@@ -159,7 +161,45 @@ mod tests {
         let lang = PythonLanguage;
         assert_eq!(lang.map_kind("function_definition"), Some("function"));
         assert_eq!(lang.map_kind("class_definition"), Some("class"));
-        assert_eq!(lang.map_kind("decorated_definition"), Some("function"));
+        // The wrapper maps to nothing on purpose: the definition it wraps is
+        // the row, and mapping the wrapper to `function` made a decorated
+        // CLASS answer as a function as well as a class. Paired with
+        // `extract_name` returning `None` for it — either one alone leaves a
+        // row behind, kindless in one direction and unnamed in the other.
+        assert_eq!(lang.map_kind("decorated_definition"), None);
+    }
+
+    /// The wrapper is not named, so it produces no row of its own.
+    ///
+    /// This is the half that matters for the metrics: a named wrapper became a
+    /// row indistinguishable from the definition's own under the dedupe key,
+    /// and the survivor was the wrapper, which no function enricher visits.
+    #[test]
+    fn a_decorated_definition_is_not_named() {
+        let source = b"@deco\ndef inner(a):\n    return a\n";
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_python::LANGUAGE.into())
+            .expect("python grammar");
+        let tree = parser.parse(source.as_slice(), None).expect("parse");
+        let root = tree.root_node();
+        let wrapper = root.named_child(0).expect("decorated_definition");
+        assert_eq!(wrapper.kind(), "decorated_definition");
+        assert_eq!(
+            PythonLanguage.extract_name(wrapper, source.as_slice()),
+            None,
+            "naming the wrapper is what produced the shadow row"
+        );
+        let inner = wrapper
+            .child_by_field_name("definition")
+            .expect("inner definition");
+        assert_eq!(
+            PythonLanguage
+                .extract_name(inner, source.as_slice())
+                .as_deref(),
+            Some("inner"),
+            "the definition it wraps must still be named"
+        );
     }
 
     #[test]

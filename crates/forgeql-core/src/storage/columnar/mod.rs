@@ -429,7 +429,15 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        open rather than falling back to the map, which is why the bump has
 ///        to land with the writer: it is what puts the new segments under a
 ///        directory of their own, so nothing ever opens a v70 one.
-pub const ENRICH_VER: u32 = 71;
+///   72 — Python's `decorated_definition` no longer produces a row of its own.
+///        It was mapped to `fql_kind = 'function'` and named after the
+///        definition it wraps, whose span is already folded back to the leading
+///        decorator — so the two rows agreed on name, kind, path and line, the
+///        dedupe kept one, and the survivor was the wrapper, which no function
+///        enricher visits. v71 segments carry that row: every decorated Python
+///        function answers no `param_count`, `has_todo`, `is_recursive` or
+///        `has_shadow`, and a decorated class answers as a `function` besides.
+pub const ENRICH_VER: u32 = 72;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";
