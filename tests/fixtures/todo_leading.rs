@@ -18,6 +18,7 @@ fn marker_before_the_body() -> i32
     2
 }
 
+// TODO: a doc comment, preceding the function and outside it
 fn no_marker() -> i32 {
     3
 }

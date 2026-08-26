@@ -23,6 +23,7 @@ int markerBeforeTheBody() // TODO: between the signature and the body
     return 2;
 }
 
+// TODO: a doc comment, preceding the function and outside it
 int noMarker()
 {
     return 3;

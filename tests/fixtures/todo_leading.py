@@ -13,7 +13,9 @@ is the mirror position — a marker on the LAST line of the body — and it is N
 a blind spot: the block has already opened, so that comment is inside it and
 answered before this change as well. `marker_between_decorator_and_def` IS
 outside the region: it is a child of the wrapper, a sibling of the definition
-that owns the row, and stays unscanned.
+that owns the row, and stays unscanned. `no_marker` bounds it from a third
+side: the marker above it is the function's doc comment, a sibling of the
+function node, so `no_marker` must answer no marker at all.
 """
 
 
@@ -34,6 +36,7 @@ def marker_after_statement():
     return value
 
 
+# TODO: a doc comment, preceding the function and outside it
 def no_marker():
     return 3
 

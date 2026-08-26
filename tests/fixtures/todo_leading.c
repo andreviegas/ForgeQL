@@ -24,6 +24,7 @@ int marker_before_the_body(void) /* TODO: between the signature and the body */
     return 2;
 }
 
+// TODO: a doc comment, preceding the function and outside it
 int no_marker(void)
 {
     return 3;

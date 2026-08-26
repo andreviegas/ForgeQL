@@ -127,6 +127,15 @@ fn todo_where_filter() {
 /// `todo_count` is pinned to exactly `1`, not merely to presence: the fix scans
 /// the function node beside its body, and a grammar that put the leading
 /// comment inside the body all along would double-count it here.
+///
+/// `absent` is load-bearing twice over. It carries no marker inside it, AND a
+/// marker in the comment PRECEDING it — the first of the three documented
+/// exclusions, which was the only one no test covered. A preceding comment is
+/// an extra on the enclosing node, so it is a sibling of the function and
+/// outside the scanned region; if that ever stops holding, `absent` answers
+/// `has_todo` and every grammar's test here goes red at once. Verified by
+/// mutation: teaching the enricher to read `prev_named_sibling` turns six of
+/// these tests red.
 fn assert_one_marker_each(fixture: &str, present: &[&str], absent: &str) {
     let (mut e, sid, _d) = common::legacy_session(&[fixture]).into_parts();
     for name in present {
