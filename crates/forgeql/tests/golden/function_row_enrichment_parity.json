@@ -1,6 +1,6 @@
 {
  "suite": "function_row_enrichment_parity",
- "description": "Every `function` row must have been visited by the function-metrics enricher. `param_count` is the witness: the enricher stamps it unconditionally, even for a zero-argument function, so a function row that cannot answer it is a row no enricher examined. The booleans the same gate stamps are written only when TRUE, so such a row answers neither `has_todo = 'true'` nor `= 'false'` — it is missing from both sides of the question rather than answered wrongly on one, which is what let it go unnoticed. Python broke this until 0.188.0: `decorated_definition` was mapped to `function` and named after the definition it wraps, whose span is already folded back to the leading decorator, so the two rows were indistinguishable to the dedupe and the wrapper survived — 36,978 of 141,233 rows on pytorch, 26%. Held for EVERY language that produces a function row on any golden corpus — twelve populations across C, C++, Rust, Python, Make and CMake. The first version of this suite pinned only the four languages the defect had been reasoned about, which left seven populations measured once and guarded never; enumerating them from `GROUP BY language` rather than from memory is what closed that. Each case pins an absolute count, so a corpus re-pin moves a pair together while a parity break moves only one of the two.",
+ "description": "Every `function` row must have been visited by the function-metrics enricher. `param_count` is the witness: the enricher stamps it unconditionally, even for a zero-argument function, so a function row that cannot answer it is a row no enricher examined. The booleans the same gate stamps are written only when TRUE, so such a row answers neither `has_todo = 'true'` nor `= 'false'` — it is missing from both sides of the question rather than answered wrongly on one, which is what let it go unnoticed. Python broke this until 0.188.0: `decorated_definition` was mapped to `function` and named after the definition it wraps, whose span is already folded back to the leading decorator, so the two rows were indistinguishable to the dedupe and the wrapper survived — 36,978 of 141,233 rows on pytorch, 26%. Held for EVERY language that produces a function row on any golden corpus — twelve populations across C, C++, Rust, Python, Make and CMake — plus the CMake `macro()` populations, because `function` is not the only kind this enricher stamps. The domain is enumerated BOTH ways for that reason: `GROUP BY language` within a kind cannot see a function-shaped population filed under a different kind, and `GROUP BY fql_kind` over `param_count >= 0` is what found the macros. The first version of this suite pinned only the four languages the defect had been reasoned about, which left seven populations measured once and guarded never; enumerating them from `GROUP BY language` rather than from memory is what closed that. Each case pins an absolute count, so a corpus re-pin moves a pair together while a parity break moves only one of the two.",
  "cases": [
   {
    "name": "every_python_function_row_was_enriched_on_pytorch",
@@ -203,6 +203,40 @@
    "fql": "FIND symbols WHERE language = 'cmake' WHERE fql_kind = 'function' WHERE param_count >= 0 LIMIT 1",
    "assert": {
     "total": 53
+   }
+  },
+  {
+   "name": "every_cmake_macro_row_was_enriched_on_zephyr",
+   "description": "The same enricher stamps `macro` as well as `function`: a CMake `macro()` takes arguments and is function-shaped, so it is inside the metrics gate. Enumerating populations by language WITHIN `fql_kind = 'function'` could not see this one — the domain has to be enumerated by kind too, or a whole shape stays measured once and guarded never. These are small enough that losing all of them would move no headline number.",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE language = 'cmake' WHERE fql_kind = 'macro' LIMIT 1",
+   "assert": {
+    "total": 69
+   }
+  },
+  {
+   "name": "control_zephyr_cmake_macros_all_answer_param_count",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE language = 'cmake' WHERE fql_kind = 'macro' WHERE param_count >= 0 LIMIT 1",
+   "assert": {
+    "total": 69
+   }
+  },
+  {
+   "name": "every_cmake_macro_row_was_enriched_on_pytorch",
+   "description": "The same enricher stamps `macro` as well as `function`: a CMake `macro()` takes arguments and is function-shaped, so it is inside the metrics gate. Enumerating populations by language WITHIN `fql_kind = 'function'` could not see this one — the domain has to be enumerated by kind too, or a whole shape stays measured once and guarded never. These are small enough that losing all of them would move no headline number.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "FIND symbols WHERE language = 'cmake' WHERE fql_kind = 'macro' LIMIT 1",
+   "assert": {
+    "total": 43
+   }
+  },
+  {
+   "name": "control_pytorch_cmake_macros_all_answer_param_count",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "FIND symbols WHERE language = 'cmake' WHERE fql_kind = 'macro' WHERE param_count >= 0 LIMIT 1",
+   "assert": {
+    "total": 43
    }
   }
  ]
