@@ -6,6 +6,18 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.190.0] — 2026-08-26 — the enrichment parity rule reaches the macro rows as well
+
+### Changed
+
+- Test coverage only, nothing an agent can observe. The parity suite added in
+  0.188.0 enumerated its populations by language within `fql_kind =
+  'function'`, which could not see a function-shaped population filed under a
+  different kind. The same enricher also stamps CMake `macro()` definitions —
+  69 rows on one golden corpus and 43 on another — so the suite now enumerates
+  the domain by kind as well as by language, and holds those two populations
+  to the same rule.
+
 ## [0.189.0] — 2026-08-25 — every function population is held to the enrichment rule
 
 ### Changed
