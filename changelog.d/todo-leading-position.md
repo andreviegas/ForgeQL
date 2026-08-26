@@ -31,7 +31,7 @@
   | Zephyr | 951 | 958 |
   | this repository, at the snapshot the tests read | 9 | 9 |
 
-  One PyTorch file went from 8 functions to 12. The snapshot of this repository
+  One PyTorch file went from 11 functions to 12. The snapshot of this repository
   that the tests read does not move at all, and that is the shape of the defect
   rather than a gap in the check: the snapshot holds no Python, so the leading
   position cannot arise in it, and its C, C++ and Rust write no marker between

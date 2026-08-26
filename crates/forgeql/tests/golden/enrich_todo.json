@@ -48,8 +48,8 @@
       "fql": "FIND symbols IN 'torch/_refs/__init__.py' WHERE fql_kind = 'function' WHERE line = 4816 WHERE has_todo = 'true' WHERE todo_count = 1 WHERE todo_tags = 'TODO' LIMIT 2",
       "assert": { "row_count": 1, "total": 1, "rows": [{ "name": "t", "line": 4816 }] } },
 
-    { "name": "the_file_gained_the_functions_that_open_with_a_marker", "use": "pytorch-andre.pytorch-frozen",
-      "description": "Breadth beside the single row: one named function proves the position is reachable, not that the fix reaches every function in that position. This file answers 12 rows now against 8 before — the 8 measured live on 0.188.0 when this defect was filed and confirmed by the gate run that moved this case's own assert from 8 to 12 — and the number is what says the correction landed across the file rather than on the row a test happened to name.",
+    { "name": "the_file_total_moves_by_exactly_the_one_row", "use": "pytorch-andre.pytorch-frozen",
+      "description": "Pins this file's total so a regression in either direction shows: a row lost here, or a second row gained that the fix has no business gaining. Be exact about what it does NOT show. The released engine immediately before this change answers 11 for this file — measured live on 0.190.0 against this same frozen snapshot on 2026-08-26 — so the fix moves it 11 to 12, and the one row it adds is `t`, the row the case above already names. This is therefore a second assertion about one row, not evidence of breadth. An earlier baseline of 8 was taken on 0.188.0 mid-flight and is a DIFFERENT enrichment generation; reading 12 against it credits this change with three rows the previous release had already banked. Breadth is carried by the corpus-wide counts in open_defects.json — PyTorch 3,398 to 3,763 — and not by this case.",
       "fql": "FIND symbols IN 'torch/_refs/__init__.py' WHERE fql_kind = 'function' WHERE has_todo = 'true' LIMIT 40",
       "assert": { "total": 12 } }
   ]
