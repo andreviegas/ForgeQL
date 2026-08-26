@@ -102,7 +102,10 @@ ForgeQL indexes code quality metrics at parse time. Use them in WHERE clauses:
 - `has_unused_param = 'true'` — unused function parameters
 - `has_fallthrough = 'true'` — switch/case fallthrough without break
 - `is_recursive = 'true'` — directly recursive functions
-- `has_todo = 'true'` — TODO/FIXME/HACK/XXX markers in comments
+- `has_todo = 'true'` — TODO/FIXME/HACK/XXX markers in comments inside the
+  function, never in its doc comment, never between a decorator and the
+  definition, and only in the raw comment kind the language declares (in Rust,
+  `//` and not `/* */`)
 
 ## Mutations
 

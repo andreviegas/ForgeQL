@@ -1,5 +1,31 @@
-/// Todo/fixme enrichment — detects annotation-style comments inside
-/// function bodies.
+/// Todo/fixme enrichment — detects annotation-style comments inside a
+/// function: its body, and any comment attached directly to the function node.
+///
+/// The scanned region is the `body` subtree, if the grammar gives the function
+/// one, PLUS any comment that is a direct child of the function node. The
+/// second half is not decoration: in an indentation-delimited grammar the body
+/// block does not open until the first statement, so a comment written as the
+/// first line of the body is parsed as a sibling of the block rather than a
+/// child of it, and a body-only walk reports no marker for a function whose
+/// first line is one. It also brings in a comment written between the signature
+/// and the body, which sits in the same place in a brace-delimited grammar and
+/// was unseen for the same reason. A comment on the LAST line of a body needs
+/// nothing: the block has opened by then, so it was always inside.
+///
+/// Three things are outside the region, and each is a tree fact rather than a
+/// rule written here:
+///
+/// 1. A comment PRECEDING the function is its doc comment. Extras attach to the
+///    enclosing node, so it is a sibling of the function.
+/// 2. A comment between a DECORATOR and the definition it decorates is a child
+///    of the wrapper, hence a sibling of the definition that owns the row —
+///    even though the row's rendered span folds back to the decorator, so such
+///    a comment sits inside the span an agent reads.
+/// 3. Any comment style the language does not declare. "Comment" here means the
+///    one raw node kind named by the config ([`LanguageConfig::is_comment_kind`]
+///    is an equality), so where a grammar splits the styles and the config names
+///    one — Rust's `line_comment` against its `block_comment` — the other is not
+///    scanned in any position. That last one is a gap this walk does not close.
 ///
 /// `enrich_row()` adds to `function_definition` rows:
 /// - `has_todo`: `"true"` if any TODO/FIXME/HACK/XXX marker was found.
@@ -41,14 +67,24 @@ impl NodeEnricher for TodoEnricher {
             return;
         }
 
-        let Some(body) = ctx.node.child_by_field_name("body") else {
-            return;
-        };
-
         let mut count = 0u32;
         let mut tags = BTreeSet::new();
-        collect_todos(body, ctx.source, config, &mut count, &mut tags);
 
+        // The function's own comment children carry the two positions a
+        // body-only walk cannot reach; the module doc says which and why. The
+        // body is optional rather than an early return, so the region stays
+        // "the body if there is one, plus the function's own comment children"
+        // even for a function kind whose grammar declares no body.
+        let mut cursor = ctx.node.walk();
+        for child in ctx.node.children(&mut cursor) {
+            if config.is_comment_kind(child.kind()) {
+                collect_todos(child, ctx.source, config, &mut count, &mut tags);
+            }
+        }
+
+        if let Some(body) = ctx.node.child_by_field_name("body") {
+            collect_todos(body, ctx.source, config, &mut count, &mut tags);
+        }
         if count > 0 {
             drop(fields.insert("has_todo".into(), "true".into()));
             drop(fields.insert("todo_count".into(), count.to_string()));

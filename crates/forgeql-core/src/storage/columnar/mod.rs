@@ -437,7 +437,20 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        enricher visits. v71 segments carry that row: every decorated Python
 ///        function answers no `param_count`, `has_todo`, `is_recursive` or
 ///        `has_shadow`, and a decorated class answers as a `function` besides.
-pub const ENRICH_VER: u32 = 72;
+///   73 — the todo enricher scans the function node's own comment children as
+///        well as its `body` subtree, so TWO comment positions that stored
+///        nothing under v72 now store `has_todo`, `todo_count` and
+///        `todo_tags`. The first is a marker written as the FIRST line of a
+///        body: an indentation-delimited grammar does not open the block until
+///        the first statement, so that comment is a sibling of the block, not
+///        a child of it. The second is a marker between the signature and the
+///        body, which sits in the same place in a brace-delimited grammar —
+///        that is why a v72 segment is stale for C, C++ and Rust too, and not
+///        only for Python. A v72 segment is not merely missing rows: a row
+///        that already carried a marker elsewhere in the body now records a
+///        LARGER `todo_count`, and can gain a tag in `todo_tags`, so v72 holds
+///        wrong values on rows it does have and not only absences.
+pub const ENRICH_VER: u32 = 73;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

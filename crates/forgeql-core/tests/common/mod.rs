@@ -31,8 +31,8 @@ use forgeql_core::session::SessionCoords;
 use tempfile::tempdir;
 
 /// The single language registry every suite shares — the one place the language
-/// set is defined: the production `forgeql-lang-*` plugins (`CppLanguage`,
-/// `RustLanguage`, `PythonLanguage`) plus `text_languages()`.
+/// set is defined: the production `forgeql-lang-*` plugins (`CLanguage`,
+/// `CppLanguage`, `RustLanguage`, `PythonLanguage`) plus `text_languages()`.
 pub fn make_registry() -> Arc<LanguageRegistry> {
     let mut langs = forgeql_lang_text::text_languages();
     // `.c` is claimed by no other plugin — cpp.json takes cpp/cc/cxx/h/hpp/hxx.

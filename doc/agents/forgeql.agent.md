@@ -654,13 +654,13 @@ Detects direct (single-function) self-recursion.
 
 ### Todo Markers
 
-Detects TODO, FIXME, HACK, and XXX markers in comments inside function bodies.
+Detects TODO, FIXME, HACK, and XXX markers in comments inside a function — its body, and any comment attached directly to the function node, which is where a grammar puts a comment written as the first line of the body or between the signature and the body. Three comments are outside that region: one *preceding* the function, which is its doc comment; one between a *decorator* and the definition it decorates, which belongs to the wrapper even though the row's span folds back over it; and any style the language does not declare as its comment kind, so in Rust `//` is scanned and `/* */` is not.
 
 | Field | Applies to | Values / Notes |
 |---|---|---|
-| `has_todo` | `function` | `"true"` if any marker comment is found |
-| `todo_count` | `function` | Total marker occurrences |
-| `todo_tags` | `function` | Comma-separated, sorted unique tags (e.g. `"FIXME,TODO"`) |
+| `has_todo` | `function` | `"true"` if a marker comment inside the function is found — its body or a comment attached directly to it, never its doc comment, never one between a decorator and the definition, and only in the raw comment kind the language declares (in Rust, `//` and not `/* */`) |
+| `todo_count` | `function` | Total marker occurrences, over the same region as `has_todo` |
+| `todo_tags` | `function` | Comma-separated, sorted unique tags over that same region (e.g. `"FIXME,TODO"`) |
 
 ### Guard / Preprocessor Fields (C/C++)
 

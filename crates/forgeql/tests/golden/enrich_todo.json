@@ -1,6 +1,6 @@
 {
   "suite": "enrich_todo",
-  "description": "Todo-marker enrichment: has_todo, todo_count, todo_tags (sorted unique TODO/FIXME/HACK/XXX). Grounded on forgeql-pub.frozen — Rust source markers plus C/C++ fixture todo patterns.",
+  "description": "Todo-marker enrichment: has_todo, todo_count, todo_tags (sorted unique TODO/FIXME/HACK/XXX). Grounded on three corpora: forgeql-pub.frozen for Rust source markers, C/C++ fixture patterns and the corpus that must NOT move; pytorch-andre.pytorch-frozen for the leading position, where a marker comment opening a Python body is a sibling of the body block rather than a child of it; and zephyr-andre.frozen for the partition that says which grammar the gain came from.",
   "cases": [
     { "name": "todo_in_cpp_fixture", "use": "forgeql-pub.frozen",
       "fql": "FIND symbols IN 'tests/fixtures/enrichment_patterns.cpp' WHERE fql_kind='function' WHERE has_todo='true' WHERE name MATCHES '^todo' ORDER BY line ASC LIMIT 10",
@@ -16,6 +16,41 @@
 
     { "name": "negative_no_todo_in_rust", "use": "forgeql-pub.frozen",
       "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE has_todo='true' LIMIT 5",
-      "assert": { "row_count": 0, "total": 0 } }
+      "assert": { "row_count": 0, "total": 0 } },
+
+    { "name": "control_the_frozen_snapshot_did_not_move", "use": "forgeql-pub.frozen",
+      "description": "The other side of the fix, and the reason it is a control rather than an afterthought: the corpora that DID move cannot tell a correct widening from one that started counting comments it has no business counting; only a corpus that must not move can. This snapshot must not, and the claim is about the SNAPSHOT, not about the working tree — the commit adds fixture files carrying markers in both new positions, and those are not in it. Be exact about what it therefore controls: the snapshot holds no Python at all, so it cannot exercise the leading position; what it holds at rest is the OTHER position the fix opens, a marker between a signature and a body, across its C, C++ and Rust. The count stays at exactly 9 — measured live on 0.190.0, the pre-fix binary, against this same snapshot on 2026-08-26.",
+      "fql": "FIND symbols WHERE has_todo = 'true' LIMIT 1",
+      "assert": { "row_count": 1, "total": 9 } },
+
+    { "name": "the_zephyr_gain_is_all_in_its_python", "use": "zephyr-andre.frozen",
+      "description": "Where the seven rows this corpus gained actually came from. Its corpus-wide count is pinned at 958 in open_defects.json, 951 before the fix; that number alone does not say which grammar moved, and the fix opens a position in brace-delimited grammars too, so on a corpus that is overwhelmingly C the natural reading could be wrong. Partitioning it settles the attribution: 44 Python functions answer now against 37 before — the 37 measured live on 0.190.0 against this same frozen snapshot, 2026-08-26, before the fix was built — which accounts for all seven and leaves the C at rest.",
+      "fql": "FIND symbols WHERE has_todo = 'true' IN '**/*.py' LIMIT 1",
+      "assert": { "row_count": 1, "total": 44 } },
+
+    { "name": "control_a_todo_after_a_statement_is_found", "use": "pytorch-andre.pytorch-frozen",
+      "description": "Anchors the leading-position case below by ruling out the two explanations that are not the defect: `cat` is decorated too, and it sits in the same file, so neither decoration nor the file is why the marker was missed. Its body opens with a nested `def`, so its TODO was never the first thing in the body and it answered all along.",
+      "fql": "FIND symbols IN 'torch/_refs/__init__.py' WHERE fql_kind = 'function' WHERE line = 2878 WHERE has_todo = 'true' LIMIT 2",
+      "assert": { "row_count": 1 } },
+
+    { "name": "control_the_leading_todo_is_still_on_line_4818", "use": "pytorch-andre.pytorch-frozen",
+      "description": "Anchors the case's identity rather than only its row: it is addressed by line against a frozen snapshot, so a re-pin that shifted the file could turn it green while proving nothing.",
+      "fql": "SHOW LINES 4818-4818 OF 'torch/_refs/__init__.py' WHERE text MATCHES 'TODO'",
+      "assert": { "row_count": 1 } },
+
+    { "name": "control_the_function_holding_it_is_indexed", "use": "pytorch-andre.pytorch-frozen",
+      "description": "And that the function whose body it opens is a row at all, so the case below can only fail on the marker.",
+      "fql": "FIND symbols IN 'torch/_refs/__init__.py' WHERE fql_kind = 'function' WHERE line = 4816 LIMIT 2",
+      "assert": { "row_count": 1 } },
+
+    { "name": "a_todo_on_the_first_body_line_is_found", "use": "pytorch-andre.pytorch-frozen",
+      "description": "A marker comment that is the FIRST thing in a function body is counted. `t` opens with `# TODO: Add sparse support` and answered no has_todo at all, because the scan walked the body subtree only and tree-sitter-python does not open the block until the first statement — the comment is parsed as a sibling of the block. The count and the tags are pinned beside the row, not just its presence: the scan now visits the function node as well as its body, and a grammar that had the comment inside the body all along would report this marker twice.",
+      "fql": "FIND symbols IN 'torch/_refs/__init__.py' WHERE fql_kind = 'function' WHERE line = 4816 WHERE has_todo = 'true' WHERE todo_count = 1 WHERE todo_tags = 'TODO' LIMIT 2",
+      "assert": { "row_count": 1, "total": 1, "rows": [{ "name": "t", "line": 4816 }] } },
+
+    { "name": "the_file_gained_the_functions_that_open_with_a_marker", "use": "pytorch-andre.pytorch-frozen",
+      "description": "Breadth beside the single row: one named function proves the position is reachable, not that the fix reaches every function in that position. This file answers 12 rows now against 8 before — the 8 measured live on 0.188.0 when this defect was filed and confirmed by the gate run that moved this case's own assert from 8 to 12 — and the number is what says the correction landed across the file rather than on the row a test happened to name.",
+      "fql": "FIND symbols IN 'torch/_refs/__init__.py' WHERE fql_kind = 'function' WHERE has_todo = 'true' LIMIT 40",
+      "assert": { "total": 12 } }
   ]
 }

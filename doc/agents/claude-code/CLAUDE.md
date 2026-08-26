@@ -507,9 +507,9 @@ Detects local variables that escape their declaring function — via return, add
 
 | Field | Applies to | Values / Notes |
 |---|---|---|
-| `has_todo` | `function` | `"true"` if any TODO/FIXME/HACK/XXX marker found |
-| `todo_count` | `function` | Total marker occurrences |
-| `todo_tags` | `function` | Sorted unique tags (e.g. `"FIXME,TODO"`) |
+| `has_todo` | `function` | `"true"` if a TODO/FIXME/HACK/XXX marker comment inside the function is found — its body or a comment attached directly to it, never its doc comment, never one between a decorator and the definition, and only in the raw comment kind the language declares (in Rust, `//` and not `/* */`) |
+| `todo_count` | `function` | Total marker occurrences, over the same region as `has_todo` |
+| `todo_tags` | `function` | Sorted unique tags over that same region (e.g. `"FIXME,TODO"`) |
 
 ## Common Recipes
 

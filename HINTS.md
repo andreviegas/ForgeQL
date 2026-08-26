@@ -215,3 +215,35 @@ Short, durable facts discovered while working in this codebase.
   through the segment string pool, which holds no empty value. Pinned as an
   open defect (`the_kindless_rows_answer_their_own_equality`); do not read it as
   the refusal swallowing the shape.
+
+## Enrichers and the leading position (2026-08-26)
+
+- **A comment that OPENS a function body is not a child of the body.**
+  tree-sitter attaches an extra where the scanner was standing, and an
+  indentation-delimited grammar does not open the block until the first
+  *statement* — so in Python the comment lands beside the block, under the
+  function node. `TodoEnricher` walked `child_by_field_name("body")` only and
+  missed exactly that position; it now walks the body plus every comment that is
+  a direct child of the function node.
+- **What was actually checked, and what was only argued.** CHECKED: in `enrich/`,
+  `is_comment_kind` is called by `todo.rs` and `comments.rs` and nothing else,
+  and `comments.rs` reads `prev_named_sibling` on a comment row rather than
+  walking a body — so among enrichers that find comments *that way*, `todo.rs`
+  was the whole class. ARGUED, not established: that only comment-scanning
+  enrichers can have this blindness at all. The reasoning is that a statement is
+  never an extra, so it cannot escape the block — but thirteen other enrichers
+  walk `child_by_field_name` and no test and no per-grammar enumeration of
+  extras backs the claim for them. Treat it as a hypothesis.
+- **`is_comment_kind` is an EQUALITY against one declared raw kind**
+  (`syntax.comment`), not a set. C, C++ and Python each declare `comment` and
+  their grammars use one node for both styles, so nothing is lost there. Rust
+  declares `line_comment` while its grammar also emits `block_comment` — which
+  `kind_map` DOES map to `fql_kind = 'comment'`, so a Rust `/* */` is a comment
+  ROW that no comment-scanning enricher will look at. Marker detection in Rust
+  is `//`-only, in every position.
+- **`tests/fixtures/` holds one fixture per grammar** (`todo_leading.{py,c,cpp,rs}`).
+  The test registry in `tests/common/mod.rs` registers C, C++, Rust and Python,
+  so a `.c` fixture indexes — the older note that C was missing is stale.
+- **The `test` gate step is not the commit gate.** `JOB START 'test'` leaves
+  `FORGEQL_ALLOW_CHANGE_FILE_INDEXED` unset, so three `change_*` tests in
+  `engine_integration` fail on it; `test-all-before-commit` sets it.
