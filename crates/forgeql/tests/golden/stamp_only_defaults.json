@@ -1,0 +1,171 @@
+{
+  "suite": "stamp_only_defaults",
+  "description": "A stamp-only boolean answering the value nothing stores. has_todo, has_escape, has_shadow and is_recursive are written only when they hold, so 'false' used to answer zero rows on any corpus — an empty page indistinguishable from a claim about the code. It is now computed from one declaration in the field-tier table: the rows the enricher examined, minus the rows it wrote. Which rows those are takes TWO facts, not one — the applicable kinds, and the languages whose config declares the syntax the enricher needs, since a language that declares none makes it return before reading a byte. These cases are the promoted expect_fails, tightened from a page-full assert to the exact total the arithmetic predicts, plus the pairs that show the two values partitioning the examined rows on each corpus, plus the rows on each side of both boundaries.",
+
+  "cases": [
+    { "name": "control_a_true_valued_boolean_field_is_queryable", "use": "forgeql-pub.frozen",
+      "description": "Anchors the case below: the has_todo field exists, posts, and answers for its true value on this corpus.",
+      "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_todo = 'true' LIMIT 3",
+      "assert": { "row_count": 3, "total": 9 } },
+
+    { "name": "a_boolean_fields_false_value_is_queryable", "use": "forgeql-pub.frozen",
+      "description": "The promoted case. The enrichment tables listed has_todo, has_escape, has_shadow and is_recursive as boolean fields without saying only one of the two values was addressable, while has_doc = 'false' and is_magic = 'false' answered thousands of rows — an inconsistency rather than a documented design. The total is the whole claim: 3,269 functions on this corpus, 9 of them carrying a marker, so 3,260 answer 'false' and the two values leave nothing over.",
+      "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_todo = 'false' LIMIT 3",
+      "assert": { "row_count": 3, "total": 3260 } },
+
+    { "name": "control_the_applicable_rows_are_the_functions", "use": "forgeql-pub.frozen",
+      "description": "The other side of that arithmetic, so neither number in it is taken on trust: 3,269 is the count of rows the enricher examines, and 9 + 3,260 is exactly it. Without this the pair above could both be wrong by the same amount and still look consistent.",
+      "fql": "FIND symbols WHERE fql_kind = 'function' LIMIT 1",
+      "assert": { "row_count": 1, "total": 3269 } },
+
+    { "name": "a_kind_the_enricher_never_examines_is_not_defaulted", "use": "forgeql-pub.frozen",
+      "description": "The exclusion that makes the default a fact and not a fabrication. A struct row carries no has_todo for the same reason a marker-less function does — the column is simply absent — and only the declared applicable kinds separate 'examined and found nothing' from 'never looked at'. A fix that defaulted every row would answer thousands here.",
+      "fql": "FIND symbols WHERE fql_kind = 'struct' WHERE has_todo = 'false' LIMIT 5",
+      "assert": { "row_count": 0, "total": 0 } },
+
+    { "name": "the_undeclared_stamp_only_booleans_still_answer_nothing", "use": "forgeql-pub.frozen",
+      "description": "The scope boundary, pinned rather than only written down. The ruling names four fields; has_fallthrough, is_const, has_catch_all, expansion_failed, expanded_has_escape, is_mutable, is_unsafe, is_async and is_generic are stamp-only for the same reason and are deliberately left as they were. Each is one row of declaration away, so this is what makes the difference between 'not yet declared' and 'declared and broken' visible.",
+      "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_fallthrough = 'false' LIMIT 5",
+      "assert": { "row_count": 0, "total": 0 } },
+
+    { "name": "control_zephyr_has_todo_true_answers", "use": "zephyr-andre.frozen",
+      "description": "Anchors the corpus-scale cases below: has_todo posts and answers its true value on this corpus — 958 functions.",
+      "fql": "FIND symbols WHERE has_todo = 'true' LIMIT 1",
+      "assert": { "row_count": 1, "total": 958 } },
+
+    { "name": "control_zephyr_applicable_rows", "use": "zephyr-andre.frozen",
+      "description": "And the applicable set it is subtracted from: 96,304 function rows.",
+      "fql": "FIND symbols WHERE fql_kind = 'function' LIMIT 1",
+      "assert": { "row_count": 1, "total": 96304 } },
+
+    { "name": "a_boolean_false_fills_a_page_on_a_big_corpus", "use": "zephyr-andre.frozen",
+      "description": "The promoted page-full pin, tightened to the exact total now that the fix settles the semantics. 96,304 functions, minus the 958 carrying a marker, minus the 402 written in a language whose config declares no comment kind — 355 CMake functions and 47 Makefile rules, which the marker scan returned on without reading — is 94,944. It answered zero rows before. The page-full form it replaced could not tell a correct complement from one that was too generous by a thousand.",
+      "fql": "FIND symbols WHERE has_todo = 'false'",
+      "assert": { "row_count": 20, "total": 94944 } },
+
+    { "name": "control_zephyr_has_shadow_true_answers", "use": "zephyr-andre.frozen",
+      "description": "Anchors the second-field case below: has_shadow answers its true value — 534 functions.",
+      "fql": "FIND symbols WHERE has_shadow = 'true' LIMIT 1",
+      "assert": { "row_count": 1, "total": 534 } },
+
+    { "name": "a_second_boolean_false_fills_a_page", "use": "zephyr-andre.frozen",
+      "description": "Breadth pin: the ruling names four fields, and a version that special-cased one would leave the others silently empty. has_shadow is held to the same arithmetic on the same corpus — 96,304 functions, minus the 402 CMake and Makefile rows whose grammar carries no `body` field for its walk to start on, minus the 534 carrying 'true', is 95,368 — which also shows the applicable set is shared rather than written out per field.",
+      "fql": "FIND symbols WHERE has_shadow = 'false'",
+      "assert": { "row_count": 20, "total": 95368 } },
+
+    { "name": "a_language_whose_enricher_never_ran_answers_neither_value", "use": "zephyr-andre.frozen",
+      "description": "The language half of the applicable set, and the case that used to answer the other way. The marker scan gates on the function kinds AND on the language declaring a comment kind; CMake and Make declare none, so it returns before reading anything and these 355 CMake functions (plus 47 Makefile rules) were never examined for a marker. They used to answer 'false' whether or not their text held one. They now answer neither value, exactly as a row of an unexamined KIND does, and for the same reason: carrying nothing is what a row nothing looked at and a row examined-and-not-written both look like, and only the declaration separates them. 402 of Zephyr's 96,304 function rows move out of the default this way, 138 of PyTorch's 194,114, none of this repository's.",
+      "fql": "FIND symbols WHERE has_todo = 'false' WHERE language = 'cmake' LIMIT 1",
+      "assert": { "row_count": 0, "total": 0 } },
+
+    { "name": "control_those_cmake_rows_are_function_rows", "use": "zephyr-andre.frozen",
+      "description": "And that the case above is an exclusion rather than an empty set: the same 355 rows are inside fql_kind = 'function', which is what the applicable KINDS name. Only the language separates them, so without this control a fix that lost the rows entirely would look identical.",
+      "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'cmake' LIMIT 1",
+      "assert": { "row_count": 1, "total": 355 } },
+
+    { "name": "control_zephyr_has_escape_true_answers", "use": "zephyr-andre.frozen",
+      "description": "Anchors the escape-analysis pair below: has_escape posts and answers its true value on this corpus.",
+      "fql": "FIND symbols WHERE has_escape = 'true' LIMIT 1",
+      "assert": { "row_count": 1, "total": 2412 } },
+
+    { "name": "control_zephyr_python_function_rows", "use": "zephyr-andre.frozen",
+      "description": "The Python function rows the escape default must NOT speak for. Python declares no address-of operator, so the escape enricher returns before reading a byte of any of them.",
+      "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' LIMIT 1",
+      "assert": { "row_count": 1, "total": 6159 } },
+
+    { "name": "a_capability_gated_default_excludes_the_languages_its_enricher_skipped", "use": "zephyr-andre.frozen",
+      "description": "The field whose language gate reaches furthest. has_escape is stamped only by an enricher that gates on an address-of operator, and only C, C++ and Rust declare one, so Python, CMake and Make function rows answer neither value. 96,304 functions, minus the 6,159 Python and the 402 CMake and Make ones, is 89,743 the enricher examined; minus the 2,412 carrying 'true' is 87,331. It is NOT 96,304 minus the true count, and a version that made it so would publish 'no local escapes' about an analysis that never ran on 6,561 of these rows.",
+      "fql": "FIND symbols WHERE has_escape = 'false'",
+      "assert": { "row_count": 20, "total": 87331 } },
+
+    { "name": "the_gated_field_answers_nothing_for_the_language_it_skipped", "use": "zephyr-andre.frozen",
+      "description": "Named rather than left to arithmetic: not one Python function answers has_escape either way.",
+      "fql": "FIND symbols WHERE has_escape = 'false' WHERE language = 'python' LIMIT 1",
+      "assert": { "row_count": 0, "total": 0 } },
+
+    { "name": "the_unconditional_field_still_answers_that_same_language", "use": "zephyr-andre.frozen",
+      "description": "The discriminator, and the reason the languages are declared per field rather than once for the table. Escape analysis returns before reading a byte of a Python function; the shadow walk does not — Python's function_definition carries the `body` field it needs — so it ran on all 6,159 of them: 35 carry 'true' and the other 6,124 answer its default. The identical rows, an identical query shape, a different answer, decided by which gate each enricher reads.",
+      "fql": "FIND symbols WHERE has_shadow = 'false' WHERE language = 'python' LIMIT 1",
+      "assert": { "row_count": 1, "total": 6124 } },
+
+    { "name": "the_fourth_language_list_comes_from_the_grammar_not_the_config", "use": "zephyr-andre.frozen",
+      "description": "The fourth language list, and the only one no config could have produced. ShadowEnricher declares no capability — its gates are the node kind and `child_by_field_name(\"body\")`, which it returns on when the grammar carries none. A cmake function_def carries none, so the walk never starts, and these 355 rows answer neither value exactly as the Python rows do for has_escape. It reads as the same outcome a walk that ran and found nothing would produce, which is why it is settled from the grammar in engine_owned_value_universes rather than from any answer: 'walked and found nothing' and 'never walked' write the identical nothing, and only the tree-sitter node tells them apart.",
+      "fql": "FIND symbols WHERE has_shadow = 'false' WHERE language = 'cmake' LIMIT 1",
+      "assert": { "row_count": 0, "total": 0 } },
+
+    { "name": "control_zephyr_is_recursive_true_answers", "use": "zephyr-andre.frozen",
+      "description": "Anchors the fourth field: is_recursive posts and answers its true value.",
+      "fql": "FIND symbols WHERE is_recursive = 'true' LIMIT 1",
+      "assert": { "row_count": 1, "total": 73 } },
+
+    { "name": "the_fourth_field_is_held_to_the_same_arithmetic", "use": "zephyr-andre.frozen",
+      "description": "Breadth pin: the ruling names four fields and a version that special-cased one would leave the others silently wrong. is_recursive's enricher gates on a call expression, which C, C++, Python and Rust declare and CMake and Make do not — a third language set, distinct from both the marker scan's and escape analysis's, which is also what shows the sets are read per field rather than shared. 96,304 functions minus the 402 CMake and Make ones is 95,902 examined; minus the 73 carrying 'true' is 95,829.",
+      "fql": "FIND symbols WHERE is_recursive = 'false'",
+      "assert": { "row_count": 20, "total": 95829 } },
+
+    { "name": "control_pytorch_python_function_rows", "use": "pytorch-andre.pytorch-frozen",
+      "description": "The scale of the exclusion on the corpus where it matters most: Python function rows, most of this corpus.",
+      "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' LIMIT 1",
+      "assert": { "row_count": 1, "total": 138126 } },
+
+    { "name": "control_pytorch_has_escape_true_answers", "use": "pytorch-andre.pytorch-frozen",
+      "description": "The true count the case below subtracts, measured rather than inferred from the difference.",
+      "fql": "FIND symbols WHERE has_escape = 'true' LIMIT 1",
+      "assert": { "row_count": 1, "total": 552 } },
+
+    { "name": "the_capability_gate_on_the_python_corpus", "use": "pytorch-andre.pytorch-frozen",
+      "description": "The number that decided the shape of this change. Answering has_escape = 'false' over every function row regardless of language would make the claim 'no local escapes' about the 138,126 Python functions counted above — 71% of this corpus's function rows — on the strength of an analysis that returned before reading any of them. What answers instead is the C and C++ functions the enricher did examine: 194,114 minus 138,126 Python and 138 CMake and Make is 55,850, minus the 552 carrying 'true' is 55,298.",
+      "fql": "FIND symbols WHERE has_escape = 'false'",
+      "assert": { "row_count": 20, "total": 55298 } },
+
+    { "name": "an_examined_row_outside_the_declared_kinds_keeps_its_old_answer", "use": "zephyr-andre.frozen",
+      "description": "The boundary from the outside. cmake declares BOTH function_def and macro_def its function kinds, so every enricher here examines a macro_def — but its kind_map sends it to fql_kind = 'macro', outside the set the declaration names. Such a row is stamped when the field holds and answers nothing when it does not, exactly as before. 69 of these on this corpus, 43 on pytorch, none on this repository: the count is `fql_kind = 'macro' WHERE param_count >= 0`, param_count being stamped unconditionally by an enricher on the same gate and therefore the witness that the row WAS examined. Note that two reasons now hold these rows out and only one is the kind — cmake is outside every language list as well — so this case can no longer isolate the kind exclusion on its own; what does is a_kind_the_enricher_never_examines_is_not_defaulted, where the language is listed and only the kind holds the row out. This case still fails if the kinds are widened.",
+      "fql": "FIND symbols WHERE fql_kind = 'macro' WHERE has_shadow = 'false' LIMIT 5",
+      "assert": { "row_count": 0, "total": 0 } },
+
+    { "name": "control_those_rows_were_examined", "use": "zephyr-andre.frozen",
+      "description": "And that they really were examined, so the case above is an exclusion and not an empty set: 69 macro rows carry param_count, which the metrics enricher stamps on every row its function-kind gate admits — the same gate has_shadow uses.",
+      "fql": "FIND symbols WHERE fql_kind = 'macro' WHERE param_count >= 0 LIMIT 1",
+      "assert": { "row_count": 1, "total": 69 } },
+
+    { "name": "control_pytorch_has_todo_true_answers", "use": "pytorch-andre.pytorch-frozen",
+      "description": "Anchors the case below on the Python corpus: 3,763 functions with markers.",
+      "fql": "FIND symbols WHERE has_todo = 'true' LIMIT 1",
+      "assert": { "row_count": 1, "total": 3763 } },
+
+    { "name": "control_pytorch_applicable_rows", "use": "pytorch-andre.pytorch-frozen",
+      "description": "And its applicable set: 194,114 function rows.",
+      "fql": "FIND symbols WHERE fql_kind = 'function' LIMIT 1",
+      "assert": { "row_count": 1, "total": 194114 } },
+
+    { "name": "a_boolean_false_fills_a_page_on_a_python_corpus", "use": "pytorch-andre.pytorch-frozen",
+      "description": "Same arithmetic, second language family, and the one where it could most easily have gone wrong: this corpus is where a decorated definition used to produce a row no function enricher had visited, which would have made 'false' a claim about 36,978 rows nothing looked at. That gap is closed and the function rows now agree exactly with the rows carrying a function metric. 194,114 functions, minus the 3,763 carrying a marker, minus the 138 CMake and Makefile rows the marker scan returned on without reading, is 190,213.",
+      "fql": "FIND symbols WHERE has_todo = 'false'",
+      "assert": { "row_count": 20, "total": 190213 } },
+
+    { "name": "the_negation_reads_the_default_too", "use": "forgeql-pub.frozen",
+      "description": "Per-operator: the ruling settles '='; every other operator that reads the value follows from resolving the row the same way, and each answered nothing before. != 'true' is the shape a caller reaches for when they do not know the field is stamp-only, and it now answers the same rows as = 'false' — 3,260 of them. A fix that moved only '=' would leave this one silently empty with no way to tell.",
+      "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_todo != 'true' LIMIT 3",
+      "assert": { "row_count": 3, "total": 3260 } },
+
+    { "name": "a_pattern_reads_the_default_too", "use": "forgeql-pub.frozen",
+      "description": "Per-operator, the pattern family. The value-walk tier that serves LIKE and MATCHES reads the field's stored distinct values, and the default is in none of them — so a pattern accepting it declines that tier and the rows are decided by reading them, exactly as a pattern accepting the empty value already did.",
+      "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_todo LIKE 'fal%' LIMIT 3",
+      "assert": { "row_count": 3, "total": 3260 } },
+
+    { "name": "the_regex_family_reads_the_default_too", "use": "forgeql-pub.frozen",
+      "description": "The twin of the case above, and the one operator pair the first pass of this change missed. LIKE and MATCHES look like one family and are served by two different code paths: LIKE goes through the per-row evaluator, MATCHES is lifted into a batch that compiles the pattern once and read the row DIRECTLY. So `LIKE 'fal%'` answered 3,260 while `MATCHES '^false$'` answered 0, on the same rows, with the gate green because only the LIKE half was pinned. Both now read the one resolver.",
+      "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_todo MATCHES '^false$' LIMIT 3",
+      "assert": { "row_count": 3, "total": 3260 } },
+
+    { "name": "the_negated_regex_reads_the_default_too", "use": "forgeql-pub.frozen",
+      "description": "And its negation, which travels the same batch branch. NOT MATCHES on a row carrying nothing is false — an absent value has nothing for a pattern to not-match — so this answers the rows that resolve to the default and do not match 'true', which is the same 3,260.",
+      "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_todo NOT MATCHES 'true' LIMIT 3",
+      "assert": { "row_count": 3, "total": 3260 } },
+
+    { "name": "the_grouping_names_the_default_group", "use": "forgeql-pub.frozen",
+      "description": "Per-operator, GROUP BY, and the case where the two backends had most room to disagree. The counted grouping in the columnar backend used to report every unwritten row under one empty key; it now splits that remainder, naming the applicable part with the declared default and leaving the rest — the rows of kinds no function enricher examines — under the empty key as before. The scan reads its group key through the same resolver, so the two routes name the same rows the same way. The counts are the pair above: 9 true, 3,260 false.",
+      "fql": "FIND symbols GROUP BY has_todo ORDER BY count ASC LIMIT 5",
+      "assert": { "rows": [{ "name": "true", "count": 9 }, { "name": "false", "count": 3260 }] } }
+  ]
+}

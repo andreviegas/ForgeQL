@@ -277,11 +277,19 @@ impl SymbolRow {
                     "node_id" => row.node_id.clone(),
                     // The enrichment map is not the whole row. A groupable field
                     // this arm list does not name resolves through the same
-                    // `ClauseTarget` the WHERE and ORDER BY clauses use, so a
-                    // field the grouping check admits cannot arrive here
-                    // unresolved and be keyed as one `(empty)` group holding
-                    // every row.
-                    _ => crate::filter::ClauseTarget::field_str(row, field).map(str::to_owned),
+                    // `resolved_field_str` the WHERE, GROUP BY and ORDER BY
+                    // clauses use, so a field the grouping check admits cannot
+                    // arrive here unresolved and be keyed as one `(empty)`
+                    // group holding every row.
+                    //
+                    // Reading it through the RESOLVER rather than through
+                    // `ClauseTarget::field_str` is what makes the render agree
+                    // with the collapse. A stamp-only field's defaulted rows
+                    // collapse into a group keyed by the declared default;
+                    // rendering them from the raw row would label that same
+                    // group `(empty)`, so the scan route and the counted route
+                    // would name one set of rows two different things.
+                    _ => crate::filter::resolved_field_str(row, field).map(str::to_owned),
                 }),
             role: row.fields.get("role").cloned(),
             node_id: surface_block_alias(row),

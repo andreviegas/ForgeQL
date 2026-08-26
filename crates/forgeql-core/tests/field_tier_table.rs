@@ -15,8 +15,9 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use forgeql_core::field_tiers::{
-    ALL_OPS, CATCH_ALL_FIELD, Exactness, FIELD_TIERS, FieldTier, Gap, OpClass, Serving, Source,
-    Then, Tier, ValueUniverse, canonical, engine_owned_values, lookup, refused_fields,
+    ALL_OPS, CATCH_ALL_FIELD, Exactness, FIELD_TIERS, FieldTier, Gap, OpClass,
+    STAMP_DEFAULT_FIELDS, Serving, Source, Then, Tier, ValueUniverse, canonical,
+    engine_owned_values, lookup, refused_fields, stamp_default,
 };
 use forgeql_core::filter::{CORE_WHERE_FIELDS, ClauseTarget};
 use forgeql_core::result::{CallGraphEntry, FileEntry, MemberEntry, OutlineEntry, SymbolMatch};
@@ -1888,6 +1889,95 @@ fn only_the_two_engine_owned_fields_declare_a_value_universe() {
     // The catch-all row stands for every field a language plugin declares, so
     // it is exactly where a corpus-owned universe has to stay corpus-owned.
     assert!(matches!(CATCH_ALL_FIELD.values, ValueUniverse::Corpus));
+}
+
+#[test]
+fn only_the_four_ruled_fields_declare_a_stamp_default() {
+    // Same reasoning as the value universe above, in the other direction. A
+    // declared default makes the engine answer for rows nothing stored, so the
+    // set of fields it speaks for is the whole safety argument. `has_fallthrough`,
+    // `is_const` and the rest of the stamp-only family are one row away from
+    // joining, and the day one does the scope sentence in the docs has to move
+    // with it — which is what this test is here to force.
+    let with_default: Vec<&str> = FIELD_TIERS
+        .iter()
+        .filter(|t| t.default.is_some())
+        .map(|t| t.field)
+        .collect();
+    assert_eq!(
+        with_default,
+        ["is_recursive", "has_todo", "has_escape", "has_shadow"],
+    );
+
+    // And the hand-written fast-door list, which `stamp_default` consults
+    // BEFORE the table walk. The two sides come from different places — one is
+    // a const, one is a filter over FIELD_TIERS — so a fifth declaration that
+    // missed the list fails here rather than losing its default in silence.
+    let mut fast_door: Vec<&str> = STAMP_DEFAULT_FIELDS.to_vec();
+    let mut declared = with_default.clone();
+    fast_door.sort_unstable();
+    declared.sort_unstable();
+    assert_eq!(
+        fast_door, declared,
+        "STAMP_DEFAULT_FIELDS is the door stamp_default() answers `None` at \
+         without reading the table; a field in one list and not the other either \
+         loses its default or pays a table walk per row for nothing",
+    );
+
+    // Every half of every declaration, so a row that gained a value but no
+    // kinds — which would answer for every row in the corpus — cannot pass.
+    for field in with_default {
+        let default = stamp_default(field).expect("just filtered on it");
+        assert_eq!(default.value, "false", "{field}");
+        assert_eq!(
+            default.applicable_kinds,
+            ["function"],
+            "{field}: the default speaks for the function rows. That is narrower \
+             than 'every row the enricher examined' — a language may declare a \
+             raw kind a function kind and map it to another fql_kind, as cmake \
+             does with macro_def — and the narrowing is stated at every claim \
+             site rather than assumed away here",
+        );
+        // An empty language list would make the default speak for no row at
+        // all: the field would read as declared and behave exactly as it did
+        // before, with nothing to notice it by. WHICH languages belong in it is
+        // checked in engine_owned_value_universes — against the shipped configs
+        // for the three capability-gated fields, and against the shipped
+        // grammars for has_shadow, whose gate no config declares. That it is
+        // not empty belongs here, beside the other halves of the declaration.
+        assert!(
+            !default.applicable_languages.is_empty(),
+            "{field}: an empty language list makes the default speak for no row",
+        );
+    }
+
+    // The catch-all stands for every field a language plugin declares. Nothing
+    // in core knows what those enrichers examine, so none of them may carry a
+    // default by inheritance.
+    assert!(CATCH_ALL_FIELD.default.is_none());
+}
+
+#[test]
+fn a_field_declaring_a_stamp_default_declares_no_alias() {
+    // `stamp_default` answers `None` for any name outside STAMP_DEFAULT_FIELDS
+    // without reading the table, so an ALIAS of a defaulted field would resolve
+    // to nothing — the readers canonicalise first, but a caller that forgot to
+    // would silently get the old empty answer with no error to notice it by.
+    //
+    // This replaces a loop over `field.aliases` for defaulted fields, which
+    // could not fail: all four declare none, so it ran zero iterations and
+    // reported coverage of nothing. Asserting the emptiness is what actually
+    // holds the door shut — the day one gains an alias, this fires and whoever
+    // adds it has to put the alias in the list or canonicalise inside.
+    for field in FIELD_TIERS.iter().filter(|t| t.default.is_some()) {
+        assert!(
+            field.aliases.is_empty(),
+            "{} declares a stamp-only default and the alias {:?}; stamp_default \
+             is gated on STAMP_DEFAULT_FIELDS, which the alias is not in",
+            field.field,
+            field.aliases,
+        );
+    }
 }
 
 #[test]

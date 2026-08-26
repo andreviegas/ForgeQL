@@ -247,3 +247,65 @@ Short, durable facts discovered while working in this codebase.
 - **The `test` gate step is not the commit gate.** `JOB START 'test'` leaves
   `FORGEQL_ALLOW_CHANGE_FILE_INDEXED` unset, so three `change_*` tests in
   `engine_integration` fail on it; `test-all-before-commit` sets it.
+
+## Stamp-only boolean defaults (2026-08-26)
+
+- **Three readers have to agree, not two.** A `WHERE <enrichment> = <value>`
+  passes the workspace bitmap (`fast_paths::enrichment_eq_bitmap`), the
+  PER-SEGMENT posting reader (`segment_reader::prefilter_enrichment_postings`)
+  and the per-row evaluator (`filter::eval_predicate_on`). The middle one is the
+  easy one to miss: it resolves the value through the segment's own string pool
+  and `return`s an EMPTY bitmap when the value is not in it — so a value nothing
+  stores loses every row of every segment that posts the field, while segments
+  posting none of it keep theirs. The symptom is an answer short by an amount
+  that changes per field and per corpus, which looks like anything but a
+  per-segment gate. `proves_enrichment_value_absent` has the same `id_of` logic.
+- **`fql_kind = 'function'` is neither a superset nor a subset of "the enricher
+  examined this row", and BOTH directions bite.** Probe each separately.
+  - *Examined but outside the kind:* a config can declare a raw kind a function
+    kind and map it elsewhere. cmake declares `macro_def` a function kind and
+    maps it to `fql_kind = 'macro'`. Probe:
+    `FIND symbols WHERE fql_kind = 'macro' WHERE param_count >= 0` — 69 on
+    zephyr, 43 on pytorch. `param_count` is stamped unconditionally by an
+    enricher on the same gate, so it is the witness that the row was examined.
+    dbc is NOT an instance: it maps `message` to `object` and has no function
+    rows at all.
+  - *Inside the kind but not examined:* the todo enricher also gates on
+    `config.has_comment()`, and `make`/`cmake` declare no `syntax.comment`, so
+    their function rows are never scanned. Measure it with `has_doc`, which
+    shares that gate and stores BOTH values: on zephyr `has_doc` true+false =
+    95,902 against 96,304 function rows, and the 402 difference is exactly
+    cmake (355) + make (47). `param_count` has no comment gate and reads
+    96,304, which is what tells the two gates apart.
+- **A group key is not a group name.** The scan's `apply_group_by` keeps the
+  first row of each group and labels it with THAT ROW's `name`, so the key never
+  reaches the result's name column; only the columnar counted path emits a row
+  named after the value. A test that asserts a group is NAMED `false` therefore
+  passes only on the counted route — on the scan, assert how many groups there
+  are instead. (`SymbolRow::group_key` is a separate column, filled by the
+  render arm in `result/query.rs`, and that one does read the resolver.)
+- **An enricher gates on a language CAPABILITY as well as on the node kind.**
+  `has_escape` needs `has_address_of`, `is_recursive` needs
+  `has_call_expression`, `has_todo` needs `has_comment`. A language that does
+  not declare the capability makes the enricher `return` before reading
+  anything, so its rows were never examined even though their kind says they
+  were. Python declares `"address_of": ""` — escape analysis has never run on a
+  Python function, 138,126 of pytorch's 194,114.
+- **And on the shape of the grammar node, which no config declares.** Several
+  enrichers read `child_by_field_name("body")` and return when there is none.
+  A cmake `function_def` carries no `body` field, so `ShadowEnricher` — which
+  has NO capability gate and looked unconditional for exactly that reason —
+  never walks one. `has_shadow` therefore reaches c/cpp/python/rust only, like
+  the capability-gated three, and the list has to be recomputed from the
+  GRAMMARS rather than from the configs.
+- **A witness proves only the gate it shares.** `param_count` has no capability
+  gate, so it cannot see the class above at all, and using it to settle "was
+  this row examined?" is how the question got answered wrong twice. Pick a
+  witness that shares the gate you care about (`has_doc` for `has_comment`),
+  measure `<field> = 'true' GROUP BY language` and look for a language at zero,
+  or — for a gate no config declares — parse a snippet and ask the node.
+- **An outcome test cannot see a gate that writes nothing.** "Walked and found
+  nothing" and "returned at the gate" produce the identical absent column, so a
+  fixture asserting the ANSWER passes under both. The cmake body gate survived
+  a green gate, a fixture and a guardian round that way; only a test holding a
+  tree-sitter node told the difference.

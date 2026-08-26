@@ -763,6 +763,46 @@ pub fn eval_predicate<T: ClauseTarget>(item: &T, predicate: &crate::ir::Predicat
     )
 }
 
+/// A row's value for `field`, falling back to the declared default when the row
+/// carries nothing and the field has one.
+///
+/// This is the row-level half of the stamp-only default: the workspace bitmap
+/// prefilter proposes the rows a default COULD speak for, and this decides each
+/// one. Both read [`crate::field_tiers::stamp_default`], which is what keeps
+/// them from disagreeing — a prefilter that selected a row this then rejected
+/// would answer a shorter page than the count beside it.
+///
+/// The kind AND language checks are the load-bearing part, and they are one
+/// question asked through [`crate::field_tiers::StampDefault::speaks_for`]. A
+/// row the enricher never examined — because its kind is outside the set, or
+/// because its language declares none of the syntax the enricher needs and the
+/// enricher returned at once — carries nothing for the same reason a row it
+/// examined and did not write carries nothing, and the two are
+/// indistinguishable from the row alone. Only the declaration separates them,
+/// so only rows it speaks for get the default; everything else keeps answering
+/// nothing, as before.
+///
+/// A row that cannot say what language it is written in therefore answers
+/// nothing too. That costs no existing answer, and the row types divide three
+/// ways rather than two: those carrying an enrichment field carry `language`
+/// beside it (`SymbolMatch`, `RowRef`, `SegRowRef`, `RowView`); outline and
+/// member rows declare `OPEN_FIELDS = false` and refuse an enrichment clause on
+/// sight; and a `FIND usages` site (`SiteView`) accepts the clause and answers
+/// `None` for `language` and `fql_kind` alike, so it resolves to nothing here —
+/// exactly as it resolved to nothing for the stored value.
+///
+/// This resolves for READING a value, not for rendering one. A row that answers
+/// `has_todo = 'false'` still carries no `has_todo` in the result it returns:
+/// the default is what the index implies, not something it stores.
+pub(crate) fn resolved_field_str<'a, T: ClauseTarget>(item: &'a T, field: &str) -> Option<&'a str> {
+    if let Some(value) = item.field_str(field) {
+        return Some(value);
+    }
+    let default = crate::field_tiers::stamp_default(field)?;
+    let kind = item.field_str("fql_kind")?;
+    let language = item.field_str("language")?;
+    default.speaks_for(kind, language).then_some(default.value)
+}
 /// [`eval_predicate`] with the field name already spelled to its canonical
 /// form.
 ///
@@ -770,6 +810,11 @@ pub fn eval_predicate<T: ClauseTarget>(item: &T, predicate: &crate::ir::Predicat
 /// calls this per row, so the table walk behind
 /// [`crate::field_tiers::canonical`] stays a per-predicate cost instead of
 /// becoming a per-row one.
+///
+/// Every string comparison reads the row through [`resolved_field_str`], so a
+/// stamp-only field's declared default is answered here as if it had been
+/// stored. Numeric comparisons do not: no field declaring a default is numeric,
+/// and inventing a number for an absent one would be a different claim.
 pub(crate) fn eval_predicate_on<T: ClauseTarget>(
     item: &T,
     field: &str,
@@ -782,14 +827,14 @@ pub(crate) fn eval_predicate_on<T: ClauseTarget>(
                 PredicateValue::String(s) => s.as_str(),
                 _ => return false,
             };
-            item.field_str(field).is_some_and(|v| like_match(v, pat))
+            resolved_field_str(item, field).is_some_and(|v| like_match(v, pat))
         }
         CompareOp::NotLike => {
             let pat = match &predicate.value {
                 PredicateValue::String(s) => s.as_str(),
                 _ => return true,
             };
-            item.field_str(field).is_some_and(|v| !like_match(v, pat))
+            resolved_field_str(item, field).is_some_and(|v| !like_match(v, pat))
         }
         // ---- Regex MATCHES operators ----
         CompareOp::Matches => {
@@ -800,7 +845,7 @@ pub(crate) fn eval_predicate_on<T: ClauseTarget>(
             let Ok(re) = Regex::new(pat) else {
                 return false;
             };
-            item.field_str(field).is_some_and(|v| re.is_match(v))
+            resolved_field_str(item, field).is_some_and(|v| re.is_match(v))
         }
         CompareOp::NotMatches => {
             let pat = match &predicate.value {
@@ -810,15 +855,19 @@ pub(crate) fn eval_predicate_on<T: ClauseTarget>(
             let Ok(re) = Regex::new(pat) else {
                 return true;
             };
-            item.field_str(field).is_some_and(|v| !re.is_match(v))
+            resolved_field_str(item, field).is_some_and(|v| !re.is_match(v))
         }
         CompareOp::Eq => match &predicate.value {
-            PredicateValue::String(s) => item.field_str(field).is_some_and(|v| v == s.as_str()),
+            PredicateValue::String(s) => {
+                resolved_field_str(item, field).is_some_and(|v| v == s.as_str())
+            }
             PredicateValue::Number(n) => item.field_num(field).is_some_and(|v| v == *n),
             PredicateValue::Bool(_) => false,
         },
         CompareOp::NotEq => match &predicate.value {
-            PredicateValue::String(s) => item.field_str(field).is_some_and(|v| v != s.as_str()),
+            PredicateValue::String(s) => {
+                resolved_field_str(item, field).is_some_and(|v| v != s.as_str())
+            }
             PredicateValue::Number(n) => item.field_num(field).is_some_and(|v| v != *n),
             PredicateValue::Bool(_) => false,
         },
@@ -894,8 +943,13 @@ pub(crate) fn order_cmp<T: ClauseTarget>(a: &T, b: &T, clauses: &Clauses) -> Ord
                 SortDirection::Asc => va.cmp(&vb),
             }
         } else {
-            let sa = a.field_str(field).unwrap_or("");
-            let sb = b.field_str(field).unwrap_or("");
+            // Through the same resolver the predicates use, so a row that
+            // answers `has_todo = 'false'` sorts among the falses instead of
+            // among the rows that carry nothing. A field read one way for
+            // WHERE and another for ORDER BY is the disagreement this whole
+            // declaration exists to prevent.
+            let sa = resolved_field_str(a, field).unwrap_or("");
+            let sb = resolved_field_str(b, field).unwrap_or("");
             match order_by.direction {
                 SortDirection::Asc => sa.cmp(sb),
                 SortDirection::Desc => sb.cmp(sa),
@@ -1188,7 +1242,11 @@ fn apply_clauses_inner<T: ClauseTarget>(
 /// row. On which rows survive, the two agree, and have to. A row that does not
 /// carry the field fails every predicate naming it — `!=`, `NOT LIKE` and
 /// `NOT MATCHES` as much as `=`, `LIKE` and `MATCHES` — because a value that is
-/// missing is not a value that differs. The one thing that passes a negation
+/// missing is not a value that differs, EXCEPT where the field declares a
+/// stamp-only default and the row is one the declaration speaks for: it
+/// resolves to that default and answers on it, negations included. Both readers
+/// take that through [`resolved_field_str`], which is why the two still agree.
+/// The one thing that passes a negation
 /// before any field is read is a pattern operator handed something it cannot
 /// use: `NOT LIKE` or `NOT MATCHES` with a non-string value, or `NOT MATCHES`
 /// with a regex that does not compile. `!=` is not in that set, and fails on a
@@ -1213,7 +1271,7 @@ pub fn apply_where_predicates<T: ClauseTarget>(
             // condition_text, signature, and name).
             if let Some(min_len) = dot_brace_min_len(pat) {
                 results.retain(|item| {
-                    item.field_str(&field)
+                    resolved_field_str(item, &field)
                         .is_some_and(|v| (v.len() >= min_len) == is_matches)
                 });
                 continue;
@@ -1228,8 +1286,16 @@ pub fn apply_where_predicates<T: ClauseTarget>(
                     // an absent value has nothing for a pattern to not-match:
                     // reading the miss as a passing `NOT MATCHES` made this the
                     // one operator that let such a row through.
+                    //
+                    // "Does not carry the field" is asked through the resolver,
+                    // like every other operator. This batch branch is the ONLY
+                    // place a string comparison is made outside
+                    // `eval_predicate_on`, and while it read the row directly
+                    // the two pattern operators were the only ones a stamp-only
+                    // default did not reach: `LIKE 'fal%'` answered thousands
+                    // and `MATCHES 'false'` answered nothing, on the same rows.
                     results.retain(|item| {
-                        item.field_str(&field)
+                        resolved_field_str(item, &field)
                             .is_some_and(|v| re.is_match(v) == is_matches)
                     });
                 }
@@ -1258,21 +1324,33 @@ fn apply_group_by<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Clauses) {
         return;
     };
     // Canonical, for the same reason `eval_predicate` canonicalises: the key
-    // is read through `field_str`, and two spellings of one field must key the
-    // same groups. The WRITTEN spelling still labels the column — `GROUP BY
-    // file` heads its key column `file`, not `path`.
+    // is read through `resolved_field_str`, and two spellings of one field must
+    // key the same groups. The WRITTEN spelling still labels the column —
+    // `GROUP BY file` heads its key column `file`, not `path`.
+    //
+    // Reading the key through the SAME resolver the predicates use is what
+    // makes `GROUP BY has_todo` agree with `WHERE has_todo = 'false'`: the rows
+    // the enricher examined and did not write key under the declared default
+    // rather than under the empty string, and the counted grouping in the
+    // columnar backend splits its remainder the same way. Two groupings that
+    // named the same rows differently would be a disagreement a caller could
+    // see by adding a WHERE clause.
     let field = crate::field_tiers::canonical(field).to_owned();
     // Pass 1: count occurrences per group key.
     let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for item in results.iter() {
-        let key = item.field_str(&field).map(String::from).unwrap_or_default();
+        let key = resolved_field_str(item, &field)
+            .map(String::from)
+            .unwrap_or_default();
         *counts.entry(key).or_insert(0) += 1;
     }
     // Pass 2: keep first row per group, write per-group count into it.
     let mut seen = std::collections::HashSet::new();
     let all = std::mem::take(results);
     for mut item in all {
-        let key = item.field_str(&field).map(String::from).unwrap_or_default();
+        let key = resolved_field_str(&item, &field)
+            .map(String::from)
+            .unwrap_or_default();
         if seen.insert(key.clone()) {
             if let Some(&n) = counts.get(&key) {
                 item.set_count(n);

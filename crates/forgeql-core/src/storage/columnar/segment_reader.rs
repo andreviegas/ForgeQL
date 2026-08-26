@@ -1396,6 +1396,48 @@ impl SegmentReader {
         self.str_in(self.fixed.language_id, row)
     }
 
+    /// Whether every row in this segment is written in one of `languages`.
+    ///
+    /// A segment is built from one source path and one file is indexed by one
+    /// language plugin, so the language column normally holds a single value
+    /// and the whole segment is decided by one STRING comparison — which is
+    /// what a per-row reader cannot do, since it hashes and compares once per
+    /// row.
+    ///
+    /// That premise is checked, not assumed, and the check is a `u32` sweep of
+    /// the column: cheaper per row than a string or hash lookup, but a pass
+    /// over the rows all the same. The saving is in the string work, not in the
+    /// number of reads. It answers:
+    ///
+    /// * `Some(true)` — one value, and it is in `languages`.
+    /// * `Some(false)` — one value, and it is not; or every row carries no
+    ///   language at all, or there are no rows. Such rows answer no language,
+    ///   so the row-level evaluator answers nothing for them either and the two
+    ///   readers agree without either one guessing.
+    /// * `None` — the column does not resolve to a single value. This cheap
+    ///   check cannot decide the segment, so the caller must conclude nothing
+    ///   from it: skipping the segment would drop covered rows from the answer
+    ///   in silence. Declining and falling back to the complete scan is the
+    ///   only safe reading.
+    ///
+    /// [`Self::rows_with_language_matching`] is the exact per-row reader for
+    /// callers that need one; this is the segment-level shortcut, and its
+    /// `None` is what keeps the shortcut from ever being wrong.
+    pub(crate) fn segment_written_in(&self, languages: &[&str]) -> Option<bool> {
+        let ids: &[u32] = cast_slice(self.col_bytes(self.fixed.language_id));
+        if ids.len() != self.row_count as usize {
+            return None;
+        }
+        let Some((&first, rest)) = ids.split_first() else {
+            return Some(false);
+        };
+        if rest.iter().any(|&id| id != first) {
+            return None;
+        }
+        let language = self.strings.get(first);
+        Some(!language.is_empty() && languages.contains(&language))
+    }
+
     /// Rows whose stored language satisfies `accepts`.
     ///
     /// Exact, not a superset: every row is decided against its own stored
@@ -1763,9 +1805,14 @@ impl SegmentReader {
     /// its struct nor its enrichment map, so both readers resolve it to
     /// `None` and every operator that consults the field is false on both —
     /// `!=`, `NOT LIKE` and `NOT MATCHES` included, since each arm of
-    /// [`crate::filter::eval_predicate_on`] is `is_some_and`. Only
-    /// [`RowField::Unanswerable`] is false here: those are the names where the
-    /// built row reads from somewhere no view can see.
+    /// [`crate::filter::eval_predicate_on`] is `is_some_and` — EXCEPT for a
+    /// field declaring a stamp-only default, where a row inside the declared
+    /// kinds and languages resolves to that default rather than to nothing.
+    /// The view and the built row still agree: both read the absent column
+    /// through [`crate::filter::resolved_field_str`], which consults the same
+    /// declaration for either. Only [`RowField::Unanswerable`] is false here:
+    /// those are the names where the built row reads from somewhere no view
+    /// can see.
     pub(crate) fn answers_field(&self, field: &str, has_path: bool, want: Accessor) -> bool {
         !matches!(
             self.row_field(field, has_path, want),
@@ -1837,6 +1884,13 @@ impl SegmentReader {
     /// field's per-segment cardinality exceeds its cap. Those rows are
     /// invisible here, so the caller must keep the complete scan.
     pub(crate) fn proves_enrichment_value_absent(&self, field: &str, value: &str) -> bool {
+        // A stamp-only field's declared default is absent from every posting BY
+        // CONSTRUCTION, so this probe would prove it absent on every segment of
+        // every corpus and call that an answer. It is the one value about which
+        // the postings say nothing either way.
+        if crate::field_tiers::is_stamp_default_value(field, value) {
+            return false;
+        }
         if !self.posts_field(field) {
             return !self.has_extra_col(field);
         }
@@ -1873,6 +1927,23 @@ impl SegmentReader {
             let PredicateValue::String(ref val) = pred.value else {
                 continue;
             };
+            // A stamp-only field's declared default is never in the pool, for
+            // the same reason no posting names it: nothing writes it. Reaching
+            // the `id_of` probe below would empty this segment outright — every
+            // row of it dropped for a value that is TRUE of most of them — so
+            // the whole class has to leave before that. The workspace bitmap has
+            // already narrowed the candidates to the applicable kinds, and the
+            // row-level evaluator settles each one from the same declaration;
+            // this reader contributes nothing further and must not subtract.
+            //
+            // The symptom when this was missing is worth keeping: every segment
+            // that posted the field lost ALL its rows, while segments that
+            // posted none of it kept theirs, so the answer came back short by an
+            // amount that changed per field and per corpus and looked like
+            // anything but a per-segment gate.
+            if crate::field_tiers::is_stamp_default_value(&pred.field, val.as_str()) {
+                continue;
+            }
             if !self.posts_field(&pred.field) {
                 continue;
             }

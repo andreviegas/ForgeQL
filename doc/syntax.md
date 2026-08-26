@@ -1300,7 +1300,12 @@ IN → EXCLUDE → WHERE → GROUP BY → HAVING → ORDER BY → OFFSET → LIM
 A row that does not carry the field fails **every** operator naming it, so a
 negation is not a way to reach the rows that lack it: `WHERE naming != 'x'`,
 `NOT LIKE` and `NOT MATCHES` all return only rows that have a `naming` to
-differ from. The one exception is a **pattern** operator handed a value it
+differ from. That does not hold for the four fields declaring a stamp-only
+default (`has_todo`, `has_escape`, `has_shadow`, `is_recursive`): a `function`
+row in a language the enricher ran on carries no column and still resolves to
+`'false'`, so it answers `!= 'true'`, `NOT LIKE 'tru%'` and `NOT MATCHES 'true'`
+as well as `= 'false'`. The other exception is a **pattern** operator handed a
+value it
 cannot use: `NOT LIKE` or `NOT MATCHES` with a non-string value passes before
 any field is read. A regex that does not compile is not in that set — it is
 refused, on `MATCHES` and `NOT MATCHES` alike. `!=` is not in that set either
@@ -1632,7 +1637,7 @@ Detects local variables that escape their declaring function — via `return`, a
 
 | Field | Applies to | Description |
 |---|---|---|
-| `has_escape` | `function` | `"true"` if any local escapes |
+| `has_escape` | `function` | `"true"` if any local escapes; `"false"` answers every function the enricher examined and did not mark — which in this field means C, C++ and Rust only, the languages declaring an address-of operator, since without one the enricher returns before reading anything and a Python, CMake or Makefile function answers neither value. One of only four fields whose negative is answerable at all; the other stamp-only booleans (`has_fallthrough`, `is_const`, `is_async`, …) still answer nothing for it |
 | `escape_count` | `function` | Number of distinct escaping locals |
 | `escape_vars` | `function` | Comma-separated names of escaping locals |
 | `escape_tier` | `function` | Severity: `1` (return), `2` (address-of), `3` (pointer/array alias) |
@@ -1644,7 +1649,7 @@ Detects variables declared in inner scopes that shadow an outer-scope variable o
 
 | Field | Applies to | Description |
 |---|---|---|
-| `has_shadow` | `function` | `"true"` if any inner variable shadows an outer one |
+| `has_shadow` | `function` | `"true"` if any inner variable shadows an outer one; `"false"` answers every function the enricher examined and did not mark — C, C++, Python and Rust only. This enricher reads no language capability, unlike the other three; what confines it is the grammar, since it walks the function's `body` node and a CMake function or Makefile rule carries no such node, so the walk never starts and those rows answer neither value. One of only four fields whose negative is answerable at all; the other stamp-only booleans (`has_fallthrough`, `is_const`, `is_async`, …) still answer nothing for it |
 | `shadow_count` | `function` | Number of shadowing declarations |
 | `shadow_vars` | `function` | Comma-separated names of shadowed variables |
 
@@ -1678,7 +1683,7 @@ Detects direct (single-function) self-recursion. Does not detect mutual recursio
 
 | Field | Applies to | Description |
 |---|---|---|
-| `is_recursive` | `function` | `"true"` if the function calls itself |
+| `is_recursive` | `function` | `"true"` if the function calls itself; `"false"` answers every function the enricher examined and did not mark — which in this field means C, C++, Python and Rust only, the languages declaring a call expression, so a CMake function or Makefile rule answers neither value. One of only four fields whose negative is answerable at all; the other stamp-only booleans (`has_fallthrough`, `is_const`, `is_async`, …) still answer nothing for it |
 | `recursion_count` | `function` | Number of self-call sites in the body |
 
 #### TodoEnricher
@@ -1687,7 +1692,7 @@ Detects TODO, FIXME, HACK, and XXX markers in comments inside a function — its
 
 | Field | Applies to | Description |
 |---|---|---|
-| `has_todo` | `function` | `"true"` if a marker comment inside the function is found — its body or a comment attached directly to it, never its doc comment, never one between a decorator and the definition, and only in the raw comment kind the language declares (in Rust, `//` and not `/* */`) |
+| `has_todo` | `function` | `"true"` if a marker comment inside the function is found — its body or a comment attached directly to it, never its doc comment, never one between a decorator and the definition, and only in the raw comment kind the language declares (in Rust, `//` and not `/* */`). `"false"` answers every function the enricher examined and did not mark — which in this field means C, C++, Python and Rust only, the languages declaring a comment kind, so a Makefile rule or CMake function answers neither value because the scan returned before reading its text. One of only four fields whose negative is answerable at all; the other stamp-only booleans (`has_fallthrough`, `is_const`, `is_async`, …) still answer nothing for it |
 | `todo_count` | `function` | Total number of marker occurrences, over the same region as `has_todo` |
 | `todo_tags` | `function` | Comma-separated, sorted unique tags found over that same region (e.g. `"FIXME,TODO"`) |
 

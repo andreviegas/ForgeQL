@@ -1415,3 +1415,93 @@ fn a_truncated_posting_table_is_refused_at_open() {
         "the refusal names the blob: {err:#}"
     );
 }
+
+/// The segment-level language check, and the case that keeps it honest.
+///
+/// One comparison per segment is only sound while a segment holds one language.
+/// That is normally true — a segment is built from one source path — but it is
+/// checked rather than assumed, and a segment that broke the rule has to
+/// DECLINE rather than answer from its first row. A caller that took the first
+/// row's word for it would drop the other language's rows from the page in
+/// silence: the very failure the stamp-only defaults exist to prevent,
+/// reappearing one layer down.
+#[test]
+fn a_mixed_language_segment_declines_the_segment_level_check() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let seg = tmp.path().join("seg.fqsf");
+    let mut b = SegmentBuilder::new("test", &[0x21_u8; 20]);
+    for (name, language) in [("foo", "cpp"), ("bar", "python")] {
+        b.add_row(SymbolRow {
+            name,
+            fql_kind: "function",
+            language,
+            line: 1,
+            byte_start: 0,
+            byte_end: 10,
+            usages_count: 0,
+        });
+    }
+    b.flush(&seg).expect("flush");
+    let reader = SegmentReader::open(&seg).expect("open");
+
+    assert_eq!(
+        reader.segment_written_in(&["cpp"]),
+        None,
+        "a segment holding two languages cannot be decided by one comparison"
+    );
+    assert_eq!(
+        reader.segment_written_in(&["cpp", "python"]),
+        None,
+        "a list covering both languages must not rescue it: the question is whether \
+         ONE comparison can decide the segment, not what the answer would be"
+    );
+
+    // The exact per-row reader beside it, which CAN decide such a segment. It is
+    // what a caller falls back to — or rather, it is the tier the caller falls
+    // back through — so the two must not both be blind here.
+    let cpp_rows = reader
+        .rows_with_language_matching(&|stored| stored == "cpp")
+        .expect("the per-row reader decides a mixed segment");
+    assert_eq!(cpp_rows.len(), 1, "one of the two rows is cpp");
+}
+
+/// The two answers the check does give, on the uniform segments it is for.
+#[test]
+fn a_uniform_segment_answers_the_segment_level_check_both_ways() {
+    let (_tmp, seg) = make_segment(&[("foo", "function", 1), ("bar", "function", 5)]);
+    let reader = SegmentReader::open(&seg).expect("open");
+
+    assert_eq!(reader.segment_written_in(&["rust", "cpp"]), Some(true));
+    assert_eq!(reader.segment_written_in(&["cpp"]), Some(false));
+    assert_eq!(
+        reader.segment_written_in(&[]),
+        Some(false),
+        "an empty language list covers nothing, and that is an answer rather than a refusal"
+    );
+}
+
+/// A segment whose rows carry no language is DECIDED, not declined.
+///
+/// Every row carries the same value, so one comparison settles it; the answer
+/// is that no list covers it. That matches the row-level evaluator, which
+/// answers nothing for a row carrying no language, so both readers exclude the
+/// same rows for the same reason and neither has to guess.
+#[test]
+fn a_segment_with_no_language_is_decided_rather_than_declined() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let seg = tmp.path().join("seg.fqsf");
+    let mut b = SegmentBuilder::new("test", &[0x22_u8; 20]);
+    b.add_row(SymbolRow {
+        name: "foo",
+        fql_kind: "function",
+        language: "",
+        line: 1,
+        byte_start: 0,
+        byte_end: 10,
+        usages_count: 0,
+    });
+    b.flush(&seg).expect("flush");
+    let reader = SegmentReader::open(&seg).expect("open");
+
+    assert_eq!(reader.segment_written_in(&["cpp", "rust", ""]), Some(false));
+}

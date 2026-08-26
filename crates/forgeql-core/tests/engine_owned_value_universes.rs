@@ -1,4 +1,5 @@
-//! The engine-owned value universes must not fall behind the plugins.
+//! Core's copies of what the language plugins declare must not fall behind
+//! them.
 //!
 //! `field_tiers::FQL_KIND_VALUES` and `field_tiers::USAGE_ROLE_VALUES` are what
 //! `filter::reject_unknown_enum_values` refuses against. A value a language
@@ -11,6 +12,13 @@
 //! finds those files by walking `crates/*/config/`, not by naming the plugin
 //! crates, so a new language crate is covered the day its config lands rather
 //! than the day someone remembers this file.
+//!
+//! The third copy checked here is the set of languages each stamp-only boolean
+//! default speaks for. It is not a refusal list but an answer list, and it
+//! fails the other way round: a language in core's copy whose config declares
+//! none of the syntax the enricher needs gets a default published about an
+//! analysis that never ran on it. Same sweep, same reason — a copy of a config
+//! drifts unless something reads both.
 //!
 //! What the configs cannot show — the kinds and roles the engine mints itself —
 //! is deliberately NOT asserted here. Those are tied to the two lists by a
@@ -237,4 +245,393 @@ fn neither_universe_repeats_a_value() {
         let distinct: BTreeSet<&str> = values.iter().copied().collect();
         assert_eq!(distinct.len(), values.len(), "{name} repeats a value");
     }
+}
+
+/// The languages each stamp-only default speaks for, recomputed from the
+/// configs it claims to describe.
+///
+/// The field-tier table resolves an enricher's language CAPABILITY into a plain
+/// list of language names at declaration time, so no reader has to reach the
+/// registry while a query runs. That list is a COPY of what the configs say,
+/// and a copy drifts: a language that gains an address-of operator, or a new
+/// plugin that arrives carrying comments, changes what the enricher runs on and
+/// changes nothing about the constant. Drift one way merely withholds an
+/// answer. Drift the other way publishes a default for rows nothing ever
+/// examined, which is the single thing the declaration exists to prevent.
+///
+/// The capability keys are spelled out here rather than read back from
+/// `LanguageConfig`, for the same reason the posting budgets are repeated in
+/// the field-tier table: two independent spellings disagree loudly, and one
+/// shared spelling cannot disagree at all.
+#[test]
+fn every_stamp_only_default_covers_exactly_the_languages_whose_enricher_runs() {
+    use forgeql_core::field_tiers;
+
+    // (field, the config path its enricher's capability gate reads)
+    const GATED: [(&str, &[&str]); 3] = [
+        ("has_todo", &["syntax", "comment"]),
+        ("is_recursive", &["expressions", "call"]),
+        ("has_escape", &["expressions", "address_of"]),
+    ];
+
+    let configs = parsed_configs();
+    let mut computed: Vec<BTreeSet<String>> = Vec::new();
+
+    for (field, key) in GATED {
+        let mut languages = BTreeSet::new();
+        let mut read = 0usize;
+
+        for (path, json) in &configs {
+            // Per FILE, like the sweeps above: a config whose `language.name`
+            // moved would otherwise drop out of every set in silence, and a
+            // language missing from a list is exactly the drift being looked
+            // for.
+            let name = json
+                .get("language")
+                .and_then(|language| language.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{} declares no language.name — the language lists in \
+                         field_tiers are keyed by it and cannot be checked without it",
+                        path.display()
+                    )
+                });
+            read += 1;
+
+            let mut node = json;
+            let mut reached = true;
+            for part in key {
+                if let Some(next) = node.get(*part) {
+                    node = next;
+                } else {
+                    reached = false;
+                    break;
+                }
+            }
+            // Absent and empty mean the same thing to the config loader: the
+            // raw kind is the empty string and the capability check is false.
+            if reached && node.as_str().is_some_and(|raw| !raw.is_empty()) {
+                let _ = languages.insert(name.to_owned());
+            }
+        }
+
+        assert_eq!(
+            read,
+            configs.len(),
+            "{field}: read {read} of {} configs",
+            configs.len()
+        );
+        assert!(
+            !languages.is_empty(),
+            "{field}: no config declares {key:?}, so the sweep found nothing and any \
+             comparison below would pass against an empty set"
+        );
+
+        let default = field_tiers::stamp_default(field)
+            .unwrap_or_else(|| panic!("{field} must declare a stamp-only default"));
+        let declared: BTreeSet<String> = default
+            .applicable_languages
+            .iter()
+            .map(|n| (*n).to_owned())
+            .collect();
+
+        assert_eq!(
+            declared, languages,
+            "{field}: the table declares {declared:?} and the shipped configs declare \
+             {key:?} for {languages:?}. A language in the table and not in the configs \
+             answers a default for an enricher that never ran on it; one in the configs \
+             and not in the table withholds an answer the index can give"
+        );
+
+        computed.push(languages);
+    }
+
+    // Anti-vacuity: three sweeps that all computed the same set would pass
+    // every assertion above while reading one key three times, or the wrong key
+    // three times.
+    assert!(
+        computed.iter().any(|set| *set != computed[0]),
+        "all three capability sweeps computed the same language set ({:?}), so this \
+         test cannot tell the gates apart",
+        computed[0]
+    );
+    // `has_shadow` is NOT in the sweep above, because its enricher reads no
+    // language capability at all — its gates are the node kind and the grammar
+    // node's `body` field, which no config declares. The test below settles it
+    // from the grammars instead. It is still one of the four, so leaving it out
+    // of both would be the gap: assert here that something else covers it.
+    let shadow = field_tiers::stamp_default("has_shadow").expect("has_shadow declares a default");
+    assert!(
+        !shadow.applicable_languages.is_empty(),
+        "has_shadow declares no languages, so its default speaks for no row and \
+         reads as declared while behaving as absent",
+    );
+}
+
+/// The languages whose config sends a function kind to `fql_kind = 'function'`.
+///
+/// Computed rather than counted, so the sample table in the test below cannot
+/// quietly fall behind the plugins: a new language whose `kind_map` reaches
+/// `function` appears here the day its config lands, and the test fails until
+/// it is given a snippet.
+fn languages_producing_function_rows() -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for (path, json) in parsed_configs() {
+        let name = json
+            .get("language")
+            .and_then(|l| l.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("{} declares no language.name", path.display()));
+        let kinds: Vec<&str> = json
+            .get("definitions")
+            .and_then(|d| d.get("function_kinds"))
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        let map = json.get("kind_map").and_then(Value::as_object);
+        let reaches_function = kinds.iter().any(|raw| {
+            map.and_then(|m| m.get(*raw))
+                .and_then(Value::as_str)
+                .is_some_and(|mapped| mapped == "function")
+        });
+        if reaches_function {
+            let _ = out.insert(name.to_owned());
+        }
+    }
+    out
+}
+
+/// The KINDS half of the declaration, checked the way the languages are.
+///
+/// `FUNCTION_ROWS` says the defaults speak for `fql_kind = 'function'`, and the
+/// whole arithmetic rests on that being the rows the enrichers examined. But an
+/// enricher gates on the RAW kind a config declares in
+/// `definitions.function_kinds`, while a row's `fql_kind` is whatever
+/// `kind_map` sent it to. Two lists, agreeing today, with nothing recomputing
+/// it — and the corpus sums cannot: `'false'` is DEFINED as applicable minus
+/// stored, so `true + false == the function rows` holds however wrong the
+/// applicable set is, and an examined-and-unwritten row is byte-identical to
+/// one nothing looked at.
+///
+/// So the check runs as the inverse. Every raw kind a config maps to `function`
+/// must also be declared a function kind by that config; a `kind_map` entry
+/// reaching `function` from a raw kind no enricher gate admits would put rows
+/// in the applicable set that nothing ever read. That is the first stop this
+/// work took, in configuration form rather than corpus form.
+///
+/// The OTHER direction is deliberately not asserted: cmake declares `macro_def`
+/// a function kind and maps it to `macro`, which is the documented exclusion —
+/// examined, and outside the kinds the declaration names.
+#[test]
+fn every_kind_that_becomes_a_function_row_is_one_an_enricher_gate_admits() {
+    /// Reached today by c, cpp, python, rust, cmake, make and just.
+    const FUNCTION_MAPPINGS_AT_LEAST: usize = 7;
+
+    let mut checked = 0usize;
+    for (path, json) in parsed_configs() {
+        let map = json
+            .get("kind_map")
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| panic!("{} declares no kind_map", path.display()));
+        let declared: BTreeSet<&str> = json
+            .get("definitions")
+            .and_then(|d| d.get("function_kinds"))
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+
+        for (raw, mapped) in map {
+            if mapped.as_str() != Some("function") {
+                continue;
+            }
+            checked += 1;
+            assert!(
+                declared.contains(raw.as_str()),
+                "{}: kind_map sends `{raw}` to fql_kind = 'function', but \
+                 definitions.function_kinds does not declare it — so no function \
+                 enricher examines such a row while every stamp-only default \
+                 speaks for it",
+                path.display(),
+            );
+        }
+    }
+
+    assert!(
+        checked >= FUNCTION_MAPPINGS_AT_LEAST,
+        "found {checked} kind_map entries reaching 'function', expected at least \
+         {FUNCTION_MAPPINGS_AT_LEAST} — a sweep that found none passes every \
+         assertion above without reading a mapping",
+    );
+}
+
+/// `has_shadow`'s languages, recomputed from the shipped GRAMMARS.
+///
+/// The three fields above are gated by a capability a config declares, so the
+/// config sweep can read them. `ShadowEnricher` declares none: its only gates
+/// are the node kind and the body node, which is a property of the grammar and
+/// invisible to every config — so this one is derived from the grammars
+/// instead. [`grammars_carrying_a_function_body`] says how, and why an outcome
+/// test could not have found it.
+#[test]
+fn the_shadow_default_covers_exactly_the_grammars_whose_walk_can_start() {
+    let walkable = grammars_carrying_a_function_body();
+    let declared = declared_languages("has_shadow");
+    assert_eq!(
+        declared, walkable,
+        "has_shadow declares {declared:?} and the grammars carry a `body` field on \
+         the function kinds of {walkable:?}. A language in the declaration and not \
+         in the grammars answers 'false' from a walk that never started; one in the \
+         grammars and not in the declaration withholds an answer the index can give",
+    );
+}
+
+/// The two capability-gated defaults that ALSO walk a body.
+///
+/// `EscapeEnricher` and `RecursionEnricher` read
+/// `child_by_field_name("body")` as well, and the config sweep that computes
+/// their language lists cannot see that second gate. A future plugin declaring
+/// `expressions.call` on a grammar with no function body would be added to
+/// `CALL_LANGUAGES` by that sweep and would then answer a default from a walk
+/// that never started — the config half saying yes and the grammar half saying
+/// no, with nothing comparing them. This is what compares them.
+///
+/// `has_todo` is deliberately absent: its scan takes the body as OPTIONAL and
+/// reads the function's own comment children besides, so it runs whether or not
+/// the grammar gives it one.
+#[test]
+fn the_defaults_that_walk_a_body_only_cover_grammars_that_have_one() {
+    let walkable = grammars_carrying_a_function_body();
+    for field in ["has_escape", "is_recursive"] {
+        let declared = declared_languages(field);
+        assert!(
+            declared.is_subset(&walkable),
+            "{field} declares {declared:?}, and only {walkable:?} carry a `body` \
+             field on their function kinds. Its enricher returns without walking \
+             for the difference, so the default would speak for rows nothing read",
+        );
+    }
+}
+
+/// The languages a stamp-only default declares, as an owned set.
+fn declared_languages(field: &str) -> BTreeSet<String> {
+    forgeql_core::field_tiers::stamp_default(field)
+        .unwrap_or_else(|| panic!("{field} declares a stamp-only default"))
+        .applicable_languages
+        .iter()
+        .map(|n| (*n).to_owned())
+        .collect()
+}
+
+/// Which languages' function kinds carry the `body` field a walk needs.
+///
+/// Several enrichers read `child_by_field_name("body")` and return when there
+/// is none. That is a property of the GRAMMAR, invisible to every config, and
+/// invisible to an outcome test as well: "walked the body and found nothing"
+/// and "returned at the body gate" write exactly the same nothing, so the row
+/// answers `'false'` either way and a fixture asserting the ANSWER passes under
+/// both. Only the node can tell them apart, which is why this holds one.
+///
+/// It bites: a cmake `function_def` carries no `body` field. cmake and make
+/// both declare function kinds that map to `fql_kind = 'function'`, both are
+/// outside every capability list, and `has_shadow` was the one default that
+/// would have spoken for their rows — 355 cmake functions and 47 Makefile rules
+/// on Zephyr, answering "no shadowed variable" from a walk that never started.
+fn grammars_carrying_a_function_body() -> BTreeSet<String> {
+    use forgeql_core::ast::lang::LanguageSupport;
+
+    /// Every language that produces `fql_kind = 'function'` rows, with a source
+    /// snippet and the raw kind its config declares a function kind.
+    ///
+    /// Hand-written, so the set is checked against the configs below: a new
+    /// plugin whose `kind_map` sends a function kind to `function` fails that
+    /// check until it is given an entry here, rather than being silently left
+    /// out of a set this then reports as complete.
+    const SAMPLES: [(&str, &dyn LanguageSupport, &str, &str); 7] = [
+        (
+            "c",
+            &forgeql_lang_c::CLanguage,
+            "int f(int x) { return x; }\n",
+            "function_definition",
+        ),
+        (
+            "cpp",
+            &forgeql_lang_cpp::CppLanguage,
+            "int f(int x) { return x; }\n",
+            "function_definition",
+        ),
+        (
+            "rust",
+            &forgeql_lang_rust::RustLanguage,
+            "fn f(x: i32) -> i32 { x }\n",
+            "function_item",
+        ),
+        (
+            "python",
+            &forgeql_lang_python::PythonLanguage,
+            "def f(x):\n    return x\n",
+            "function_definition",
+        ),
+        (
+            "cmake",
+            &forgeql_lang_text::CmakeLanguage,
+            "function(f)\n  set(v 1)\nendfunction()\n",
+            "function_def",
+        ),
+        (
+            "make",
+            &forgeql_lang_text::MakeLanguage,
+            "target: dep\n\techo hi\n",
+            "rule",
+        ),
+        (
+            "just",
+            &forgeql_lang_text::JustLanguage,
+            "recipe:\n    echo hi\n",
+            "recipe",
+        ),
+    ];
+
+    fn first_of_kind<'t>(node: tree_sitter::Node<'t>, kind: &str) -> Option<tree_sitter::Node<'t>> {
+        if node.kind() == kind {
+            return Some(node);
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if let Some(found) = first_of_kind(child, kind) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    let sampled: BTreeSet<String> = SAMPLES.iter().map(|(n, ..)| (*n).to_owned()).collect();
+    assert_eq!(
+        sampled,
+        languages_producing_function_rows(),
+        "SAMPLES must hold one snippet per language that produces function rows; \
+         a language in the configs and not in SAMPLES is one this says nothing about",
+    );
+
+    let mut walkable: BTreeSet<String> = BTreeSet::new();
+    for (name, lang, source, kind) in SAMPLES {
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&lang.tree_sitter_language())
+            .expect("set language");
+        let tree = parser.parse(source.as_bytes(), None).expect("parse");
+        let node = first_of_kind(tree.root_node(), kind).unwrap_or_else(|| {
+            panic!("no {kind} node in the {name} snippet — the snippet is wrong, not the grammar")
+        });
+        if node.child_by_field_name("body").is_some() {
+            let _ = walkable.insert(name.to_owned());
+        }
+    }
+    assert!(
+        walkable.len() < SAMPLES.len(),
+        "every sampled grammar carries a `body` field, so this cannot tell a \
+         walkable kind from an unwalkable one and would pass with the field name \
+         misspelt",
+    );
+    walkable
 }

@@ -340,10 +340,16 @@ pub(in crate::storage) fn usages_budget_exceeded(sites: usize, max_rows: usize) 
 /// map, so both readers resolve it to `None`, and every operator that consults
 /// the field is then false — `!=`, `NOT LIKE` and `NOT MATCHES` as much as `=`,
 /// `LIKE` and `MATCHES`, because each arm of `eval_predicate_on` is
-/// `is_some_and` and the batch filter requires the same presence. A segment
-/// like that contributes nothing to the answer, which is what it contributed
-/// before as well; the difference is that its rows are no longer built to find
-/// out.
+/// `is_some_and` and the batch filter requires the same presence — EXCEPT for a
+/// field declaring a stamp-only default, where a row inside the declared kinds
+/// and languages resolves the absent column to that default instead of to
+/// nothing. Both readers still agree: each reads it through
+/// [`crate::filter::resolved_field_str`], which consults the one declaration.
+/// A segment holding no column for such a field therefore DOES contribute its
+/// applicable rows to `has_todo = 'false'`, where before this it contributed
+/// none. For every other field it contributes nothing, which is what it
+/// contributed before as well; the difference is that its rows are no longer
+/// built to find out.
 ///
 /// The regex clause is about cost: a pattern is compiled once for a batch of
 /// built rows rather than once per row. It was about more than that until the
@@ -784,10 +790,75 @@ impl ColumnarStorage {
         // that group's size. A remainder that cannot exist means the two sides
         // disagree about which rows they are describing, and a count is not
         // worth guessing: hand the query to the scan.
+        //
+        // For a stamp-only field that remainder is two groups, not one. The
+        // rows its enricher examined and did not write resolve to the declared
+        // default and are keyed by it; the rows it never examined still resolve
+        // to nothing. Splitting them needs the count of applicable rows among
+        // the SELECTED segments, which is the applicable kind bitmap narrowed
+        // by the same mask the value counts used. Any subtraction that cannot
+        // hold declines the whole fast path, as above — the two sides
+        // disagreeing is not something to round off.
         let unaccounted = canonical_rows.checked_sub(described)?;
-        if unaccounted > 0 {
+
+        let unnamed = match crate::field_tiers::stamp_default(field) {
+            Some(default) => {
+                let mut applicable = RoaringBitmap::new();
+                for kind in default.applicable_kinds {
+                    applicable |= self.overlay().prefilter_kind(kind)?;
+                }
+                // The same narrowing the `=` predicate applies, and for the
+                // same reason: a language whose config declares none of the
+                // syntax the enricher needs never had the enricher run, so its
+                // rows belong to neither group. Here it has to be exact rather
+                // than merely tight — this route publishes a COUNT, with no row
+                // pass behind it to correct a set that was too wide.
+                applicable &= self.rows_written_in(default.applicable_languages)?;
+                // The defaulted group is the applicable rows that carry no value
+                // of this field, and that has to be a bitmap DIFFERENCE, not
+                // `applicable - described`. `described` counts every row storing
+                // a value, over every kind; subtracting it from a count of
+                // applicable rows alone would deduct a stored value on a row
+                // outside the applicable set from a set that never held it —
+                // reporting this group short and the unnamed one long, while the
+                // scan route reported both correctly. That shape is not
+                // hypothetical: a language may declare a kind a function kind
+                // and still map it to some other `fql_kind`, and such a row is
+                // stamped without being applicable.
+                //
+                // Read with `?`, like every other read on this route. An empty
+                // bitmap here would mean "nothing stores this field", which
+                // would over-report the defaulted group and under-report the
+                // unnamed one — and this route publishes a count with no row
+                // pass behind it to correct either. `enrichment_value_counts`
+                // reads the same entries two lines up and already declines, so
+                // this cannot fire today; it declines on its own terms rather
+                // than on that one's.
+                let stored = self
+                    .overlay()
+                    .prefilter_enrichment_values(field, &|_| true)?;
+                applicable -= stored;
+                if path_filtered {
+                    applicable &= &mask;
+                }
+                let defaulted = usize::try_from(applicable.len()).ok()?;
+                if defaulted > 0 {
+                    let mut fields = HashMap::new();
+                    let _ = fields.insert(field.to_owned(), default.value.to_owned());
+                    results.push(SymbolMatch {
+                        name: default.value.to_owned(),
+                        fields,
+                        count: Some(defaulted),
+                        ..SymbolMatch::default()
+                    });
+                }
+                unaccounted.checked_sub(defaulted)?
+            }
+            None => unaccounted,
+        };
+        if unnamed > 0 {
             results.push(SymbolMatch {
-                count: Some(unaccounted),
+                count: Some(unnamed),
                 ..SymbolMatch::default()
             });
         }
@@ -876,7 +947,18 @@ impl ColumnarStorage {
                 }
                 (field, CompareOp::Eq, PredicateValue::Bool(b)) => {
                     let val_str = if *b { "true" } else { "false" };
-                    self.enrichment_eq_bitmap(field, val_str)
+                    // An UNQUOTED boolean matches no stored string value —
+                    // `eval_predicate_on` rejects a `Bool` operand outright — so
+                    // proposing a stamp-only default's candidates here would buy
+                    // a read of every applicable row for an answer that is empty
+                    // either way. The empty bitmap is not an absence claim: it is
+                    // the same answer the row evaluator gives, reached without
+                    // the scan.
+                    if crate::field_tiers::is_stamp_default_value(field, val_str) {
+                        Some(RoaringBitmap::new())
+                    } else {
+                        self.enrichment_eq_bitmap(field, val_str)
+                    }
                 }
                 // Pattern predicates read the field's distinct values, never
                 // its rows. `name` never reaches here — its own arms are above.
@@ -941,6 +1023,19 @@ impl ColumnarStorage {
     /// false negative rather than a slow query. The same reasoning already
     /// governs the `fql_kind` arm above.
     fn enrichment_eq_bitmap(&self, field: &str, value: &str) -> Option<RoaringBitmap> {
+        // A stamp-only field's default is the one value whose ABSENCE from every
+        // posting means the opposite of what absence usually means. Nothing
+        // stores it, so `prefilter_enrichment_eq` finds no key and the probe
+        // below would prove it absent and answer zero rows — which is the
+        // defect, not the answer. Propose the rows the declaration says the
+        // enricher examined and let each row decide, exactly as the stored
+        // value does: the bitmap here only ever narrows, `eval_predicate_on`
+        // settles it, and both read the same declaration.
+        if let Some(default) = crate::field_tiers::stamp_default(field)
+            && value == default.value
+        {
+            return self.stamp_default_candidates(field, default);
+        }
         if let Some(bm) = self.overlay().prefilter_enrichment_eq(field, value) {
             // The stored bitmap accounts only for segments that posted this
             // field; one that did not still stores the column, so its rows can
@@ -961,6 +1056,67 @@ impl ColumnarStorage {
         }
         self.no_segment_carries_enrichment_value(field, value)
             .then(RoaringBitmap::new)
+    }
+
+    /// The rows a stamp-only field's default could speak for: the ones its
+    /// enricher examines.
+    ///
+    /// A narrowing, not an answer. Every row here still meets
+    /// `eval_predicate_on`, which reads the same [`crate::field_tiers::
+    /// stamp_default`] declaration and rejects any row that turned out to carry
+    /// the stored value after all — so proposing a superset costs a comparison
+    /// per row and can never over-report. Proposing a SUBSET would be the
+    /// defect, which is why an applicable kind the overlay holds no postings
+    /// for declines the whole narrowing rather than skipping that kind: the
+    /// query then scans, and a slow complete answer beats a fast short one.
+    ///
+    /// The rows of segments that did not post the field join the candidates for
+    /// the same reason they join the stored value's: such a segment still keeps
+    /// the column, so its rows are decided by reading them.
+    fn stamp_default_candidates(
+        &self,
+        field: &str,
+        default: crate::field_tiers::StampDefault,
+    ) -> Option<RoaringBitmap> {
+        let mut applicable = RoaringBitmap::new();
+        for kind in default.applicable_kinds {
+            applicable |= self.overlay().prefilter_kind(kind)?;
+        }
+        let mut candidates = applicable | self.rows_missing_field_postings(field);
+        candidates &= self.rows_written_in(default.applicable_languages)?;
+        Some(candidates)
+    }
+
+    /// The rows of every segment written in one of `languages`.
+    ///
+    /// Cost, stated as the code spends it and not as the intent: every segment
+    /// in the workspace is visited, and each one costs a `u32` sweep of its
+    /// language column plus one string comparison —
+    /// [`SegmentReader::segment_written_in`] proves its single-value premise
+    /// rather than assuming it, and that proof is the sweep. So this is
+    /// O(corpus rows) in `u32` reads, not O(segments), and no `IN` narrows it:
+    /// the caller applies no path mask here. What the segment-level design buys
+    /// is the STRING work — one comparison per segment instead of a per-row
+    /// hash-and-compare — not a smaller pass.
+    ///
+    /// A segment whose reader is missing, or whose language column does not
+    /// resolve to one value, declines the whole narrowing rather than
+    /// contributing nothing. Contributing nothing would drop its rows from the
+    /// page in silence, which is the false negative this engine does not serve;
+    /// declining hands the query to the complete scan instead.
+    ///
+    /// A segment whose rows carry no language DOES contribute nothing, and that
+    /// is not the same thing: the row-level evaluator answers nothing for those
+    /// rows too, so both readers agree without either one guessing.
+    fn rows_written_in(&self, languages: &[&str]) -> Option<RoaringBitmap> {
+        let mut rows = RoaringBitmap::new();
+        for idx in 0..self.overlay().segments().len() {
+            let seg = self.segments().get(idx)?;
+            if seg.segment_written_in(languages)? {
+                let _ = rows.insert_range(self.overlay().segment_row_range(idx));
+            }
+        }
+        Some(rows)
     }
 
     /// Rows the overlay's per-value bitmaps for `field` cannot speak for.
@@ -1037,7 +1193,12 @@ impl ColumnarStorage {
         // of what can match. The negated form needs no such guard: it is the
         // universe MINUS the matches, and a match the walk missed only leaves
         // its row a candidate.
-        if !negated && accepts("") {
+        // A stamp-only field's declared default is not keyed either, and for the
+        // same reason: nothing stores it. The guard is the same guard.
+        if !negated
+            && (accepts("")
+                || crate::field_tiers::stamp_default(field).is_some_and(|d| accepts(d.value)))
+        {
             return None;
         }
 

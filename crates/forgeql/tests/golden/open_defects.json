@@ -3,26 +3,6 @@
  "description": "Soft pins for known-open defects. Every expect_fail case here asserts the behaviour that is CORRECT per the documentation or the engine's own stated doctrine, and is expected to fail until the defect is fixed — the runner reports it without going red, and a PASS fails the gate so the fixing commit must promote the case (and tighten its assert where the fix settles a shape this case had to leave open). Each expect_fail travels with a control on the same fixture, so corpus drift or an unregistered corpus fails a control loudly instead of masquerading as the expected failure.",
  "cases": [
   {
-   "name": "control_a_true_valued_boolean_field_is_queryable",
-   "description": "Anchors the false-value case below: the has_todo field exists, posts, and answers for its true value on this corpus.",
-   "use": "forgeql-pub.frozen",
-   "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_todo = 'true' LIMIT 3",
-   "assert": {
-    "row_count": 3
-   }
-  },
-  {
-   "name": "a_boolean_fields_false_value_is_queryable",
-   "description": "The enrichment tables list has_todo, has_escape, has_shadow, is_recursive and friends as boolean fields without saying only one of the two values is addressable. has_doc = 'false' and is_magic = 'false' answer thousands of rows, so the negative case is already a supported query shape — but has_todo = 'false' (and has_escape, has_shadow, is_recursive) answer zero rows on a corpus full of functions without TODOs, indistinguishable from a corpus claim.",
-   "use": "forgeql-pub.frozen",
-   "enforcement": "expect_fail",
-   "expect_fail_reason": "most boolean enrichers post only their true value, so the false predicate matches nothing and the empty result reads as a fact about the corpus; has_doc and is_magic store both values, which makes the gap inconsistent rather than a documented design; the fix is to post the negative for the rest, or to refuse the predicate with a hint naming the restriction — if refusal is chosen, re-aim this assert to error: true",
-   "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_todo = 'false' LIMIT 3",
-   "assert": {
-    "row_count": 3
-   }
-  },
-  {
    "name": "control_the_lines_clause_target_exists",
    "description": "Anchors the parse case below: the function the multi-step case reads is present and unique in the fixture.",
    "use": "forgeql-pub.frozen",
@@ -311,69 +291,6 @@
    }
   }
   ,
-  {
-   "name": "control_zephyr_has_todo_true_answers",
-   "description": "Anchors the false-value cases below: has_todo posts and answers its true value on this corpus — 958 functions, seven of them added by the leading-position fix, whose Python files are the ones that had it.",
-   "use": "zephyr-andre.frozen",
-   "fql": "FIND symbols WHERE has_todo = 'true' LIMIT 1",
-   "assert": {
-    "row_count": 1,
-    "total": 958
-   }
-  },
-  {
-   "name": "a_boolean_false_fills_a_page_on_a_big_corpus",
-   "description": "96,394 functions on this corpus and 958 carry a TODO, so has_todo = 'false' should fill any default page many thousands of times over; it answers zero rows, indistinguishable from a corpus claim. The page-full assert is deliberately count-agnostic so it survives whichever exact-count semantics the fix settles.",
-   "use": "zephyr-andre.frozen",
-   "enforcement": "expect_fail",
-   "expect_fail_reason": "has_todo = 'false' answers 0 rows on a corpus with ~95k functions carrying no TODO; only the true value is posted; fix is answering the complement for stamp-only booleans or refusing the predicate with a hint — a silent empty page is the one wrong answer",
-   "fql": "FIND symbols WHERE has_todo = 'false'",
-   "assert": {
-    "row_count": 20
-   }
-  },
-  {
-   "name": "control_zephyr_has_shadow_true_answers",
-   "description": "Anchors the second-field case below: has_shadow answers its true value — 524 functions.",
-   "use": "zephyr-andre.frozen",
-   "fql": "FIND symbols WHERE has_shadow = 'true' LIMIT 1",
-   "assert": {
-    "row_count": 1,
-    "total": 534
-   }
-  },
-  {
-   "name": "a_second_boolean_false_fills_a_page",
-   "description": "Breadth pin: the case above names four fields (has_todo, has_escape, has_shadow, is_recursive) and a fix that special-cased one would leave the others silently empty. This case holds a second field to the same contract.",
-   "use": "zephyr-andre.frozen",
-   "enforcement": "expect_fail",
-   "expect_fail_reason": "has_shadow = 'false' answers 0 rows for the same reason has_todo does; the fix must cover every stamp-only boolean, not one",
-   "fql": "FIND symbols WHERE has_shadow = 'false'",
-   "assert": {
-    "row_count": 20
-   }
-  },
-  {
-   "name": "control_pytorch_has_todo_true_answers",
-   "description": "Anchors the case below on the second corpus: 3,763 functions with TODOs, 365 of them added by the leading-position fix — this is the Python corpus, and the leading position is the one an indentation-delimited grammar hides.",
-   "use": "pytorch-andre.pytorch-frozen",
-   "fql": "FIND symbols WHERE has_todo = 'true' LIMIT 1",
-   "assert": {
-    "row_count": 1,
-    "total": 3763
-   }
-  },
-  {
-   "name": "a_boolean_false_fills_a_page_on_a_python_corpus",
-   "description": "Same gap, second language family.",
-   "use": "pytorch-andre.pytorch-frozen",
-   "enforcement": "expect_fail",
-   "expect_fail_reason": "has_todo = 'false' answers 0 rows on pytorch too; the gap is in the shared posting layer, not a grammar",
-   "fql": "FIND symbols WHERE has_todo = 'false'",
-   "assert": {
-    "row_count": 20
-   }
-  },
   {
    "name": "control_zephyr_locals_share_one_name_count",
    "description": "Anchors the case below at corpus scale and documents the shape: 11,964 local bindings named ret, every row carrying the identical corpus-wide count of the NAME. Verified live 2026-08-24 on 0.183.0.",

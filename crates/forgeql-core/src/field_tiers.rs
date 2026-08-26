@@ -10,9 +10,11 @@
 //! stored, which structure serves each operator class, whether that structure
 //! decides the answer or only proposes candidates, what it cannot see and
 //! which mechanism covers that, the budgets bounding it, the measurement
-//! (or the bench class that would produce one), and who owns the set of values
+//! (or the bench class that would produce one), who owns the set of values
 //! the field can take — the corpus, whose unstored values answer empty, or the
-//! engine, whose unknown values are refused ([`ValueUniverse`]).
+//! engine, whose unknown values are refused ([`ValueUniverse`]) — and, for a
+//! field written only when it holds, what a row it examined and did not write
+//! answers and which rows it examines ([`StampDefault`]).
 //!
 //! # Scope
 //!
@@ -369,6 +371,151 @@ pub enum ValueUniverse {
     Engine(&'static [&'static str]),
 }
 
+/// What a field answers on a row its enricher LOOKED AT and did not write.
+///
+/// A stamp-only field is written only when it holds; nothing is written when it
+/// does not. Read literally, that makes the other value unqueryable: nothing
+/// stores it, so nothing selects it, and an empty page reads as a claim about
+/// the corpus rather than about the index. But the index already implies the
+/// answer — the rows the enricher examined, minus the rows it wrote — so the
+/// value can be answered at query time without storing it.
+///
+/// Three things have to be declared for that arithmetic to be safe, and they
+/// are declared HERE, once:
+///
+/// * `value` — what an examined-and-unwritten row answers.
+/// * `applicable_kinds` — the kinds the default speaks for. This is NOT "every
+///   row": a row of an unlisted kind answers neither value, because carrying
+///   nothing is what a row the enricher never examined and a row it examined
+///   and did not write BOTH look like, and only this list separates them.
+/// * `applicable_languages` — the languages the default speaks for, on exactly
+///   the same terms. An enricher gates on more than the node kind: on a
+///   language CAPABILITY the config declares, and on the shape of the grammar
+///   node it is handed. Python declares no address-of operator, so escape
+///   analysis has never run on a Python function; cmake and make declare no
+///   comment kind, so no marker scan has read theirs; and a cmake `function_def`
+///   carries no `body` field, so the shadow walk never starts on one either —
+///   a gate no config declares and the reason this list has four entries rather
+///   than three. Without it those rows would answer "false" about an analysis
+///   that did not happen: the whole failure this declaration exists to prevent,
+///   one level further in than the kinds catch.
+///
+/// The kinds are a set of `fql_kind`s, and that is a deliberate narrowing
+/// rather than a synonym for "examined". An enricher gates on the raw node
+/// kinds its language declares as function kinds, and a language may declare a
+/// kind a function kind while mapping it to some other `fql_kind` — cmake does
+/// exactly that with `macro_def`, which is examined and lands under
+/// `fql_kind = 'macro'`. Such a row is stamped when the field holds and answers
+/// nothing when it does not, exactly as before this table gained defaults.
+/// Saying so in the same breath as the claim is the contract; widening the list
+/// to cover it would put language-specific kind names in core.
+///
+/// The languages ARE resolved from those gates — but at declaration time, into
+/// plain name lists, so no reader has to reach a registry it does not have.
+/// Three of the four are recomputed from the shipped CONFIGS by a test that
+/// fails on drift; `has_shadow`'s is recomputed from the shipped GRAMMARS by
+/// another, because no config declares the gate it depends on.
+///
+/// One thing this does NOT model, and must not be read as modelling: how well
+/// an enricher that DID run reads the code. A walk that misses a position
+/// reports too few `'true'` rows, and the complement then reports too many
+/// `'false'` ones — the default inherits exactly the accuracy of the value it
+/// complements, no more and no less. That is a defect in the enricher, fixed in
+/// the enricher; it is not the never-examined case this declaration separates.
+/// A Rust `/* TODO */` is the live instance: the marker scan runs on Rust and
+/// reads only the one comment kind the config names, so `has_todo` reports too
+/// few `'true'` rows and `'false'` inherits exactly that. Those rows stay
+/// answered. The cmake rows do not, and the difference is whether anything ran.
+///
+/// Every reader derives all three from this one declaration, through
+/// [`StampDefault::speaks_for`]. A predicate reader that narrowed to a set the
+/// row-level evaluator then disagreed with would recreate the
+/// two-readers-disagree class the counted-grouping work closed.
+#[derive(Debug, Clone, Copy)]
+pub struct StampDefault {
+    /// The value an examined row that carries nothing answers.
+    pub value: &'static str,
+    /// The `fql_kind`s the field's enricher examines, and therefore the only
+    /// rows the default speaks for.
+    pub applicable_kinds: &'static [&'static str],
+    /// The languages whose enricher actually runs on such a row.
+    ///
+    /// An enricher gates on more than the node kind. It gates on a language
+    /// CAPABILITY the config declares — an address-of operator, a call
+    /// expression, a comment kind — and on the shape of the grammar node
+    /// itself: several read `child_by_field_name("body")` and return when
+    /// there is none, which is how a cmake function, whose grammar carries no
+    /// `body` field, gets past every capability check and is still never
+    /// walked. Either way the row sits INSIDE the applicable kinds and was
+    /// never examined, so it answers neither value — the same standing a row
+    /// of an unlisted kind has, and for the same reason.
+    ///
+    /// There is no "every language" here on purpose. Every default names the
+    /// languages it speaks for, so adding one is a decision somebody makes
+    /// rather than a default nobody checked; the two stops this declaration
+    /// cost were both an unexamined "and the rest".
+    pub applicable_languages: &'static [&'static str],
+}
+
+impl StampDefault {
+    /// Whether this default speaks for a row of `kind` written in `language`.
+    ///
+    /// Both dimensions in one place, so no reader can honour one and forget the
+    /// other. A row it does not speak for answers neither value — not the
+    /// default, and not its opposite.
+    #[must_use]
+    pub fn speaks_for(self, kind: &str, language: &str) -> bool {
+        self.applicable_kinds.contains(&kind) && self.applicable_languages.contains(&language)
+    }
+}
+
+/// The kinds every stamp-only boolean declared here speaks for. Their enrichers
+/// gate on the raw kinds a language declares as its function kinds, and for
+/// C, C++, Rust and Python that maps onto `fql_kind = 'function'` exactly — the
+/// function rows and the rows carrying a function metric agree row for row on
+/// every corpus the tests read. Where a language declares a function kind and
+/// maps it elsewhere, the rows land outside this set and keep their old
+/// behaviour; [`StampDefault`] says which and why.
+const FUNCTION_ROWS: &[&str] = &["function"];
+
+/// Languages whose config declares a comment kind (`syntax.comment`).
+///
+/// `TodoEnricher` returns before reading anything without one, so `has_todo`
+/// would otherwise answer "no marker" for a body no scanner ever looked at.
+/// cmake and make declare function kinds and no comment kind, which is why
+/// this is a list rather than every language.
+const COMMENT_LANGUAGES: &[&str] = &["c", "cpp", "python", "rust"];
+
+/// Languages whose config declares a call expression (`expressions.call`).
+///
+/// `RecursionEnricher` finds a self-call by matching call expressions; without
+/// the kind it returns, and every function would answer "not recursive".
+const CALL_LANGUAGES: &[&str] = &["c", "cpp", "python", "rust"];
+
+/// Languages whose config declares an address-of expression
+/// (`expressions.address_of`).
+///
+/// Python declares it as the empty string, so `EscapeEnricher` has never run on
+/// a Python function. Answering `has_escape = 'false'` over every `function`
+/// row regardless of language would publish "no local escapes" for every Python
+/// function in the workspace — a claim about an analysis that did not happen.
+const ADDRESS_OF_LANGUAGES: &[&str] = &["c", "cpp", "rust"];
+
+/// Languages whose function kinds carry the `body` field the shadow walk needs.
+///
+/// `ShadowEnricher` reads no language capability — its only gates are the node
+/// kind and `child_by_field_name("body")`, which it returns on when there is
+/// none. That second gate is a property of the GRAMMAR, not of the config, and
+/// it is what cmake and make fail: both declare function kinds that map to
+/// `fql_kind = 'function'`, both pass every capability check there is, and
+/// neither node carries a `body` field, so the walk never starts and the row
+/// was never examined.
+///
+/// This one is therefore tied back not to the shipped configs but to the
+/// shipped GRAMMARS, by a test that parses a function in each language that
+/// produces `function` rows and asks the node.
+const SHADOW_LANGUAGES: &[&str] = &["c", "cpp", "python", "rust"];
+
 /// The `fql_kind` strings the indexer writes as literals rather than reading
 /// out of a language config's `kind_map`.
 ///
@@ -591,6 +738,10 @@ pub struct FieldTier {
     /// outside that set means — an empty answer about the corpus, or a refusal
     /// naming the accepted values. See [`ValueUniverse`].
     pub values: ValueUniverse,
+    /// For a field written only when it holds, what a row the enricher examined
+    /// and did not write answers, and which rows it examined. `None` for every
+    /// field whose values are all stored. See [`StampDefault`].
+    pub default: Option<StampDefault>,
 }
 
 impl FieldTier {
@@ -743,6 +894,33 @@ const fn posted(field: &'static str, per_file: usize, per_workspace: usize) -> F
         elsewhere: None,
         post_group: false,
         values: ValueUniverse::Corpus,
+        default: None,
+    }
+}
+
+/// A [`posted`] field written ONLY when it holds, and therefore one whose other
+/// value has to be answered rather than looked up.
+///
+/// `default_value` is what a row the enricher examined and did not write
+/// answers; `applicable_kinds` is which rows it examines. Both travel together
+/// because neither is safe alone: the value without the kinds would speak for
+/// rows nothing looked at, and the kinds without the value would say which rows
+/// are in scope without saying what they answer.
+const fn stamp_only(
+    field: &'static str,
+    per_file: usize,
+    per_workspace: usize,
+    default_value: &'static str,
+    applicable_kinds: &'static [&'static str],
+    applicable_languages: &'static [&'static str],
+) -> FieldTier {
+    FieldTier {
+        default: Some(StampDefault {
+            value: default_value,
+            applicable_kinds,
+            applicable_languages,
+        }),
+        ..posted(field, per_file, per_workspace)
     }
 }
 
@@ -938,6 +1116,7 @@ const fn refused(
         elsewhere,
         post_group: false,
         values: ValueUniverse::Corpus,
+        default: None,
     }
 }
 
@@ -963,6 +1142,7 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         elsewhere: None,
         post_group: false,
         values: ValueUniverse::Corpus,
+        default: None,
     },
     FieldTier {
         field: "fql_kind",
@@ -975,6 +1155,7 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         elsewhere: None,
         post_group: false,
         values: ValueUniverse::Engine(FQL_KIND_VALUES),
+        default: None,
     },
     FieldTier {
         field: "language",
@@ -987,6 +1168,7 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         elsewhere: None,
         post_group: false,
         values: ValueUniverse::Corpus,
+        default: None,
     },
     FieldTier {
         field: "path",
@@ -1001,6 +1183,7 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         elsewhere: None,
         post_group: false,
         values: ValueUniverse::Corpus,
+        default: None,
     },
     FieldTier {
         field: "line",
@@ -1013,6 +1196,7 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         elsewhere: None,
         post_group: false,
         values: ValueUniverse::Corpus,
+        default: None,
     },
     FieldTier {
         field: "usages",
@@ -1025,6 +1209,7 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         elsewhere: None,
         post_group: false,
         values: ValueUniverse::Corpus,
+        default: None,
     },
     FieldTier {
         field: "node_id",
@@ -1037,6 +1222,7 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         elsewhere: None,
         post_group: false,
         values: ValueUniverse::Corpus,
+        default: None,
     },
     FieldTier {
         field: "body",
@@ -1051,6 +1237,7 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         elsewhere: None,
         post_group: false,
         values: ValueUniverse::Corpus,
+        default: None,
     },
     FieldTier {
         field: "role",
@@ -1067,6 +1254,7 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         elsewhere: None,
         post_group: false,
         values: ValueUniverse::Engine(USAGE_ROLE_VALUES),
+        default: None,
     },
     // `value` and `type` are named in CORE_WHERE_FIELDS but resolve through
     // the enrichment extras like any other enrichment column, so they are
@@ -1085,6 +1273,7 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         elsewhere: None,
         post_group: false,
         values: ValueUniverse::Corpus,
+        default: None,
     },
     FieldTier {
         field: "type",
@@ -1100,6 +1289,7 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         elsewhere: None,
         post_group: false,
         values: ValueUniverse::Corpus,
+        default: None,
     },
     // ── Refused: no symbol row can carry these, and the query says so ─────
     //
@@ -1197,18 +1387,39 @@ pub const FIELD_TIERS: &[FieldTier] = &[
     // disagreement, which is what a parallel declaration buys before the
     // lists collapse into views over this one.
     posted("has_doc", 8, 64),
-    posted("is_recursive", 8, 64),
+    stamp_only(
+        "is_recursive",
+        8,
+        64,
+        "false",
+        FUNCTION_ROWS,
+        CALL_LANGUAGES,
+    ),
     posted("has_fallthrough", 8, 64),
     posted("is_const", 8, 64),
     posted("is_mutable", 8, 64),
     posted("is_unsafe", 8, 64),
     posted("is_async", 8, 64),
     posted("is_generic", 8, 64),
-    posted("has_todo", 8, 64),
+    stamp_only("has_todo", 8, 64, "false", FUNCTION_ROWS, COMMENT_LANGUAGES),
     posted("is_exported", 8, 64),
     posted("has_catch_all", 8, 64),
-    posted("has_escape", 8, 64),
-    posted("has_shadow", 8, 64),
+    stamp_only(
+        "has_escape",
+        8,
+        64,
+        "false",
+        FUNCTION_ROWS,
+        ADDRESS_OF_LANGUAGES,
+    ),
+    stamp_only(
+        "has_shadow",
+        8,
+        64,
+        "false",
+        FUNCTION_ROWS,
+        SHADOW_LANGUAGES,
+    ),
     posted("expanded_has_escape", 8, 64),
     posted("expansion_failed", 8, 64),
     posted("cast_style", 8, 64),
@@ -1285,6 +1496,7 @@ pub const CATCH_ALL_FIELD: FieldTier = FieldTier {
     elsewhere: None,
     post_group: false,
     values: ValueUniverse::Corpus,
+    default: None,
 };
 
 /// The declared serving path for `field`, by canonical name or alias, falling
@@ -1338,6 +1550,55 @@ pub fn engine_owned_values(field: &str) -> Option<&'static [&'static str]> {
         ValueUniverse::Corpus => None,
         ValueUniverse::Engine(values) => Some(values),
     }
+}
+
+/// The fields that declare a stamp-only default.
+///
+/// A fast door in front of [`stamp_default`], which is consulted once per ROW
+/// by the predicate, ordering and grouping paths. Without it every one of those
+/// rows walked the whole of `FIELD_TIERS` to be told that its field declares no
+/// default — a cost paid by `ORDER BY` and `GROUP BY` on ANY enrichment field,
+/// including the ten stamp-only booleans this mechanism deliberately does not
+/// speak for.
+///
+/// It is a hand-written copy of a fact the table already holds, so
+/// `field_tier_table::only_the_four_ruled_fields_declare_a_stamp_default`
+/// derives the same set from `FIELD_TIERS` and fails if the two disagree: a
+/// fifth declaration that missed this list would lose its default in silence.
+/// The same test asserts the four declare no ALIASES, because an alias reaches
+/// `lookup` and would never reach this list.
+pub const STAMP_DEFAULT_FIELDS: [&str; 4] =
+    ["is_recursive", "has_todo", "has_escape", "has_shadow"];
+
+/// What `field` answers on a row nothing wrote it to.
+///
+/// `None` when every value the field takes is stored, which is the case for all
+/// but a handful of fields. When it is `Some`, the declaration carries the
+/// value, the kinds it speaks for and the languages it speaks for.
+///
+/// This is the ONE place the default is read. Every reader that has to agree
+/// about it — the workspace bitmap prefilter, the per-row predicate evaluator,
+/// the counted grouping — calls this, so none of them can drift from another.
+/// `field` is looked up as written, so an alias would resolve the same
+/// declaration; none of the four declares one today, and the table test says so.
+#[must_use]
+pub fn stamp_default(field: &str) -> Option<StampDefault> {
+    if !STAMP_DEFAULT_FIELDS.contains(&field) {
+        return None;
+    }
+    lookup(field)?.default
+}
+
+/// Whether `field` answers `value` for a row the enricher examined and did not
+/// write. False for every field with no declared default, and for any other
+/// value of a field that has one.
+///
+/// The distinction matters at exactly one place per reader: a value nothing
+/// stores usually means "no row can carry this", and for this one value it
+/// means the opposite.
+#[must_use]
+pub fn is_stamp_default_value(field: &str, value: &str) -> bool {
+    stamp_default(field).is_some_and(|d| d.value == value)
 }
 
 /// Every field the symbol query refuses outright, in table order.

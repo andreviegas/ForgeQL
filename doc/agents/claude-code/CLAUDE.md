@@ -259,7 +259,7 @@ any seam yourself. Steps marked `commit_gate: true` in `.forgeql.yaml` must pass
 
 `MATCHES` / `NOT MATCHES` use Rust `regex` crate syntax. Prefix `(?i)` for case-insensitive matching.
 
-A row that does not carry the field fails **every** operator naming it, negations included: `!=`, `NOT LIKE` and `NOT MATCHES` return only rows that have a value to differ from, so a negation is not a way to reach the rows that lack the field. The exception is a pattern operator handed a value it cannot use — `NOT LIKE`/`NOT MATCHES` with a non-string value — which passes before any field is read. A regex that does not compile is refused instead, on `MATCHES` and `NOT MATCHES` alike.
+A row that does not carry the field fails **every** operator naming it, negations included: `!=`, `NOT LIKE` and `NOT MATCHES` return only rows that have a value to differ from, so a negation is not a way to reach the rows that lack the field — except for the four fields declaring a stamp-only default (`has_todo`, `has_escape`, `has_shadow`, `is_recursive`), where a `function` row in a language the enricher ran on resolves to `'false'` and therefore answers `!= 'true'`, `NOT LIKE 'tru%'` and `NOT MATCHES 'true'` as well as `= 'false'`. The other exception is a pattern operator handed a value it cannot use — `NOT LIKE`/`NOT MATCHES` with a non-string value — which passes before any field is read. A regex that does not compile is refused instead, on `MATCHES` and `NOT MATCHES` alike.
 
 `SHOW body`, `SHOW NODE`, `SHOW LINES`, `SHOW context` and `SHOW MORE` accept
 `WHERE` on source lines. `SHOW signature` does not — it renders one line rather
@@ -467,7 +467,7 @@ Detects local variables that escape their declaring function — via return, add
 
 | Field | Applies to | Values / Notes |
 |---|---|---|
-| `has_escape` | `function` | `"true"` if any local escapes |
+| `has_escape` | `function` | `"true"` if any local escapes; `"false"` answers every function the enricher examined and did not mark — C, C++ and Rust only, the languages declaring an address-of operator, since without one it returns before reading anything and a Python, CMake or Makefile function answers neither value. One of only four fields whose negative is answerable at all; the other stamp-only booleans (`has_fallthrough`, `is_const`, …) still answer nothing for it |
 | `escape_count` | `function` | Number of distinct escaping locals |
 | `escape_vars` | `function` | Comma-separated names of escaping locals |
 | `escape_tier` | `function` | Severity: `1` (return), `2` (address-of), `3` (pointer/array alias) |
@@ -477,7 +477,7 @@ Detects local variables that escape their declaring function — via return, add
 
 | Field | Applies to | Values / Notes |
 |---|---|---|
-| `has_shadow` | `function` | `"true"` if any inner variable shadows an outer one |
+| `has_shadow` | `function` | `"true"` if any inner variable shadows an outer one; `"false"` answers every function the enricher examined and did not mark — C, C++, Python and Rust only. This enricher reads no language capability, unlike the other three; what confines it is the grammar, since it walks the function's `body` node and a CMake function or Makefile rule carries no such node, so the walk never starts and those rows answer neither value. One of only four fields whose negative is answerable at all; the other stamp-only booleans (`has_fallthrough`, `is_const`, …) still answer nothing for it |
 | `shadow_count` | `function` | Number of shadowing declarations |
 | `shadow_vars` | `function` | Comma-separated shadowed variable names |
 
@@ -500,14 +500,14 @@ Detects local variables that escape their declaring function — via return, add
 
 | Field | Applies to | Values / Notes |
 |---|---|---|
-| `is_recursive` | `function` | `"true"` if the function calls itself |
+| `is_recursive` | `function` | `"true"` if the function calls itself; `"false"` answers every function the enricher examined and did not mark — C, C++, Python and Rust only, the languages declaring a call expression, so a CMake function or Makefile rule answers neither value. One of only four fields whose negative is answerable at all; the other stamp-only booleans (`has_fallthrough`, `is_const`, …) still answer nothing for it |
 | `recursion_count` | `function` | Number of self-call sites |
 
 ### Todo Markers
 
 | Field | Applies to | Values / Notes |
 |---|---|---|
-| `has_todo` | `function` | `"true"` if a TODO/FIXME/HACK/XXX marker comment inside the function is found — its body or a comment attached directly to it, never its doc comment, never one between a decorator and the definition, and only in the raw comment kind the language declares (in Rust, `//` and not `/* */`) |
+| `has_todo` | `function` | `"true"` if a TODO/FIXME/HACK/XXX marker comment inside the function is found — its body or a comment attached directly to it, never its doc comment, never one between a decorator and the definition, and only in the raw comment kind the language declares (in Rust, `//` and not `/* */`). `"false"` answers every function the enricher examined and did not mark — C, C++, Python and Rust only, the languages declaring a comment kind, so a Makefile rule or CMake function answers neither value because the scan returned before reading its text. One of only four fields whose negative is answerable at all; the other stamp-only booleans (`has_fallthrough`, `is_const`, …) still answer nothing for it |
 | `todo_count` | `function` | Total marker occurrences, over the same region as `has_todo` |
 | `todo_tags` | `function` | Sorted unique tags over that same region (e.g. `"FIXME,TODO"`) |
 
