@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use forgeql_core::field_tiers::{
-    ALL_OPS, CATCH_ALL_FIELD, Exactness, FIELD_TIERS, FieldTier, Gap, OpClass,
+    ALL_OPS, CATCH_ALL_FIELD, Exactness, FIELD_TIERS, FieldTier, Gap, Measured, OpClass,
     STAMP_DEFAULT_FIELDS, Serving, Source, Then, Tier, ValueUniverse, canonical,
     engine_owned_values, lookup, refused_fields, stamp_default,
 };
@@ -39,11 +39,31 @@ fn rows_except_catch_all() -> impl Iterator<Item = &'static FieldTier> {
         .filter(|t| t.field != CATCH_ALL_FIELD.field)
 }
 
+/// The entry serving `=` on a value some row STORES.
+///
+/// Deliberately not "the entry serving `=`": a stamp-only field declares a
+/// second one, for the single value no row stores, and it lives in the
+/// declaration rather than in this list. `find` takes the first match either
+/// way, so keeping the two apart is what stops which one it returns from being
+/// a coin toss.
 fn eq_serving(row: &FieldTier) -> &'static Serving {
     row.serving
         .iter()
         .find(|s| s.ops.contains(&OpClass::Eq))
         .unwrap_or_else(|| panic!("{} declares no serving for `=`", row.field))
+}
+
+/// Every serving a row declares: the entries keyed by operator class, and the
+/// one a stamp-only default declares for its own value.
+///
+/// The exactness and stand-aside rules are about a `(tier, then)` pair and not
+/// about which values reach it, so both kinds of entry answer to them. The
+/// operator-partition rule is not: it is a statement about one value class, and
+/// the default's entry is a second `Eq` sitting under another one.
+fn all_servings(row: &'static FieldTier) -> impl Iterator<Item = &'static Serving> {
+    row.serving
+        .iter()
+        .chain(row.default.as_ref().map(|d| &d.eq))
 }
 
 // ── Structure: a row cannot quietly forget an operator ──────────────────────
@@ -56,6 +76,10 @@ fn every_row_accounts_for_every_operator_class() {
     // that names six of seven operator classes is exactly that bug, and here
     // it does not compile past this test.
     for row in FIELD_TIERS {
+        // `row.serving` and not `all_servings`: the partition is a statement
+        // about ONE value class. A stamp-only default declares a second `Eq`
+        // for the single value no row stores, and reading it in here would see
+        // two and call the field's own declaration a duplicate.
         let mut seen: Vec<OpClass> = Vec::new();
         for serving in row.serving {
             for op in serving.ops {
@@ -81,7 +105,7 @@ fn every_row_accounts_for_every_operator_class() {
 #[test]
 fn a_tier_that_can_stand_aside_names_what_takes_over() {
     for row in FIELD_TIERS {
-        for serving in row.serving {
+        for serving in all_servings(row) {
             match serving.tier {
                 Tier::Scan | Tier::Refused => assert!(
                     serving.then == Then::Nothing,
@@ -93,7 +117,8 @@ fn a_tier_that_can_stand_aside_names_what_takes_over() {
                 | Tier::KeyBitmap
                 | Tier::ValueUniverse
                 | Tier::NumericIndex
-                | Tier::ZoneMap => assert!(
+                | Tier::ZoneMap
+                | Tier::StampDefault => assert!(
                     serving.then != Then::Nothing,
                     "{}: {:?} proposes candidates, so the row must name what \
                      decides them",
@@ -307,10 +332,16 @@ fn no_row_is_invented() {
 ///
 /// A proof named in the table and absent from the code is a claim with nothing
 /// behind it, and checking only that the string is non-empty checked nothing.
-const PROOF_SOURCES: &[(&str, &str)] = &[(
-    "fast_paths",
-    include_str!("../src/storage/columnar/columnar_storage/fast_paths.rs"),
-)];
+const PROOF_SOURCES: &[(&str, &str)] = &[
+    (
+        "fast_paths",
+        include_str!("../src/storage/columnar/columnar_storage/fast_paths.rs"),
+    ),
+    (
+        "segment_reader",
+        include_str!("../src/storage/columnar/segment_reader.rs"),
+    ),
+];
 
 #[test]
 fn only_a_tier_that_reads_every_row_may_call_a_value_absent() {
@@ -320,7 +351,7 @@ fn only_a_tier_that_reads_every_row_may_call_a_value_absent() {
     // proof has separately established the absence. `Exactness::of` decides
     // which of those a `(tier, then)` pair is; the table may not choose.
     for row in FIELD_TIERS {
-        for s in row.serving {
+        for s in all_servings(row) {
             let required = Exactness::of(s.tier, s.then);
             let legal = s.exactness == required
                 || matches!(
@@ -503,6 +534,16 @@ const GAP_COVERAGE: &[(Gap, &str)] = &[
      i64::MAX on purpose. Recorded as a limitation with no fallback rather than \
      tested",
     ),
+    (
+        Gap::StampDefaultValue,
+        "stamp_only_defaults::every_operator_reads_the_default_the_same_way — \
+     LIKE 'fal%' and MATCHES '^fal' are NON-NEGATED and both accept the declared default, \
+     so the pattern tier stands aside and the rows come back from the complete scan (the \
+     same case's negated forms take the other route and are covered there too). \
+     The `=` half of the same \
+     gap is the one that needed a tier of its own, and is covered by \
+     stamp_only_defaults::the_two_values_partition_the_applicable_rows",
+    ),
 ];
 
 #[test]
@@ -528,6 +569,7 @@ fn every_declared_gap_is_covered() {
         include_str!("field_tier_table.rs"),
         include_str!("query_set_valued_fields.rs"),
         include_str!("query_core_field_tier.rs"),
+        include_str!("stamp_only_defaults.rs"),
     );
     for (gap, note) in GAP_COVERAGE {
         assert!(
@@ -1978,6 +2020,231 @@ fn a_field_declaring_a_stamp_default_declares_no_alias() {
             field.aliases,
         );
     }
+}
+
+#[test]
+fn the_default_value_is_not_described_as_the_stored_values_are() {
+    // The defect this file exists to catch, at the one place it had already
+    // happened. All four stamp-only fields inherited `ENRICH_EQ` through
+    // `posted`, so the table said `has_todo = 'false'` was one key read whose
+    // empty answer a named per-segment prover could turn into an absence.
+    // Three claims, and none of them true of that value: no key holds it, the
+    // prover declines it by name, and a different structure answers it.
+    let mut checked = 0;
+    for row in FIELD_TIERS.iter().filter(|t| t.default.is_some()) {
+        let default = row.default.as_ref().expect("just filtered on it");
+        checked += 1;
+
+        assert_eq!(
+            default.eq.ops,
+            [OpClass::Eq],
+            "{}: the default's serving covers `=` and nothing else — the other \
+             operator classes on that value are served by the field's own entries",
+            row.field
+        );
+        assert_ne!(
+            default.eq.tier,
+            eq_serving(row).tier,
+            "{}: the default value and the stored values are declared as reaching the \
+             same structure, which is how the wrong claim got in",
+            row.field
+        );
+        assert_eq!(default.eq.tier, Tier::StampDefault, "{}", row.field);
+        assert!(
+            !matches!(default.eq.exactness, Exactness::SupersetProvenAbsent(_)),
+            "{}: a prover is named for the one value the prover declines by name — \
+             segment_reader::proves_enrichment_value_absent returns false for a declared \
+             default, and the `=` arm returns before reaching it at all",
+            row.field
+        );
+        assert!(
+            !matches!(default.eq.measured, Measured::Unmeasured),
+            "{}: a tier arriving unmeasured is what P7 exists to catch — state a \
+             measurement, a bench class, or the ceiling in rows",
+            row.field
+        );
+    }
+    assert!(
+        checked > 0,
+        "no field declares a default, so this test proved nothing"
+    );
+}
+
+/// Assert that `claim`, written into the table as `module::function`, names a
+/// function that module's source actually defines.
+///
+/// `PROOF_SOURCES` is the same list a `SupersetProvenAbsent` prover is checked
+/// against, and the reason is the same: a name in this table is a claim about
+/// which code runs, and a claim nothing reads back is prose.
+fn assert_names_a_real_function(site: &str, claim: &str) {
+    let (module, func) = claim
+        .split_once("::")
+        .unwrap_or_else(|| panic!("{site}: '{claim}' is not module::function"));
+    let src = PROOF_SOURCES
+        .iter()
+        .find(|(m, _)| *m == module)
+        .unwrap_or_else(|| {
+            panic!(
+                "{site}: '{claim}' names module '{module}', which this test does not read \
+                 — add its source to PROOF_SOURCES"
+            )
+        })
+        .1;
+    assert!(
+        src.contains(&format!("fn {func}(")),
+        "{site}: '{claim}' names a function {module} does not define"
+    );
+}
+
+#[test]
+fn a_tier_that_names_its_implementation_names_one_the_code_defines() {
+    let mut named = 0;
+    for row in FIELD_TIERS {
+        for s in all_servings(row) {
+            let Some(implementation) = s.tier.implemented_by() else {
+                continue;
+            };
+            named += 1;
+            assert_names_a_real_function(row.field, implementation);
+        }
+    }
+    assert!(
+        named > 0,
+        "no declared tier names an implementation, so the check ran zero times and \
+         reported coverage of nothing"
+    );
+}
+
+/// The `module::function` claims in one of a ceiling's free-text fields.
+///
+/// A token counts as a call site only where BOTH segments are `snake_case`,
+/// and a trailing `.` is stripped so a claim can end a sentence. The prose in
+/// this table names types and constants too — `Serving::then`, `u32::MAX` —
+/// and reading one of those as a call site would fail with "add its source to
+/// `PROOF_SOURCES`" for something that is not a module at all, turning an
+/// ordinary edit into a false red.
+///
+/// The boundary that buys: an associated function written as
+/// `SegmentReader::segment_written_in` is NOT read back here, because nothing
+/// tells it apart from a type path. Write the module path
+/// (`segment_reader::segment_written_in`) for a claim that should be checked.
+/// In `per_row` a spelling this cannot read is caught anyway — that field must
+/// yield at least one claim per entry — and in `then_per_candidate` it is not.
+fn function_claims(text: &'static str) -> Vec<&'static str> {
+    fn snake_case(segment: &str) -> bool {
+        !segment.is_empty()
+            && segment
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+    }
+
+    text.split(|c: char| c.is_whitespace() || ",;.()`".contains(c))
+        .filter(|t| {
+            t.split_once("::")
+                .is_some_and(|(module, func)| snake_case(module) && snake_case(func))
+        })
+        .collect()
+}
+
+#[test]
+fn a_ceiling_that_names_where_it_is_spent_names_a_real_function() {
+    // The claim that would otherwise have gone unchecked. A `RowCeiling` states
+    // its cost in free text and that text names the function the pass happens
+    // in — a `module::function` claim in a slot a reader trusts MORE than a doc
+    // comment, because it reads like a measurement. The same commit that made
+    // the tier's own name checkable wrote this one into a string; only asking
+    // the same question of both closes it.
+    //
+    // `per_row` is required to name one PER ENTRY rather than across the table,
+    // because a table-wide count lets a ceiling that names nothing ride on
+    // another entry's claim and be skipped in silence. `then_per_candidate` is
+    // scraped the same way but required to name nothing: what spends it is
+    // whatever `Serving::then` names, and a tier that is a family of call sites
+    // rather than one function has none — the distinction `Tier::implemented_by`
+    // already draws.
+    let mut ceilings = 0;
+    for row in FIELD_TIERS {
+        for s in all_servings(row) {
+            let Measured::RowCeiling {
+                per_row,
+                then_per_candidate,
+                ..
+            } = s.measured
+            else {
+                continue;
+            };
+            ceilings += 1;
+
+            let spent_in = function_claims(per_row);
+            assert!(
+                !spent_in.is_empty(),
+                "{}: the ceiling says what one row costs and not where it is spent, so \
+                 nothing can read the claim back: {per_row}",
+                row.field
+            );
+            for claim in spent_in
+                .iter()
+                .chain(function_claims(then_per_candidate).iter())
+            {
+                assert_names_a_real_function(row.field, claim);
+            }
+        }
+    }
+    assert!(
+        ceilings > 0,
+        "no serving declares a RowCeiling, so this check ran zero times and reported \
+         coverage of nothing"
+    );
+}
+
+#[test]
+fn the_default_value_gap_is_declared_by_exactly_the_fields_that_default() {
+    // The declaration and the gap it opens have to move together, in both
+    // directions: a field answering a value no key holds has that gap, and a
+    // field whose every value is stored does not.
+    // The FIRST posted field with no default, as the baseline the defaulted
+    // rows are compared against. Every posted field shares one gap list today,
+    // so which one is picked does not matter; the day a posted field carries a
+    // bespoke list AND sorts first, this goes red for a reason that has nothing
+    // to do with stamp defaults. That is a loud failure with a misleading
+    // message, not a silent pass, which is the right way round for a baseline
+    // nothing else pins.
+    let posted_without_default = rows_except_catch_all()
+        .find(|t| POSTING_ENRICHMENT_FIELDS.contains(&t.field) && t.default.is_none())
+        .expect("some posted field declares no default");
+    let posted_gaps: BTreeSet<Gap> = posted_without_default.gaps.iter().copied().collect();
+
+    for row in rows_except_catch_all() {
+        assert_eq!(
+            row.gaps.contains(&Gap::StampDefaultValue),
+            row.default.is_some(),
+            "{}: the stamp-default gap and the stamp-default declaration disagree",
+            row.field
+        );
+        if row.default.is_none() {
+            continue;
+        }
+        // And the rest of the list is the posted list, entry for entry. The two
+        // are written out separately because a const slice cannot be extended in
+        // a const context, so nothing but this stops one from drifting.
+        let gaps: BTreeSet<Gap> = row.gaps.iter().copied().collect();
+        assert!(
+            posted_gaps.is_subset(&gaps),
+            "{}: a posted field's gaps are not all declared here",
+            row.field
+        );
+        let extra: Vec<Gap> = gaps.difference(&posted_gaps).copied().collect();
+        assert_eq!(
+            extra,
+            [Gap::StampDefaultValue],
+            "{}: the only gap a default adds is the one for its own value",
+            row.field
+        );
+    }
+    assert!(
+        !CATCH_ALL_FIELD.gaps.contains(&Gap::StampDefaultValue),
+        "the catch-all stands for language-declared fields, none of which may default"
+    );
 }
 
 #[test]

@@ -35,18 +35,54 @@
 //! that does answer it. That family was the defect this table was built to
 //! surface: each of those names was accepted and answered a confident zero.
 //!
-//! # This table is checked, and in four places consulted
+//! # This table is checked, and in seven places consulted
 //!
 //! Most of it nothing reads while a query runs: the tests in
 //! `tests/field_tier_table.rs` assert that it agrees with the const lists and
 //! the behaviour it describes, so a disagreement is a test failure rather than
-//! a silent wrong answer. Four things ARE read at query time, named here so
-//! the list stays closed — [`canonical`] resolves an alias to the field it
-//! spells, [`FieldTier::refusal`] is the text an agent is shown when a field
-//! is declined, [`written_after_materialisation`] keeps the early and late
-//! predicate readers agreeing about a field no column holds, and
-//! [`engine_owned_values`] decides whether an unrecognised VALUE is a refusal
-//! or an honest empty answer.
+//! a silent wrong answer. Seven things ARE read at query time:
+//!
+//! - [`canonical`] resolves an alias to the field it spells.
+//! - The refusal family decides a decline and then words it:
+//!   [`FieldTier::is_refused`] and [`FieldTier::is_refused_everywhere`] are the
+//!   decision — the second also filters the field list a refusal offers as a
+//!   suggestion — and [`FieldTier::refusal`] is the text the agent is shown.
+//! - [`FieldTier::post_group`], reached through [`lookup`], says which CLAUSE
+//!   accepts a field: `count` is refused in `WHERE` and answered after
+//!   grouping because of that one flag.
+//! - [`written_after_materialisation`] has TWO readers, and they are not the
+//!   same question. `segment_reader::row_field` is the predicate one, where
+//!   getting it wrong runs a filter later than it had to;
+//!   `segment_reader::ranks_field_like_a_built_row` is the `ORDER BY` and
+//!   top-K one, where getting it wrong ranks rows by an absence the built row
+//!   does not share and sheds rows that belonged in the answer.
+//! - [`engine_owned_values`] decides whether an unrecognised VALUE is a
+//!   refusal or an honest empty answer.
+//! - The constants that universe is built from — `ROLE_CODE`, `ROLE_TEXT`,
+//!   `UNKNOWN_KIND` — are read by the passes that MINT those values
+//!   (`query/find.rs`, `ast/show/members.rs`, `query/outline.rs`), so the role
+//!   a read pass stamps and the set a `WHERE role = …` is refused against
+//!   cannot drift apart. This one is a reference at the writing site rather
+//!   than a lookup, which is why it belongs on the list and is easy to miss
+//!   when counting readers.
+//! - [`stamp_default`], with [`is_stamp_default_value`] beside it, says what a
+//!   row the enricher examined and did not write answers.
+//!
+//! The last does more than describe. Every other reader answers a question
+//! about a NAME, a VALUE or a CLAUSE; `stamp_default` decides which STRUCTURE
+//! serves the query — `=` on a declared default is routed to
+//! [`Tier::StampDefault`] and every other value is not, and a non-negated
+//! pattern that accepts the default makes the pattern tier stand aside
+//! altogether. So for one value of four fields this table is not parallel to
+//! the serving path but part of it, and what it claims about that value is a
+//! claim about the code that runs.
+//!
+//! **This list is maintained by hand and nothing enforces it.** An eighth
+//! reader would fail no test. Grep `field_tiers::` under
+//! `crates/forgeql-core/src` before relying on it being complete: this list
+//! has been read as closed at four, at five and at six, and was wrong each
+//! time — the sentence you are reading is the only thing standing in for a
+//! check, and it is worth exactly what a sentence is worth.
 
 /// Where a field's value comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,6 +166,20 @@ pub enum Tier {
     StoredColumn,
     /// Per-segment min/max, used to skip whole segments.
     ZoneMap,
+
+    /// The rows a stamp-only field's DECLARED DEFAULT can speak for, assembled
+    /// by `fast_paths::stamp_default_candidates`: the kind bitmaps of the
+    /// declaration's applicable kinds, unioned with the rows of segments that
+    /// posted nothing for the field, intersected with the rows of segments
+    /// written in one of its applicable languages.
+    ///
+    /// It is not [`Tier::KeyBitmap`] with a different value. No row stores the
+    /// default, so the `field=value` keys are silent about it in both
+    /// directions, and the per-segment proof `KeyBitmap` leans on to turn an
+    /// empty answer into an absence is declined for exactly this value. Reading
+    /// absence off the keys here would answer zero rows on every corpus.
+    StampDefault,
+
     /// No index: every row is read and handed to the row-level filter. Slow
     /// and complete — the honest default, not a failure.
     Scan,
@@ -196,19 +246,53 @@ impl Tier {
     pub const fn intrinsic_exactness(self) -> Exactness {
         match self {
             Self::Refused => Exactness::NotApplicable,
+
             // Two ways to be exact. A scan and a stored column decide every
             // row against that row's own value; a name FST and a kind bitmap
             // are lookups over a key set complete by construction, because
             // every indexed row contributed its name and its kind.
             Self::Scan | Self::StoredColumn | Self::NameFst | Self::KindBitmap => Exactness::Exact,
+
             // Assembled from keys that a budget, an empty value or a dirty
-            // session can leave out.
+            // session can leave out — and, for `StampDefault`, from key sets
+            // that are complete and still propose too much: the kinds it unions
+            // include the rows that DO carry the field, and those must not
+            // answer the default. Either way the row-level evaluator is what
+            // decides, and this tier's own empty answer settles nothing.
             Self::NamePrefix
             | Self::Trigram
             | Self::KeyBitmap
             | Self::ValueUniverse
             | Self::NumericIndex
-            | Self::ZoneMap => Exactness::Superset,
+            | Self::ZoneMap
+            | Self::StampDefault => Exactness::Superset,
+        }
+    }
+
+    /// The one function that assembles this tier's candidates, where the tier
+    /// IS one function rather than a family of call sites.
+    ///
+    /// A tier name in this table is a claim about which code runs, and for most
+    /// tiers the claim is about a structure — the name FST, the numeric index —
+    /// reached from several places, with nothing single to name. Where one
+    /// function is the whole tier, naming it is what lets the table test check
+    /// the claim against the source rather than trust this comment, exactly as
+    /// [`Exactness::SupersetProvenAbsent`]'s prover is checked.
+    #[must_use]
+    pub const fn implemented_by(self) -> Option<&'static str> {
+        match self {
+            Self::StampDefault => Some("fast_paths::stamp_default_candidates"),
+            Self::NameFst
+            | Self::NamePrefix
+            | Self::Trigram
+            | Self::KindBitmap
+            | Self::KeyBitmap
+            | Self::ValueUniverse
+            | Self::NumericIndex
+            | Self::StoredColumn
+            | Self::ZoneMap
+            | Self::Scan
+            | Self::Refused => None,
         }
     }
 }
@@ -266,6 +350,11 @@ pub enum Gap {
     ShortColumn,
     /// The value does not fit the `i64` a numeric predicate is parsed into.
     AboveI64,
+    /// The value a stamp-only field's declaration answers for an examined row
+    /// that carries nothing is keyed nowhere: no row stores it, so no key names
+    /// the rows it speaks for. The postings say nothing about it in either
+    /// direction, which is not the same as saying it is absent.
+    StampDefaultValue,
 }
 
 impl Gap {
@@ -284,6 +373,13 @@ impl Gap {
             Self::DirtySession => "the dirty overlay is materialised separately and unioned in",
             Self::ShortColumn => "the column is not read and the complete row scan runs",
             Self::AboveI64 => "none: no predicate can match such a row, on any tier or on the scan",
+            Self::StampDefaultValue => {
+                "`=` is answered by fast_paths::stamp_default_candidates instead of by the \
+                 keys, and the pattern tier stands aside — returning None, so the complete \
+                 row scan runs — for any NON-NEGATED pattern that accepts the declared \
+                 default. A negated one does not stand aside: it is served as the universe \
+                 minus the matches, which leaves such a row a candidate anyway"
+            }
         }
     }
 }
@@ -297,6 +393,42 @@ pub enum Measured {
     /// Never measured, and no bench class exists to measure it with. A new
     /// tier arriving in this state is what P7 exists to catch.
     Unmeasured,
+
+    /// No time measurement, and a ceiling on the WORK stated in its place.
+    ///
+    /// A number timed by hand is not available to every author: the run-to-run
+    /// spread on the reference box swamps anything under a couple of seconds,
+    /// and the A/B harness that can tell smaller differences apart does not run
+    /// from every session that has to declare a tier. Hand-timing anyway would
+    /// publish noise as precision. A row ceiling is a property of the code
+    /// rather than of the box, so it can be stated exactly and re-derived by
+    /// reading the tier — and it bounds work, not time. [`Measured::At`] is
+    /// still owed; this states what IS known meanwhile, which
+    /// [`Measured::Unmeasured`] does not.
+    ///
+    /// It covers the whole ASK, both terms, because that is what
+    /// [`Serving::measured`] is: what the structure named in [`Serving::then`]
+    /// costs per candidate as well as what the structure itself costs. Stating
+    /// only the narrowing would leave the table reading cheaper than the query
+    /// is, which is the same species of untruth as naming the wrong tier.
+    RowCeiling {
+        /// Passes over the workspace's rows this serving makes, once per
+        /// PREDICATE that reaches it — not per query: the arm runs inside the
+        /// loop over a clause's `WHERE` predicates, so two predicates on
+        /// defaulted fields sweep twice. One pass reads every indexed row of
+        /// every segment, and no `IN` or `EXCLUDE` narrows it.
+        passes: u32,
+        /// What one row costs on a pass, and where, so the number can be
+        /// checked against the code rather than believed.
+        per_row: &'static str,
+        /// What the structure named in [`Serving::then`] costs on top, per
+        /// candidate the passes above propose.
+        ///
+        /// Written out because it is usually the larger term, and because a
+        /// reader who stopped at the narrowing would price the ask at the
+        /// cheaper half of it.
+        then_per_candidate: &'static str,
+    },
     /// A bench class exists; the number is outstanding.
     Pending {
         /// The `bench_ab` class that will produce the number.
@@ -455,6 +587,21 @@ pub struct StampDefault {
     /// rather than a default nobody checked; the two stops this declaration
     /// cost were both an unexamined "and the rest".
     pub applicable_languages: &'static [&'static str],
+
+    /// How `field = value` is served, for THIS value — see [`Serving`].
+    ///
+    /// It is not the field's [`FieldTier::serving`] entry for `=`, and the
+    /// difference is the whole reason this slot exists. That entry describes
+    /// reading one `field=value` key, and says its empty answer may conclude an
+    /// absence once a named per-segment proof agrees. Neither half holds here:
+    /// nothing stores this value, so there is no key to read, and the proof is
+    /// declined for it by name.
+    ///
+    /// Serving is keyed by operator class ACROSS a field's `serving` entries
+    /// and by value class HERE. One slot, one entry — a second serving for the
+    /// same (`=`, default value) pair cannot be written, which is the same move
+    /// as leaving no `every language` variant for the list above.
+    pub eq: Serving,
 }
 
 impl StampDefault {
@@ -819,15 +966,59 @@ const REFUSED_ALL: &[Serving] = &[Serving {
     measured: Measured::Unmeasured,
 }];
 
-/// `=` on an enrichment field reads the one `field=value` key. An empty
+/// `=` on a value some row STORES reads the one `field=value` key. An empty
 /// bitmap is candidates-none, not answer-none, until the per-segment proof
 /// says the value is carried by no segment at all.
+///
+/// The value class matters here, and this entry does not speak for all of it:
+/// a stamp-only field's declared default is stored by no row, so neither the
+/// key read nor the proof describes how that value is answered.
+/// [`STAMP_DEFAULT_EQ`] does, and [`StampDefault::eq`] is the one slot a
+/// field's declaration carries it in.
 const ENRICH_EQ: Serving = Serving {
     ops: &[OpClass::Eq],
     tier: Tier::KeyBitmap,
     then: Then::Filters(Tier::Scan),
     exactness: Exactness::SupersetProvenAbsent("fast_paths::no_segment_carries_enrichment_value"),
     measured: Measured::Unmeasured,
+};
+
+/// `=` on a stamp-only field's DECLARED DEFAULT is a different question from
+/// `=` on a value some row stores, and a different structure answers it.
+///
+/// [`ENRICH_EQ`] reads one `field=value` key and, finding none, may conclude
+/// through its named per-segment proof that the value is carried nowhere. That
+/// conclusion is exactly wrong for this one value: nothing stores it, so the
+/// postings are silent about it in both directions, and the proof is declined
+/// for it by name (`SegmentReader::proves_enrichment_value_absent` returns
+/// `false` when the value is a declared default, and the `=` arm returns before
+/// reaching it at all). Declaring [`Exactness::SupersetProvenAbsent`] here
+/// would name a prover no query runs.
+///
+/// What runs is `fast_paths::stamp_default_candidates`, and the exactness is
+/// the plain [`Exactness::Superset`] that tier earns: the kind bitmaps it
+/// unions include the rows that DO carry the field, so the row-level evaluator
+/// is what removes them. The cost is stated as a ceiling in rows rather than a
+/// time, and in both its terms: the narrowing sweeps every segment's language
+/// column, once per predicate and narrowed by no `IN`, and the row view then
+/// reads every candidate — which is the larger term, and wider than the
+/// applicable kinds, because a segment that posted no keys for the field
+/// contributes all of its rows. See [`Measured::RowCeiling`].
+const STAMP_DEFAULT_EQ: Serving = Serving {
+    ops: &[OpClass::Eq],
+    tier: Tier::StampDefault,
+    then: Then::Filters(Tier::Scan),
+    exactness: Exactness::Superset,
+    measured: Measured::RowCeiling {
+        passes: 1,
+        per_row: "one u32 language-column read, in segment_reader::segment_written_in, \
+                  over the segments fast_paths::rows_written_in walks",
+        then_per_candidate: "one row-view read per candidate proposed, and the candidates \
+                             are the applicable kinds' rows PLUS every row of a segment \
+                             that holds the column and posted no keys for it, intersected \
+                             with the segments written in an applicable language — or, \
+                             where the narrowing declines, every row in the workspace",
+    },
 };
 
 /// The pattern operators walk the same keys and test each distinct value.
@@ -878,6 +1069,22 @@ const POSTED_GAPS: &[Gap] = &[
 /// The per-file gap is absent by construction: a row walk visits every row.
 const ROW_WALK_GAPS: &[Gap] = &[Gap::OverBudgetWorkspace, Gap::EmptyValue, Gap::DirtySession];
 
+/// [`POSTED_GAPS`] plus the one a stamp-only field adds: the value its
+/// declaration answers is stored by no row, so no key names the rows it speaks
+/// for.
+///
+/// Written out rather than derived, because a const slice cannot be extended in
+/// a const context. The table test asserts the two lists differ by exactly this
+/// one entry, so a gap added to [`POSTED_GAPS`] and forgotten here fails rather
+/// than going quiet.
+const STAMP_ONLY_GAPS: &[Gap] = &[
+    Gap::OverBudgetFile,
+    Gap::OverBudgetWorkspace,
+    Gap::EmptyValue,
+    Gap::DirtySession,
+    Gap::StampDefaultValue,
+];
+
 /// A posted enrichment field with no measurement of its own.
 const fn posted(field: &'static str, per_file: usize, per_workspace: usize) -> FieldTier {
     FieldTier {
@@ -906,6 +1113,12 @@ const fn posted(field: &'static str, per_file: usize, per_workspace: usize) -> F
 /// because neither is safe alone: the value without the kinds would speak for
 /// rows nothing looked at, and the kinds without the value would say which rows
 /// are in scope without saying what they answer.
+///
+/// The serving entry and the extra gap travel with them, from
+/// [`STAMP_DEFAULT_EQ`] and [`STAMP_ONLY_GAPS`]. A field cannot declare a
+/// default and leave the table describing that value the way it describes the
+/// stored ones — which it would do by inheriting [`ENRICH_EQ`] through
+/// [`posted`], and which is what the four fields shipped doing.
 const fn stamp_only(
     field: &'static str,
     per_file: usize,
@@ -919,7 +1132,9 @@ const fn stamp_only(
             value: default_value,
             applicable_kinds,
             applicable_languages,
+            eq: STAMP_DEFAULT_EQ,
         }),
+        gaps: STAMP_ONLY_GAPS,
         ..posted(field, per_file, per_workspace)
     }
 }

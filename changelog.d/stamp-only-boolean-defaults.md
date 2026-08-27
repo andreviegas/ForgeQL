@@ -84,9 +84,15 @@
   cannot be, so the query proposes the rows the declaration speaks for — the
   applicable kind bitmap, narrowed by a language check — and then reads each
   proposed row through the same row view an ordinary residual `WHERE` uses.
-  That ceiling is the corpus's function rows minus the languages excluded:
-  95,902 row reads for `has_todo` on Zephyr, 89,743 for `has_escape`, narrowed
-  further by any `IN`, and paid only by a query that asks for the default.
+  On these corpora that is the corpus's function rows minus the languages
+  excluded: 95,902 row reads for `has_todo` on Zephyr, 89,743 for `has_escape`,
+  narrowed further by any `IN`, and paid only by a query that asks for the
+  default. Two things can widen it beyond those numbers, and the field/tier
+  table states both as the ceiling rather than as the measurement: a segment
+  that holds the column and wrote no keys for it contributes ALL of its rows,
+  whatever their kind, and a narrowing that cannot be built at all — an
+  unknown kind, or a segment whose language column does not resolve to one
+  value — is declined outright, leaving the complete scan.
 
   The language check itself costs a `u32` sweep of each segment's language
   column — a pass over the corpus's rows, not over its segments, and one no `IN`
@@ -97,9 +103,11 @@
 
   The ceiling is stated in rows, not in seconds: the A/B bench harness does not
   run in the environment this was built in, and no bench class covers this
-  shape. The tier it names is the one `WHERE has_doc = 'false'` already uses on
-  the same corpus, so the shape is not new — only the number of rows it is
-  pointed at.
+  shape. The field/tier table names the structure that serves this value and
+  carries that ceiling beside it, rather than letting it inherit the entry for
+  the values rows do store — an entry that describes one key read, and whose
+  empty answer a per-segment proof may turn into an absence. Neither is true of
+  a value nothing stores, and the proof declines it by name.
 
   The value is answered, not stored: a row that answers `has_todo = 'false'`
   still carries no `has_todo` field in the result it returns.

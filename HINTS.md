@@ -309,3 +309,42 @@ Short, durable facts discovered while working in this codebase.
   fixture asserting the ANSWER passes under both. The cmake body gate survived
   a green gate, a fixture and a guardian round that way; only a test holding a
   tree-sitter node told the difference.
+
+## Field/tier table: serving is keyed by operator class AND by value class
+
+- `Serving` entries in `FieldTier::serving` describe the values rows STORE. The
+  one value a stamp-only field answers without any row storing it has its own
+  entry, in `StampDefault::eq` — one struct field, so a second `(=, default)`
+  serving cannot be written. `field_tier_table::eq_serving` therefore still
+  means "the stored-value entry", and its callers still hold.
+- The four stamp-only fields shipped inheriting `ENRICH_EQ` through `posted`,
+  which said `= 'false'` was one key read whose empty answer
+  `fast_paths::no_segment_carries_enrichment_value` could turn into an absence.
+  All three halves were wrong for that value: no key holds it,
+  `SegmentReader::proves_enrichment_value_absent` returns `false` for it by
+  name, and the `=` arm returns into `stamp_default_candidates` before reaching
+  the prover at all. No wrong answers came of it — which is why only reading the
+  table against the code found it.
+- `Tier::implemented_by()` names the single function a one-function tier IS.
+  `a_tier_that_names_its_implementation_names_one_the_code_defines` reads the
+  source back through `PROOF_SOURCES`, the same standard a
+  `SupersetProvenAbsent` prover is held to. A name in that table is a claim
+  about which code runs; a claim nothing reads back is prose.
+- `Measured::RowCeiling { passes, per_row, then_per_candidate }` is what to
+  declare when no bench class exists: a hand-timed number from an agent session
+  is noise dressed as precision (the run-to-run spread here is +/-10%, and only
+  classes over two seconds mean anything), while a ceiling in rows is a property
+  of the code. `Measured::Unmeasured` on a NEW tier is the thing P7 exists to
+  catch. Three traps in stating one. (1) `Serving::measured` is the cost of
+  ASKING, so the ceiling has to carry the `Serving::then` follower as well as
+  the tier — the follower is usually the larger term. (2) The unit is per
+  PREDICATE, not per query: the enrichment arms run inside the loop over a
+  clause's `WHERE` predicates and nothing memoises the sweep across them.
+  (3) A CEILING has to cover what widens it, not what a corpus happened to
+  measure — `rows_missing_field_postings` contributes EVERY row of a segment
+  that holds the column and posted no keys, whatever the kind, and a narrowing
+  that declines leaves the complete scan. Writing the measured number as the
+  ceiling understates both.
+- Adding a `Tier` variant with the same body as an existing arm trips clippy's
+  `match_same_arms` in `intrinsic_exactness`; merge the pattern and put the
+  second reason in the arm's comment.
