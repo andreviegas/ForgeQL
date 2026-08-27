@@ -29,6 +29,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use forgeql_core::ast::lang_json::LanguageConfigJson;
+
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -80,6 +82,39 @@ fn language_config_files() -> Vec<PathBuf> {
 }
 
 /// The parsed JSON of every language config, paired with its path for messages.
+/// Whether a config declares a non-empty value at `key`.
+///
+/// Absent and empty mean the same thing to the config loader: the raw kind is
+/// the empty string and the capability check is false. Python declares
+/// `expressions.address_of` as `""` and is the live instance.
+fn key_path_is_declared(json: &Value, key: &[&str]) -> bool {
+    let mut node = json;
+    for part in key {
+        match node.get(*part) {
+            Some(next) => node = next,
+            None => return false,
+        }
+    }
+    node.as_str().is_some_and(|raw| !raw.is_empty())
+}
+
+/// The predicate the field's enricher actually gates on.
+///
+/// One arm per capability-gated default, naming the same method the enricher
+/// calls, so this test and the enricher cannot drift apart without one of them
+/// failing to compile.
+fn enricher_gate(field: &str, config: &forgeql_core::ast::lang::LanguageConfig) -> bool {
+    match field {
+        // `todo.rs` gates on this before reading anything.
+        "has_todo" => config.has_comment(),
+        // `recursion.rs` gates on this before looking for a self-call.
+        "is_recursive" => config.has_call_expression(),
+        // `escape.rs` gates on this before scanning declarations.
+        "has_escape" => config.has_address_of(),
+        other => panic!("no enricher gate recorded for {other}"),
+    }
+}
+
 fn parsed_configs() -> Vec<(PathBuf, Value)> {
     language_config_files()
         .into_iter()
@@ -322,6 +357,32 @@ fn every_stamp_only_default_covers_exactly_the_languages_whose_enricher_runs() {
             "{field}: read {read} of {} configs",
             configs.len()
         );
+
+        // The sweep above reads the config FILE; the enricher reads a
+        // `LanguageConfig` METHOD. Nothing else makes those two agree, so
+        // rewriting `has_comment()` to consult a different key would leave this
+        // test green while the list it computes went wrong in the dangerous
+        // direction — a default published for rows the enricher no longer
+        // examines. Building the real config from the same bytes and comparing
+        // is what ties the key path to the gate.
+        for (path, json) in &configs {
+            let bytes = std::fs::read(path).expect("read language config");
+            let config = LanguageConfigJson::from_json_bytes(&bytes)
+                .unwrap_or_else(|e| panic!("{} must deserialize: {e:?}", path.display()))
+                .into_language_config();
+            let via_key = key_path_is_declared(json, key);
+            let via_gate = enricher_gate(field, &config);
+            assert_eq!(
+                via_gate,
+                via_key,
+                "{field}: {} declares {key:?} = {via_key} but the predicate the \
+                 enricher gates on answers {via_gate}. The language list is computed \
+                 from the key path and consumed by the enricher through the \
+                 predicate; when they disagree the list describes a gate that is \
+                 not the one being applied",
+                path.display(),
+            );
+        }
         assert!(
             !languages.is_empty(),
             "{field}: no config declares {key:?}, so the sweep found nothing and any \
@@ -486,31 +547,41 @@ fn the_shadow_default_covers_exactly_the_grammars_whose_walk_can_start() {
     );
 }
 
-/// The two capability-gated defaults that ALSO walk a body.
+/// The capability-gated default that ALSO walks a body.
 ///
-/// `EscapeEnricher` and `RecursionEnricher` read
-/// `child_by_field_name("body")` as well, and the config sweep that computes
-/// their language lists cannot see that second gate. A future plugin declaring
-/// `expressions.call` on a grammar with no function body would be added to
-/// `CALL_LANGUAGES` by that sweep and would then answer a default from a walk
-/// that never started — the config half saying yes and the grammar half saying
-/// no, with nothing comparing them. This is what compares them.
+/// `RecursionEnricher` reads `child_by_field_name("body")` and returns when
+/// there is none, and the config sweep that computes its language list cannot
+/// see that second gate. A future plugin declaring `expressions.call` on a
+/// grammar with no function body would be added to `CALL_LANGUAGES` by that
+/// sweep and would then answer a default from a walk that never started — the
+/// config half saying yes and the grammar half saying no, with nothing
+/// comparing them. This is what compares them.
 ///
-/// `has_todo` is deliberately absent: its scan takes the body as OPTIONAL and
-/// reads the function's own comment children besides, so it runs whether or not
-/// the grammar gives it one.
+/// Two fields are deliberately absent, for different reasons. `has_todo`'s scan
+/// takes the body as OPTIONAL and reads the function's own comment children
+/// besides, so it runs whether or not the grammar gives it one. `has_escape`
+/// does not read the body field AT ALL — it gates on the node kind,
+/// `has_address_of`, and whether the declaration scan found any locals — so
+/// requiring a body of it would be a constraint its enricher does not have, and
+/// would reject a future language that declared an address-of operator on a
+/// bodyless function kind for a walk that would in fact have run. Checked
+/// against the enrichers rather than assumed: of the four, `recursion`,
+/// `shadow` and `todo` read the body field and `escape` does not.
 #[test]
 fn the_defaults_that_walk_a_body_only_cover_grammars_that_have_one() {
+    // `is_recursive` is the only one left that needs this: of the four
+    // enrichers, `recursion`, `shadow` and `todo` read the body field and
+    // `escape` does not, `shadow` has its own grammar test above, and `todo`
+    // treats the body as optional.
     let walkable = grammars_carrying_a_function_body();
-    for field in ["has_escape", "is_recursive"] {
-        let declared = declared_languages(field);
-        assert!(
-            declared.is_subset(&walkable),
-            "{field} declares {declared:?}, and only {walkable:?} carry a `body` \
-             field on their function kinds. Its enricher returns without walking \
-             for the difference, so the default would speak for rows nothing read",
-        );
-    }
+    let field = "is_recursive";
+    let declared = declared_languages(field);
+    assert!(
+        declared.is_subset(&walkable),
+        "{field} declares {declared:?}, and only {walkable:?} carry a `body` \
+         field on their function kinds. Its enricher returns without walking \
+         for the difference, so the default would speak for rows nothing read",
+    );
 }
 
 /// The languages a stamp-only default declares, as an owned set.
