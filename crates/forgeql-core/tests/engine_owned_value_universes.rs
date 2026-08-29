@@ -706,3 +706,43 @@ fn grammars_carrying_a_function_body() -> BTreeSet<String> {
     );
     walkable
 }
+
+/// No language may map a node to the kind the engine RENDERS for a kindless
+/// row.
+///
+/// A row nothing maps stores the empty kind, and `SHOW outline` / `SHOW
+/// members` print it as `unknown`. Since both spellings name the same rows,
+/// the row side is spelled to the stored one before an equality is decided —
+/// so a kind genuinely called `unknown` would answer as a kindless row and a
+/// kindless row would answer as one of it, in both directions, with nothing
+/// distinguishing them.
+///
+/// Nothing maps to it today, which is what makes the spelling safe. That is a
+/// property of the shipped configs and not of the engine, and no other test
+/// holds it: [`FQL_KIND_VALUES`] deliberately CARRIES `unknown`, so the sweep
+/// above accepts such a mapping rather than rejecting it. A plugin adding one
+/// would be a silent conflation, so it fails here instead.
+#[test]
+fn no_language_maps_a_node_to_the_rendered_kindless_spelling() {
+    let rendered = forgeql_core::field_tiers::UNKNOWN_KIND;
+    let mut checked = 0usize;
+    for (path, json) in parsed_configs() {
+        let map = json
+            .get("kind_map")
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| panic!("{}: no kind_map object", path.display()));
+        for (raw_kind, mapped) in map {
+            assert_ne!(
+                mapped.as_str(),
+                Some(rendered),
+                "{}: kind_map sends `{raw_kind}` to fql_kind '{rendered}', the spelling the \
+                 engine renders for a row that has NO kind. The two would be indistinguishable \
+                 to `WHERE fql_kind = '{rendered}'` and to its negation. Give the kind its own \
+                 name, or the rendered spelling has to stop being a value a query can carry",
+                path.display(),
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked > 0, "no kind_map entry was read");
+}
