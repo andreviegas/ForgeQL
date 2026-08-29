@@ -105,7 +105,10 @@ impl ForgeQLEngine {
         // Load config once — before resume_index so shadow-write is configured
         // before the first build.  The same config is then used to freeze the
         // verify steps and initialise the budget below.
-        let maybe_config = load_verify_config(&repo_path, source_name, &session.worktree_path);
+        // `?`, not `.ok()`: a config file that exists and will not parse must
+        // refuse the USE rather than hand back a session that looks configured
+        // and is not. Absence is still `Ok(None)` and still falls back.
+        let maybe_config = load_verify_config(&repo_path, source_name, &session.worktree_path)?;
 
         // Configure columnar when a `.forgeql.yaml` is present (always-on).
         if maybe_config.is_some() {

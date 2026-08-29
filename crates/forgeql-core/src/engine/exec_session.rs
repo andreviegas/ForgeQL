@@ -492,7 +492,10 @@ impl ForgeQLEngine {
     /// Returns the auto-generated session ID.
     ///
     /// # Errors
-    /// Returns `Err` if the workspace cannot be created or indexing fails.
+    /// Returns `Err` if the workspace cannot be created, if indexing fails, or
+    /// if a `.forgeql.yaml` — the in-repo one or the sidecar — EXISTS and cannot
+    /// be read. A config file that is simply absent is not an error: that is the
+    /// fallback, and the session is answered by the in-memory backend.
     #[cfg(feature = "test-helpers")]
     pub fn register_local_session(&mut self, workspace_root: &Path) -> Result<String> {
         let alias = generate_session_id();
@@ -511,7 +514,7 @@ impl ForgeQLEngine {
         // freeze the same verify steps — including commit-gate flags — as a real
         // `USE`.  Absent config → nothing frozen (back-compat).
         if let Some((workdir, config)) =
-            super::load_verify_config(workspace_root, "local", workspace_root)
+            super::load_verify_config(workspace_root, "local", workspace_root)?
         {
             session.frozen_workdir = Some(workdir);
             session.frozen_output_config = Some(config.output);

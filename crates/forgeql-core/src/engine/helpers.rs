@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::{Context as _, Result, bail};
 use tracing::info;
 
 use crate::config::ForgeConfig;
@@ -21,24 +21,57 @@ use crate::ir::{Clauses, ForgeQLIR, PredicateValue};
 ///
 /// Returns `(workdir, config)` where `workdir` is the directory from which
 /// VERIFY commands run — always the worktree root when the sidecar is used.
+///
+/// `Ok(None)` means NO config file exists. That is the designed fallback and it
+/// stays one: the source is answered by the in-memory backend, with no columnar
+/// index and no VERIFY steps. `Err` means a file EXISTS and could not be read,
+/// and the two are deliberately not the same answer.
+///
+/// They used to be. Both arms mapped through `.ok()`, and every caller gates
+/// real capability on the result — `attach` decides whether to configure the
+/// columnar build from it — so ONE mistyped value made a configured source look
+/// exactly like an unconfigured one: `USE` answered success with
+/// `symbols_indexed 0`, rows came back carrying no `node_id` and no `rev`, and
+/// every VERIFY and RUN step reported "add it under `run_steps`:" for a step the
+/// file plainly declared. A session could run a long way on that before anyone
+/// suspected the config. The error names the file and the parse failure, so the
+/// person who mistyped it is told which file and where.
 pub(crate) fn load_verify_config(
     repo_path: &Path,
     source_name: &str,
     worktree_path: &Path,
-) -> Option<(PathBuf, ForgeConfig)> {
+) -> Result<Option<(PathBuf, ForgeConfig)>> {
     let sidecar = repo_path
         .parent()
         .map(|p| p.join(format!("{source_name}.forgeql.yaml")));
     if let Some(sc) = sidecar.as_deref().filter(|p| p.exists()) {
         info!(%source_name, path = %sc.display(), "using sidecar .forgeql.yaml");
-        return ForgeConfig::load(sc)
-            .ok()
-            .map(|c| (worktree_path.to_path_buf(), c));
+        let config = ForgeConfig::load(sc).with_context(|| {
+            format!(
+                "sidecar config '{}' exists but could not be read — fix it or \
+                 remove it; a source is only answered by the in-memory backend \
+                 when NO config file is present",
+                sc.display()
+            )
+        })?;
+        return Ok(Some((worktree_path.to_path_buf(), config)));
     }
-    ForgeConfig::find(worktree_path).and_then(|p| {
-        let workdir = p.parent().map(Path::to_path_buf)?;
-        ForgeConfig::load(&p).ok().map(|c| (workdir, c))
-    })
+    let Some(found) = ForgeConfig::find(worktree_path) else {
+        return Ok(None);
+    };
+    let workdir = found
+        .parent()
+        .map(Path::to_path_buf)
+        .with_context(|| format!("config file '{}' has no parent directory", found.display()))?;
+    let config = ForgeConfig::load(&found).with_context(|| {
+        format!(
+            "config file '{}' exists but could not be read — fix it or remove \
+             it; a source is only answered by the in-memory backend when NO \
+             config file is present",
+            found.display()
+        )
+    })?;
+    Ok(Some((workdir, config)))
 }
 
 // -----------------------------------------------------------------------

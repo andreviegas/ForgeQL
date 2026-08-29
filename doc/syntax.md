@@ -97,6 +97,8 @@ every subsequent `run_fql` call — do not reconstruct it from the alias. If you
 lose it, re-issue the same `USE` command with the same alias: you reconnect to
 the same worktree and receive the same token.
 
+`CREATE SOURCE`, `REFRESH SOURCE` and `USE` all read the source configuration — the sidecar `<repo-dir>/<source>.forgeql.yaml`, or an in-repo `.forgeql.yaml` — and all three are **refused, naming the file and the parse error, when that file exists and does not parse**. Absence is not a failure and never was: a source with no configuration file is answered by the in-memory backend, with no columnar index and no verify or run steps. `REFRESH SOURCE` reads it before fetching, so a refusal means nothing was fetched; `CREATE SOURCE` can only read it out of the repository it has just cloned, so a refusal there leaves the source registered and the retry succeeds once the file is fixed.
+
 Sessions start automatically on the first `USE` and persist until the worktree has been
 idle — after about 2 hours if it carries no work (no commits over its base and no uncommitted changes), or 48 hours if it does (server-side TTL). There is no explicit disconnect command — multiple
 agents can reconnect to the same worktree at any time with the same `USE` command.
@@ -901,7 +903,7 @@ VERIFY/RUN/JOB STATUS output that exceeds the inline cap is buffered; page or
 grep it with `SHOW MORE` — e.g. `SHOW MORE WHERE text MATCHES '^error|-->'`
 triages a compiler log without re-running the build.
 
-**`.forgeql.yaml`** may be in the repo root **or** in the directory directly above it (sidecar, outside the tracked tree):
+**`.forgeql.yaml`** may be in the repo root **or** in the directory directly above it (sidecar, outside the tracked tree). A source with **no** such file is answered by the in-memory backend, with no columnar index and no verify or run steps — that is the designed fallback. A file that **exists and does not parse** is refused instead, naming the file and the parse error: it used to be read as absence, and one mistyped value then gave a session that answered `USE` with success, `symbols_indexed 0`, rows carrying no `node_id` or `rev`, and "add it under `run_steps:`" for a step the file plainly declared:
 
 ```yaml
 workspace_root: .

@@ -69,8 +69,18 @@ impl ForgeQLEngine {
 
         // Phase 05 Task 9: spawn background warmer when configured.
         // Defaults are disabled, so this is a no-op out of the box.
+        //
+        // Unlike REFRESH, this refusal cannot be hoisted above the work: the
+        // config is read out of the repository this verb has just cloned. So a
+        // CREATE SOURCE against an unreadable config reports an error after the
+        // clone, the registry insert and the template write have all happened.
+        // That is tolerable only because the verb is idempotent — the early
+        // return at the top hands back the registered source, so re-running it
+        // once the config is fixed succeeds rather than cloning twice — and it
+        // is written down here so the next reader does not have to rediscover
+        // that the reported failure left real state behind.
         if let Some((_, ref cfg)) =
-            load_verify_config(registered.path(), registered.name(), registered.path())
+            load_verify_config(registered.path(), registered.name(), registered.path())?
         {
             let policy = cfg.columnar.warm_on_create.clone();
             if policy.enabled {
@@ -113,6 +123,14 @@ impl ForgeQLEngine {
 
         let reopened = Source::open(name, repo_path.clone())?;
 
+        // Read the config BEFORE fetching. It decides only whether to spawn the
+        // optional warmer below, but an unreadable one refuses the whole verb —
+        // and a refusal issued after `fetch_all` would report a failure for a
+        // fetch that had already landed on disk, then report it again on every
+        // retry, leaving REFRESH unusable over an input no answer depends on.
+        // Refusing first keeps the reported outcome and the disk in agreement.
+        let maybe_config = load_verify_config(&repo_path, name, &repo_path)?;
+
         // Snapshot branch HEADs before fetch — used to compute the moved set
         // for Phase 05 Task 9 selective warming.
         let before = reopened.branch_heads().unwrap_or_default();
@@ -121,7 +139,7 @@ impl ForgeQLEngine {
 
         // Phase 05 Task 9: warm only branches whose HEAD moved.  Empty diff
         // = empty target list = no thread spawned.
-        if let Some((_, ref cfg)) = load_verify_config(&repo_path, name, &repo_path) {
+        if let Some((_, ref cfg)) = maybe_config {
             let policy = cfg.columnar.warm_on_refresh.clone();
             if policy.enabled {
                 let moved: Vec<warm::WarmTarget> = after
@@ -134,7 +152,7 @@ impl ForgeQLEngine {
                     .collect();
                 if !moved.is_empty() {
                     warm::spawn_warmer(
-                        repo_path.clone(),
+                        repo_path,
                         name.to_string(),
                         moved,
                         self.data_dir.clone(),
