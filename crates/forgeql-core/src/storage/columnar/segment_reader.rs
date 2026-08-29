@@ -393,7 +393,11 @@ const STRUCT_BACKED_FIELDS: &[&str] = &[
 pub(crate) enum RowField {
     /// The name column.
     Name,
-    /// The fql_kind column; the empty string reads as absent.
+    /// The fql_kind column. Unlike the sentinel columns below — `language`,
+    /// whose empty string reads as absent, and `line`, whose `0` does — the
+    /// empty string here reads as a VALUE: it is the kind a row nothing maps
+    /// carries, the one `GROUP BY fql_kind` publishes and `= ''` answers.
+    /// `name` has always read its empty string as a value too.
     FqlKind,
     /// The language column; the empty string reads as absent.
     Language,
@@ -495,7 +499,7 @@ impl<'a> SegRowRef<'a> {
             .row_field(field, self.source_path.is_some(), Accessor::Str)
         {
             RowField::Name => Some(self.seg.name_of(self.row)),
-            RowField::FqlKind => non_empty(self.seg.fql_kind_of(self.row)),
+            RowField::FqlKind => Some(self.seg.fql_kind_of(self.row)),
             RowField::Language => non_empty(self.seg.language_of(self.row)),
             RowField::Path => self.source_path.and_then(Path::to_str),
             RowField::Extra(range) => self.seg.opt_str_in(range, self.row),
@@ -655,7 +659,7 @@ impl<'a> RowView<'a> {
         match field {
             "name" => Some(self.name),
             "node_kind" | "node_id" => None,
-            "fql_kind" => non_empty(self.seg.fql_kind_of(self.row)),
+            "fql_kind" => Some(self.seg.fql_kind_of(self.row)),
             "language" => non_empty(self.seg.language_of(self.row)),
             "path" => self.source_path.and_then(Path::to_str),
             other => self.enrichment(other),
@@ -720,7 +724,13 @@ impl<'a> RowView<'a> {
 }
 
 /// `None` for the empty string, which is how a fixed string column spells a
-/// value the row does not have.
+/// value the row does not have — EXCEPT on `fql_kind`, where the empty string is
+/// a value the row carries and the engine publishes (`GROUP BY fql_kind` gives
+/// those rows their own group and `= ''` answers them), so the two `fql_kind`
+/// readers above deliberately do NOT call this. Applying it there resolved a
+/// kindless row to "no value" and made every string operator false on it, the
+/// equality and its negation alike. `language` still spells its empty column
+/// this way: nothing publishes an empty language as a value.
 const fn non_empty(s: &str) -> Option<&str> {
     if s.is_empty() { None } else { Some(s) }
 }
@@ -2036,11 +2046,14 @@ impl SegmentReader {
                 SymbolMatch {
                     name,
                     node_kind: None, // segments do not store node_kind
-                    fql_kind: if fql_kind.is_empty() {
-                        None
-                    } else {
-                        Some(fql_kind)
-                    },
+                    // The empty kind is a VALUE, not a missing one: a row
+                    // nothing maps carries it, `GROUP BY fql_kind` publishes
+                    // those rows under it, and `= ''` answers them. `None` on
+                    // this field is reserved for a row shape that has no kind
+                    // COLUMN at all — an occurrence site — so that a predicate
+                    // naming the field keeps failing there instead of matching
+                    // every site.
+                    fql_kind: Some(fql_kind),
                     language: if language.is_empty() {
                         None
                     } else {
@@ -2104,11 +2117,13 @@ impl SegmentReader {
         Some(SymbolMatch {
             name,
             node_kind: None,
-            fql_kind: if fql_kind.is_empty() {
-                None
-            } else {
-                Some(fql_kind)
-            },
+            // The empty kind is a value; see the twin in `materialize_rows`.
+            // This builder feeds the row-view page route, and a row it builds
+            // must answer the residual `WHERE` exactly as the view that ranked
+            // it did — collapsing the empty kind here while the view reports it
+            // made `fql_kind = '' LIMIT 3` select three views and then drop all
+            // three rows, delivering an empty page under a total of thousands.
+            fql_kind: Some(fql_kind),
             language: if language.is_empty() {
                 None
             } else {

@@ -111,8 +111,9 @@ fn hex_of(content_id: &[u8]) -> String {
 /// synthetic one carrying the two shapes the counted paths get wrong.
 ///
 /// Three of its rows have no `fql_kind` at all. `step5_build_kind_postings`
-/// skips the empty kind, so no kind bitmap accounts for them and only the
-/// subtraction against the canonical total can put them in a group.
+/// posts the empty kind like any other, so a bitmap accounts for them: the
+/// counted grouping reports them as a pair rather than as a remainder, and the
+/// equality naming that group selects exactly those three rows.
 ///
 /// Two more are the same row twice. The dedupe pass collapses them into the one
 /// row the answer holds, and `step6_build_name_fst` intersects its postings
@@ -337,5 +338,154 @@ fn a_having_the_group_row_cannot_answer_reaches_the_scan() {
             scanned.rows.len(),
             "GROUP BY {grouped} HAVING lines >= 2"
         );
+    }
+}
+
+/// The equality naming the group the counted route publishes selects exactly
+/// the rows that group counted.
+///
+/// This is the defect the kind postings used to carry: the grouping put the
+/// three kindless rows in a group of their own, and `fql_kind = ''` answered
+/// none of them, because `step5_build_kind_postings` skipped the empty kind and
+/// the lookup had no entry to find. The two numbers agreeing is the assertion —
+/// a fixed count would go on passing the day the fixture stops making a
+/// kindless row.
+#[test]
+fn the_kindless_rows_answer_their_own_equality() {
+    let (_tmp, storage) = overlay_with_kindless_and_duplicate_rows();
+
+    let clauses = Clauses {
+        where_predicates: vec![predicate("fql_kind", "")],
+        ..Clauses::default()
+    };
+    let page = storage
+        .find_symbols(&clauses, Path::new("."))
+        .expect("fql_kind = ''");
+    let counted = storage
+        .find_symbols(&group_by("fql_kind"), Path::new("."))
+        .expect("counted route");
+
+    let grouped = kind_groups(&counted).get("").copied();
+    assert_eq!(
+        grouped,
+        Some(3),
+        "the fixture stopped producing rows with no kind"
+    );
+    assert_eq!(
+        page.rows.len(),
+        3,
+        "fql_kind = '' answered {} rows where the grouping counted {grouped:?}",
+        page.rows.len()
+    );
+    assert_eq!(page.total, 3, "total");
+
+    // The rows are the kindless ones and nothing else — a bitmap that merely
+    // had the right cardinality would pass the counts above.
+    let mut names: Vec<&str> = page.rows.iter().map(|r| r.name.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(names, ["kindless_0", "kindless_1", "kindless_2"]);
+}
+
+/// The scan reaches the same rows the bitmap does.
+///
+/// `fql_kind = ''` is served by the kind bitmap, so the case above would stay
+/// green with the row-level comparison still resolving a kindless row to "no
+/// value". It does not: that resolution made every string operator false on
+/// those rows, the equality AND its negation, so `NOT MATCHES` shed the group
+/// the grouping had just published. Disarming the count path with a predicate
+/// that holds for every row is what routes the same question through the rows.
+#[test]
+fn the_kindless_rows_answer_on_the_scan_too() {
+    let (_tmp, storage) = overlay_with_kindless_and_duplicate_rows();
+
+    let equality = via_scan(&Clauses {
+        where_predicates: vec![predicate("fql_kind", "")],
+        ..Clauses::default()
+    });
+    let page = storage
+        .find_symbols(&equality, Path::new("."))
+        .expect("fql_kind = '' through the scan");
+    assert_eq!(page.rows.len(), 3, "fql_kind = '' on the scan");
+
+    // The negation keeps them, which is the half a `is_some_and` on a missing
+    // field silently loses: a row that is in NO group of `fql_kind != 'function'`
+    // is a row the engine cannot see from either side.
+    let negated = via_scan(&Clauses {
+        where_predicates: vec![Predicate {
+            field: "fql_kind".to_owned(),
+            op: CompareOp::NotEq,
+            value: PredicateValue::String("function".to_owned()),
+        }],
+        ..Clauses::default()
+    });
+    let kept = storage
+        .find_symbols(&negated, Path::new("."))
+        .expect("fql_kind != 'function'");
+    let kindless_kept = kept
+        .rows
+        .iter()
+        .filter(|r| r.name.starts_with("kindless_"))
+        .count();
+    assert_eq!(
+        kindless_kept, 3,
+        "fql_kind != 'function' dropped the rows that carry no kind"
+    );
+}
+
+/// Both spellings of the kindless value name the same rows.
+///
+/// `SHOW outline` renders a row with no kind as `unknown`, so an agent filtering
+/// on what the engine printed writes that; one filtering on what it stores
+/// writes `''`. The spelling happens at the parser boundary, so this case has to
+/// go through the parser rather than build a `Predicate` directly — building one
+/// is exactly how a reader would bypass the single place the two are reconciled.
+#[test]
+fn the_rendered_kindless_spelling_answers_the_same_rows() {
+    let stored = clauses_of_find("FIND symbols WHERE fql_kind = ''");
+    let rendered = clauses_of_find("FIND symbols WHERE fql_kind = 'unknown'");
+    assert_eq!(
+        rendered.where_predicates, stored.where_predicates,
+        "'unknown' was not spelled to the stored empty kind"
+    );
+
+    // The alias reaches the same rule: `kind` is `fql_kind` spelled short.
+    let aliased = clauses_of_find("FIND symbols WHERE kind = 'unknown'");
+    assert!(
+        matches!(
+            aliased.where_predicates.first().map(|p| &p.value),
+            Some(PredicateValue::String(v)) if v.is_empty()
+        ),
+        "the alias did not reach the spelling"
+    );
+
+    // A PATTERN is not a value and is left exactly as written.
+    let pattern = clauses_of_find("FIND symbols WHERE fql_kind MATCHES 'unknown'");
+    assert!(
+        matches!(
+            pattern.where_predicates.first().map(|p| &p.value),
+            Some(PredicateValue::String(v)) if v == "unknown"
+        ),
+        "a MATCHES pattern was rewritten as if it were a value"
+    );
+
+    let (_tmp, storage) = overlay_with_kindless_and_duplicate_rows();
+    for query in [
+        "FIND symbols WHERE fql_kind = ''",
+        "FIND symbols WHERE fql_kind = 'unknown'",
+        "FIND symbols WHERE kind = 'unknown'",
+    ] {
+        let page = storage
+            .find_symbols(&clauses_of_find(query), Path::new("."))
+            .unwrap_or_else(|e| panic!("{query}: {e}"));
+        assert_eq!(page.rows.len(), 3, "{query}");
+        assert_eq!(page.total, 3, "{query} total");
+    }
+
+    fn clauses_of_find(fql: &str) -> Clauses {
+        let mut ops = forgeql_core::parser::parse(fql).unwrap_or_else(|e| panic!("{fql}: {e:?}"));
+        match ops.pop() {
+            Some(forgeql_core::ir::ForgeQLIR::FindSymbols { clauses, .. }) => clauses,
+            other => panic!("{fql} parsed as {other:?}"),
+        }
     }
 }

@@ -102,6 +102,27 @@ pub(super) fn parse_predicate(pair: pest::iterators::Pair<'_, Rule>) -> Option<P
         Rule::boolean_literal => PredicateValue::Bool(inner.as_str() == "true"),
         _ => return None,
     };
+
+    // `fql_kind` is the one field an agent can spell two ways for one value: a
+    // row nothing maps STORES the empty kind, and `SHOW outline` / `SHOW
+    // members` RENDER that same row as `unknown`, so a filter written from what
+    // the engine printed says `unknown` while one written from what it stores
+    // says `''`. Both are accepted values, and they name the same rows, so the
+    // value is spelled to the stored one here — the single place an agent's
+    // text becomes an IR value, ahead of every verb, every index reader and
+    // both storage backends. Doing it here rather than in each reader is what
+    // keeps the two spellings from drifting apart one lookup at a time.
+    //
+    // Only `=` and `!=` are spelled. `LIKE` and `MATCHES` carry a PATTERN, not
+    // a value; they are matched against the spelling the verb rendered.
+    let value = match (&value, op) {
+        (PredicateValue::String(s), CompareOp::Eq | CompareOp::NotEq)
+            if crate::field_tiers::canonical(&field) == "fql_kind" =>
+        {
+            PredicateValue::String(crate::field_tiers::stored_kind_value(s).to_owned())
+        }
+        _ => value,
+    };
     Some(Predicate { field, op, value })
 }
 

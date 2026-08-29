@@ -803,6 +803,43 @@ pub(crate) fn resolved_field_str<'a, T: ClauseTarget>(item: &'a T, field: &str) 
     let language = item.field_str("language")?;
     default.speaks_for(kind, language).then_some(default.value)
 }
+
+/// The row's own value, as the comparison in [`eval_predicate_on`] must see it.
+///
+/// Identical to [`resolved_field_str`] on every field but `fql_kind`, and there
+/// it does one thing: under an equality it spells the row's value to the one the
+/// index stores. `SHOW outline` and `SHOW members` render a row that carries no
+/// kind as [`crate::field_tiers::UNKNOWN_KIND`], so an agent filtering on what
+/// the engine printed writes `unknown` while one filtering on what it stores
+/// writes `''`. `parse_predicate` spells the predicate side to the stored value;
+/// this spells the row side to match, which is what lets an outline row answer
+/// both. Only `=` and `!=` are spelled: `LIKE` and `MATCHES` take a PATTERN, not
+/// a value, and are matched against the spelling the verb actually rendered.
+///
+/// What is deliberately NOT here is any substitution for a `None`. Carrying no
+/// kind is a value — the empty string — and the readers that hold a kind COLUMN
+/// now report it as one — `segment_reader::materialize_rows` AND
+/// `materialize_one_row`, the separate builder behind the row-view page, plus
+/// both row views, the legacy row and its prefilter — so those rows arrive with
+/// a value
+/// already and the equality, the negation and `NOT MATCHES` all decide them.
+/// `None` is left meaning the one thing it should mean: a row shape with no kind
+/// column at all. An occurrence site is that shape — `FIND usages` answers a
+/// line of a file — and substituting the empty string here would have made
+/// `WHERE fql_kind = ''` and `WHERE fql_kind != '<any kind>'` match every site
+/// on that verb, turning a predicate that matches nothing into one that filters
+/// nothing while still reading as a filtered result.
+fn comparable_field_str<'a, T: ClauseTarget>(
+    item: &'a T,
+    field: &str,
+    op: CompareOp,
+) -> Option<&'a str> {
+    let value = resolved_field_str(item, field);
+    if field != "fql_kind" || !matches!(op, CompareOp::Eq | CompareOp::NotEq) {
+        return value;
+    }
+    value.map(crate::field_tiers::stored_kind_value)
+}
 /// [`eval_predicate`] with the field name already spelled to its canonical
 /// form.
 ///
@@ -827,14 +864,14 @@ pub(crate) fn eval_predicate_on<T: ClauseTarget>(
                 PredicateValue::String(s) => s.as_str(),
                 _ => return false,
             };
-            resolved_field_str(item, field).is_some_and(|v| like_match(v, pat))
+            comparable_field_str(item, field, predicate.op).is_some_and(|v| like_match(v, pat))
         }
         CompareOp::NotLike => {
             let pat = match &predicate.value {
                 PredicateValue::String(s) => s.as_str(),
                 _ => return true,
             };
-            resolved_field_str(item, field).is_some_and(|v| !like_match(v, pat))
+            comparable_field_str(item, field, predicate.op).is_some_and(|v| !like_match(v, pat))
         }
         // ---- Regex MATCHES operators ----
         CompareOp::Matches => {
@@ -845,7 +882,7 @@ pub(crate) fn eval_predicate_on<T: ClauseTarget>(
             let Ok(re) = Regex::new(pat) else {
                 return false;
             };
-            resolved_field_str(item, field).is_some_and(|v| re.is_match(v))
+            comparable_field_str(item, field, predicate.op).is_some_and(|v| re.is_match(v))
         }
         CompareOp::NotMatches => {
             let pat = match &predicate.value {
@@ -855,18 +892,18 @@ pub(crate) fn eval_predicate_on<T: ClauseTarget>(
             let Ok(re) = Regex::new(pat) else {
                 return true;
             };
-            resolved_field_str(item, field).is_some_and(|v| !re.is_match(v))
+            comparable_field_str(item, field, predicate.op).is_some_and(|v| !re.is_match(v))
         }
         CompareOp::Eq => match &predicate.value {
             PredicateValue::String(s) => {
-                resolved_field_str(item, field).is_some_and(|v| v == s.as_str())
+                comparable_field_str(item, field, predicate.op).is_some_and(|v| v == s.as_str())
             }
             PredicateValue::Number(n) => item.field_num(field).is_some_and(|v| v == *n),
             PredicateValue::Bool(_) => false,
         },
         CompareOp::NotEq => match &predicate.value {
             PredicateValue::String(s) => {
-                resolved_field_str(item, field).is_some_and(|v| v != s.as_str())
+                comparable_field_str(item, field, predicate.op).is_some_and(|v| v != s.as_str())
             }
             PredicateValue::Number(n) => item.field_num(field).is_some_and(|v| v != *n),
             PredicateValue::Bool(_) => false,
@@ -948,6 +985,16 @@ pub(crate) fn order_cmp<T: ClauseTarget>(a: &T, b: &T, clauses: &Clauses) -> Ord
             // among the rows that carry nothing. A field read one way for
             // WHERE and another for ORDER BY is the disagreement this whole
             // declaration exists to prevent.
+            //
+            // On `fql_kind` the two agree without help: a row whose kind is
+            // empty carries that as a value, so it sorts under the empty string
+            // and compares as the empty string. They part company on ONE thing,
+            // and deliberately — a verb that RENDERS the kindless row as
+            // `unknown` has its equality spelled back to the stored empty value,
+            // while the sort key stays the spelling the verb printed, so a
+            // `SHOW outline … ORDER BY fql_kind` puts those rows under `u`,
+            // where the reader can see them, and the equality still answers them
+            // under either spelling.
             let sa = resolved_field_str(a, field).unwrap_or("");
             let sb = resolved_field_str(b, field).unwrap_or("");
             match order_by.direction {
@@ -1242,10 +1289,16 @@ fn apply_clauses_inner<T: ClauseTarget>(
 /// row. On which rows survive, the two agree, and have to. A row that does not
 /// carry the field fails every predicate naming it — `!=`, `NOT LIKE` and
 /// `NOT MATCHES` as much as `=`, `LIKE` and `MATCHES` — because a value that is
-/// missing is not a value that differs, EXCEPT where the field declares a
-/// stamp-only default and the row is one the declaration speaks for: it
-/// resolves to that default and answers on it, negations included. Both readers
-/// take that through [`resolved_field_str`], which is why the two still agree.
+/// missing is not a value that differs. One exception, and both readers reach it
+/// through [`resolved_field_str`], which is why the two still agree: a field
+/// declaring a stamp-only default, where a row the declaration speaks for
+/// resolves to that default and answers on it, negations included. `fql_kind` is
+/// NOT a second one — a row whose kind is empty carries that as a value, so it
+/// resolves like any other row and both readers decide it the same way. What
+/// both readers DO take through [`comparable_field_str`] is the one spelling
+/// rule: under `=` and `!=` a rendered `unknown` is spelled to the stored empty
+/// value. A new rule of either shape belongs in the call they share, not in one
+/// of these two readers.
 /// The one thing that passes a negation
 /// before any field is read is a pattern operator handed something it cannot
 /// use: `NOT LIKE` or `NOT MATCHES` with a non-string value, or `NOT MATCHES`
@@ -1271,7 +1324,7 @@ pub fn apply_where_predicates<T: ClauseTarget>(
             // condition_text, signature, and name).
             if let Some(min_len) = dot_brace_min_len(pat) {
                 results.retain(|item| {
-                    resolved_field_str(item, &field)
+                    comparable_field_str(item, &field, predicate.op)
                         .is_some_and(|v| (v.len() >= min_len) == is_matches)
                 });
                 continue;
@@ -1287,15 +1340,26 @@ pub fn apply_where_predicates<T: ClauseTarget>(
                     // reading the miss as a passing `NOT MATCHES` made this the
                     // one operator that let such a row through.
                     //
-                    // "Does not carry the field" is asked through the resolver,
-                    // like every other operator. This batch branch is the ONLY
-                    // place a string comparison is made outside
-                    // `eval_predicate_on`, and while it read the row directly
-                    // the two pattern operators were the only ones a stamp-only
-                    // default did not reach: `LIKE 'fal%'` answered thousands
+                    // "Does not carry the field" is asked through the same
+                    // resolver `eval_predicate_on` asks, like every other
+                    // operator. This batch branch is the ONLY place a string
+                    // comparison is made outside `eval_predicate_on`, and a rule
+                    // that lives in that resolver has had to be taught to it
+                    // twice before: while this branch read the row directly, the
+                    // two pattern operators were the only ones a stamp-only
+                    // default did not reach — `LIKE 'fal%'` answered thousands
                     // and `MATCHES 'false'` answered nothing, on the same rows.
+                    // Calling `comparable_field_str` rather than
+                    // `resolved_field_str` changes nothing for THESE two
+                    // operators, which is the point: the two readers now make
+                    // the same call for every operator, so the next rule added
+                    // to it cannot reach one and miss the other. What made
+                    // `NOT MATCHES` stop shedding the kindless group was not
+                    // this call but the readers behind it — a row whose kind is
+                    // empty reports that value instead of resolving to nothing,
+                    // so there is a value here to not-match.
                     results.retain(|item| {
-                        resolved_field_str(item, &field)
+                        comparable_field_str(item, &field, predicate.op)
                             .is_some_and(|v| re.is_match(v) == is_matches)
                     });
                 }

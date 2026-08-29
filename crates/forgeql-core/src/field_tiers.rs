@@ -716,6 +716,27 @@ pub const MACRO_CALL_KIND: &str = "macro_call";
 /// therefore the spelling they filter on, so both are accepted values. See
 /// [`ERROR_KIND`] for why it is spelled once.
 pub const UNKNOWN_KIND: &str = "unknown";
+
+/// Spell a value written on `fql_kind` the way the index stores it.
+///
+/// A row nothing maps carries the EMPTY kind, and that is the only spelling
+/// stored, grouped or posted. [`UNKNOWN_KIND`] is a rendering: `SHOW outline`
+/// and `SHOW members` print it in place of the empty string, so an agent
+/// filtering on what the engine just printed writes `unknown`. Both spellings
+/// name the same rows, so both sides of a comparison are spelled to the stored
+/// one before they meet — the predicate value at the parser boundary
+/// (`parser::clauses::parse_predicate`, the single place an agent's text
+/// becomes an IR value) and the row's own value in the comparison funnel
+/// (`filter::comparable_field_str`), which is what lets an outline row that
+/// renders `unknown` answer the same equality as a `FIND symbols` row that
+/// renders the empty string.
+///
+/// Every other value is returned unchanged, so this is a no-op on the 40-odd
+/// real kinds and on every other field.
+#[must_use]
+pub fn stored_kind_value(value: &str) -> &str {
+    if value == UNKNOWN_KIND { "" } else { value }
+}
 /// Every `fql_kind` the engine can put on a row.
 ///
 /// The engine owns this universe because a language plugin does not invent
@@ -755,17 +776,18 @@ pub const FQL_KIND_VALUES: &[&str] = &[
     // value the engine had just printed, so both are accepted here; only the
     // rendering decides which one an agent sees.
     //
-    // NEITHER spelling is served everywhere it is accepted, and that is the
-    // one honest caveat on this list. `SHOW outline … WHERE fql_kind =
-    // 'unknown'` matches what the outline rendered and answers rows; on a verb
-    // that renders the STORED value instead, both spellings answer nothing —
-    // `FIND symbols WHERE fql_kind = ''` and `= 'unknown'` each return no rows
-    // where `GROUP BY fql_kind` counts thousands, because the kind lookup
-    // resolves a predicate value through the segment string pool and neither
-    // spelling is pooled. Both are pinned as one open defect
-    // (`the_kindless_rows_answer_their_own_equality`), and they are the only
-    // values in this list whose empty answer is not yet a fact about the
-    // corpus.
+    // Both are SERVED, and they answer the same rows and the same total on
+    // every verb whose rows carry a kind: `parse_predicate` spells either one to
+    // the stored value before it reaches a reader, `step5_build_kind_postings`
+    // posts the empty kind like any other so the equality is one bitmap read,
+    // and on a scan a row whose kind is empty reports it as the value it is
+    // rather than as a missing field. A row shape holding no kind COLUMN is the
+    // stated exclusion: a `FIND usages` site is one line of a file, and this
+    // field is accepted there and answers none of them, on either spelling.
+    // `kindless_kind_equality.json` pins the two spellings against the counted
+    // grouping on three corpora, and that exclusion beside them, and an empty
+    // answer on this field is a fact about the corpus for these two values as it
+    // is for every other.
     "",
     UNKNOWN_KIND,
     // Definitions and declarations.
@@ -861,10 +883,14 @@ pub const USAGE_ROLE_VALUES: &[&str] = &[
     // not because no site qualifies: the `Eq` arm of `eval_predicate_on` is
     // `is_some_and`, so a field the row does not carry fails every equality,
     // empty string included. On the indexed backend that answer is also the
-    // right one — every site there is tagged — but on the in-memory backend it
-    // is the same false zero the kindless kinds have, and for the same reason:
-    // a value the engine renders and the predicate cannot reach. Pinned with
-    // them in `the_kindless_rows_answer_their_own_equality`.
+    // right one — every site there is tagged. On the in-memory backend, which
+    // tags none of them, it is a false zero: a value the renderer prints and the
+    // predicate cannot reach. That miss is now this field's alone. The kindless
+    // KINDS had the same shape and no longer do — they are served on both
+    // backends, and `kindless_kind_equality.json` pins them where an error is a
+    // failure — so this comment can no longer lean on their pin. Recorded as
+    // OPEN in `HINTS.md`; the fix is the same shape as theirs, which is to give
+    // the empty role a value the reader can find rather than a hole.
     "",
 ];
 /// One queryable field: where it lives, what serves it, what that cannot see.
@@ -1202,6 +1228,24 @@ const NAME_SERVING: &[Serving] = &[
 ];
 
 /// `fql_kind` has a bitmap for `=` and nothing else.
+///
+/// The bitmap is exact and covers EVERY value the engine can put on a row, the
+/// empty kind included: `step5_build_kind_postings` posts it like any other,
+/// intersected with each segment's canonical row set, so `WHERE fql_kind = ''`
+/// is one binary search and one bitmap decode — the same `Tier::KindBitmap`
+/// cost as `= 'function'`, not a scan — and it selects exactly the rows
+/// `GROUP BY fql_kind` counts under the empty name. `= 'unknown'`, the spelling
+/// `SHOW outline` renders for that same row, is spelled to the stored value at
+/// the parser boundary and therefore reads the same bitmap and returns the same
+/// total. Every other operator on this field scans, and on a scan a row whose
+/// kind is empty reports it as the value it is rather than as a missing field —
+/// the readers holding a kind column say so (`segment_reader::materialize_rows`
+/// AND `materialize_one_row`, the separate builder behind the row-view page,
+/// plus both row views, the legacy row and its prefilter) — so `NOT MATCHES`
+/// keeps that row instead of silently shedding it. A row shape with no kind
+/// COLUMN still resolves to nothing and still matches nothing: a `FIND usages`
+/// site is one line of a file, and this field is accepted there and answers
+/// none of them, on either spelling.
 const FQL_KIND_SERVING: &[Serving] = &[
     Serving {
         ops: &[OpClass::Eq],

@@ -86,10 +86,9 @@ impl ClauseTarget for RowRef<'_> {
         match field {
             "name" => Some(self.table.name_of(self.row)),
             "node_kind" => Some(self.table.node_kind_of(self.row)),
-            "fql_kind" => {
-                let s = self.table.fql_kind_of(self.row);
-                if s.is_empty() { None } else { Some(s) }
-            }
+            // The empty kind is a value this row carries, not a missing one —
+            // see `SymbolMatch`'s arm and `segment_reader::materialize_rows`.
+            "fql_kind" => Some(self.table.fql_kind_of(self.row)),
             "language" => {
                 let s = self.table.language_of(self.row);
                 if s.is_empty() { None } else { Some(s) }
@@ -432,6 +431,14 @@ impl ClauseTarget for crate::storage::SiteView<'_> {
         match field {
             "name" => Some(self.name),
             // An occurrence row leaves these `None`; a site carries no more.
+            // On `fql_kind` that `None` is load-bearing and means something
+            // narrower than it used to: a row whose kind is EMPTY now reports
+            // the empty string, because that is a value the engine publishes and
+            // answers on. `None` here says this shape has no kind column at all,
+            // which is why `WHERE fql_kind = …` keeps matching no site instead
+            // of matching every one of them. `usage_row` writes the same `None`,
+            // and `a_site_view_reads_every_field_as_the_row_it_builds` pins the
+            // two together.
             "node_kind" | "fql_kind" | "language" | "node_id" => None,
             "path" => self.path.to_str(),
             // The open map, which holds this one key and no other.

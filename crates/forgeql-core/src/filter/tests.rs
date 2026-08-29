@@ -407,12 +407,13 @@ fn reject_unknown_enum_values_accepts_the_kindless_value() {
     // name, so `= ''` is a question the engine put into the agent's hands and
     // must not then refuse.
     //
-    // This is the ONLY non-vacuous pin of that acceptance. The golden case for
-    // the empty kind is an expect_fail in `open_defects.json` — the equality
-    // answers no rows while the grouping counts thousands — and an expect_fail
-    // counts ANY error as its expected failure, so a refusal here would satisfy
-    // it silently. The acceptance has to be asserted where an error is a
-    // failure.
+    // The golden suite `kindless_kind_equality.json` now pins the same
+    // acceptance from the other side — its cases assert ROWS, and an error there
+    // is a failure, so a refusal cannot satisfy them quietly. This unit test is
+    // still worth its line because it reads the acceptance directly rather than
+    // inferring it from an answer: it fails on a refusal and ONLY on a refusal,
+    // where a golden case asserting rows fails on a refusal and on an absence
+    // alike and cannot say which of the two it met.
     let op = crate::ir::ForgeQLIR::FindSymbols {
         backend: crate::ir::Backend::default(),
         clauses: Clauses {

@@ -14,7 +14,7 @@
 //! Neither multiplies with session count. A session's uncommitted edits are
 //! not part of either: they stay in its own `DirtyOverlay`.
 //!
-//! # FQOV file format (schema_version 15)
+//! # FQOV file format
 //!
 //! The `v3` in the constant names below (`HEADER_V3_LEN`) is the TOC layout
 //! generation, not this field. `schema_version` carries `SCHEMA_VERSION` from
@@ -22,7 +22,7 @@
 //!
 //! ```text
 //! [0..4]           b"FQOV"            magic
-//! [4..8]           schema_version: u32 = 15 (little-endian)
+//! [4..8]           schema_version: u32 = SCHEMA_VERSION (little-endian)
 //! [8..16]          generation: u64 (little-endian)
 //! [16..20]         toc_count: u32 = 13
 //! [20..24]         _reserved: u32 = 0
@@ -714,10 +714,13 @@ impl Overlay {
     /// sorted order as the `kind_index` blob (lexicographic by kind name).
     ///
     /// The counts are canonical — `step5_build_kind_postings` intersects each
-    /// segment's postings with its canonical row set — but they describe a SUBSET
-    /// of the rows: that step skips the empty kind, so a row whose `fql_kind` is
-    /// empty is in no posting here. A caller reporting groups owes the remainder
-    /// its own group; these pairs cannot supply it.
+    /// segment's postings with its canonical row set — and they describe EVERY
+    /// row: that step posts the empty kind like any other, so a row nothing
+    /// maps is in a posting here, under the empty name, and the pairs partition
+    /// the canonical rows rather than a subset of them. A caller reporting
+    /// groups needs no remainder group of its own; the one it would have
+    /// derived by subtraction now comes back as a pair, and the subtraction is
+    /// left in place as a cross-check that must come out zero.
     ///
     /// An optional `path_mask` narrows the count to only rows in a specific path range.
     ///

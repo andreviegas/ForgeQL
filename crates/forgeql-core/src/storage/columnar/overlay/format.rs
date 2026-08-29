@@ -58,7 +58,14 @@ pub(crate) const MAGIC: [u8; 4] = *b"FQOV";
 ///   plus the intra-segment duplicates the answer collapses. A v15 overlay is
 ///   not corrupt — it over-counts and over-streams, which is exactly what made
 ///   `WHERE name = … GROUP BY file` uncountable — so it must not be reused.
-pub(crate) const SCHEMA_VERSION: u32 = 16;
+/// - **17**: no layout change — the kind postings change content. The EMPTY
+///   kind is now posted like any other, so `kind_index` gains one entry keyed
+///   by the empty string. A v16 overlay is not corrupt, but it cannot answer
+///   `WHERE fql_kind = ''` (nor the `unknown` spelling of it): the entry the
+///   lookup binary-searches for is simply not there, and the equality returned
+///   zero rows where `GROUP BY fql_kind` counted thousands. It must not be
+///   reused.
+pub(crate) const SCHEMA_VERSION: u32 = 17;
 
 /// Number of bytes in the fixed header (before the TOC).
 pub(crate) const HEADER_LEN: usize = 24;

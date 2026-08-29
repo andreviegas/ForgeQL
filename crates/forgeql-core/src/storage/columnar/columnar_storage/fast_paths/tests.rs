@@ -1294,9 +1294,11 @@ fn a_segment_that_shadows_a_key_field_still_travels_as_views() {
 ///
 /// This is the invariant the whole collapse rests on, and it is checked as a
 /// partition rather than field by field on purpose: the two readings do not
-/// have to SPELL an absent value the same way — a row view reports an empty
-/// `fql_kind` as absent where the built row carries `None`, and line zero the
-/// same way — they only have to agree on which rows are the same row.
+/// have to SPELL an absent value the same way — line zero is reported one way
+/// by a view and another by a built row — they only have to agree on which rows
+/// are the same row. `fql_kind` used to be the other example here and is no
+/// longer one: an empty kind is a value now, and BOTH readings report it as the
+/// empty string.
 #[test]
 fn the_column_key_and_the_built_row_key_agree_on_every_pair() {
     let (_tmp, seg) = duplicate_heavy_segment();

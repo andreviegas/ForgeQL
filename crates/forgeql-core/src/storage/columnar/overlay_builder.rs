@@ -484,9 +484,16 @@ impl OverlayBuilder {
                 let (kind_id, local_bm) = entry
                     .with_context(|| format!("reading kind postings of {}", seg_path.display()))?;
                 let kind_str = reader.string_of_id(kind_id);
-                if kind_str.is_empty() {
-                    continue;
-                }
+                // The EMPTY kind is posted like any other. A row nothing maps
+                // carries it, `GROUP BY fql_kind` publishes those rows as their
+                // own group, and an agent is told an empty answer on this field
+                // is a fact about the corpus — so the equality naming that group
+                // has to select the same rows, and only a posting can do that
+                // exactly. Skipping it here left `prefilter_kind('')` with no
+                // entry to find, and the equality answered zero where the
+                // grouping counted thousands. Its bitmap is built by the same
+                // canonical intersection as every other kind's, so the rows it
+                // names are the answer rows, not the raw ones.
                 let merged = kind_merged.entry(kind_str.to_owned()).or_default();
                 // Intersect with canonical_bm to skip intra-segment duplicates.
                 for local_row in local_bm & canonical_bm {

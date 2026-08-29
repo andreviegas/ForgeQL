@@ -210,11 +210,59 @@ Short, durable facts discovered while working in this codebase.
   SUBSET of `FQL_KIND_VALUES` — a kind added there and not to the universe
   would refuse rows that exist. Subset, not equality: a number, a cast or an
   operator row is queryable without being addressable by handle.
-- `WHERE fql_kind = ''` is ACCEPTED but answers 0 rows while `GROUP BY fql_kind`
-  counts thousands under the empty name — the kind prefilter resolves the value
-  through the segment string pool, which holds no empty value. Pinned as an
-  open defect (`the_kindless_rows_answer_their_own_equality`); do not read it as
-  the refusal swallowing the shape.
+- **`WHERE fql_kind = ''` and `= 'unknown'` are one question and both are
+  SERVED** (0.192.x). They were accepted and answered 0 rows while
+  `GROUP BY fql_kind` counted thousands under the empty name — the kind lookup
+  resolved the value through a key table `step5_build_kind_postings` skipped the
+  empty kind out of, and `prefilter_global` turns a missing entry into an EMPTY
+  bitmap rather than a scan, so the zero read as a fact about the corpus. Four
+  things had to change together, and any three of them pass a green gate: the
+  builder posts the empty kind like any other (overlay `SCHEMA_VERSION` 17 —
+  content invalidation, no `ENRICH_VER`), `parse_predicate` spells `unknown` to
+  the stored value at the one place an agent's text becomes an IR value, and
+  the readers that hold a kind COLUMN report the empty kind as the VALUE it is
+  rather than collapsing it to `None` — SIX of them: `materialize_rows` AND
+  `materialize_one_row` (the separate builder behind the row-view page, the one
+  a sweep of "the row builders" misses, whose omission delivered an empty page
+  under a total of thousands), both row views, the legacy row and its
+  prefilter — without which the SCAN still dropped those
+  rows from the equality AND from `NOT MATCHES`. That third one is where the
+  first draft went wrong: it substituted the empty string inside the shared
+  comparison funnel instead, which reached EVERY row resolving to no value, so
+  `FIND usages … WHERE fql_kind = ''` and `!= '<any kind>'` matched every site —
+  a predicate that filters nothing while reading as a filtered result. `None` on
+  this field has to keep meaning "this row shape has no kind column at all"; an
+  occurrence site is that shape and is deliberately untouched. Pinned on three
+  corpora, with that exclusion beside them, by `kindless_kind_equality.json`. And a fourth PLACE a columnar-only sweep misses entirely — not a seventh reader but a second index BUILDER: the legacy backend keeps its own copy of the builder skip in `SecondaryIndexBuilder::insert`, where it is worse than a smaller index — `find_symbols_prefilter` STRIPS the predicate once that index has supplied candidates, so an unindexed value reaches no scan at all and answers 0 with a success status. Pinned by `the_kindless_rows_answer_their_own_equality_on_the_legacy_backend`.
+
+- **OPEN (found 2026-08-29, not fixed): the legacy `GROUP BY fql_kind` counts RAW
+  rows where its own scan counts collapsed ones.**
+  `try_group_by_stats_fast_path` (`storage/legacy.rs`) answers a bare
+  `GROUP BY fql_kind` from `IndexStats::by_fql_kind`, which
+  `SecondaryIndexBuilder::insert` increments once per indexed row, while
+  `find_symbols_prefilter` collapses duplicates on
+  `(name_id, path_id, fql_kind_id, line)` before returning any. On the
+  `motor_control` fixture the empty kind is 3 counted against 2 answered, and
+  the same gap applies to ANY kind with an intra-file duplicate — it is not
+  about the empty kind, which is only where it happened to surface. This is the
+  legacy twin of the class `group_by_counted_paths.rs` was built to catch on the
+  columnar side: a counted route reporting a number no row was consulted for.
+  Pre-dates 0.192.x; `the_kindless_rows_answer_their_own_equality_on_the_legacy_backend`
+  deliberately controls against the SCAN's grouping so it measures the equality
+  rather than this.
+
+- **OPEN (not fixed): `role = ''` on `FIND usages` is the LAST member of the
+  kindless-value family.** It is an accepted value — `compact.rs` prints the
+  empty role for a site the backend tagged with none — and it matches nothing,
+  because `eval_predicate_on`'s equality arm is `is_some_and` and `SiteView`
+  answers `None`. On the columnar backend that zero is correct (the read pass
+  tags every site it finds); on the IN-MEMORY backend, which tags none of them,
+  it is a false zero of exactly the shape `fql_kind = ''` had. The fix is the
+  same shape too: give the empty role a value the reader can find rather than a
+  hole. Until then it is pinned NOWHERE — the `field_tiers` comment beside
+  `USAGE_ROLE_VALUES` used to lean on the kindless-kind expect_fail, and that
+  case is now green and lives in `kindless_kind_equality.json`, so a fix must
+  bring its own pin.
 
 ## Enrichers and the leading position (2026-08-26)
 

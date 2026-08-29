@@ -1,0 +1,254 @@
+{
+ "suite": "kindless_kind_equality",
+ "description": "A row nothing maps carries the EMPTY fql_kind, and the engine publishes those rows two ways: GROUP BY fql_kind gives them a group keyed by the empty string, and SHOW outline renders them as 'unknown'. Both spellings are accepted values, so both are questions the engine puts into an agent's hands -- and until 0.192.0 neither answered anything on a verb that reads the stored kind, because step5_build_kind_postings skipped the empty kind and the lookup had no entry to find, while the counted grouping reached those rows by subtracting the kinds it did post from the canonical total. This suite holds the two spellings, the counted grouping and the scan to ONE number per corpus. The controls are what make it a route test rather than three spellings of one query: a case that groups the equality's own answer must report the group the counted route reports, on the same corpus, or the two sides are no longer describing the same rows.",
+ "cases": [
+  {
+   "name": "control_the_scan_keeps_the_kindless_rows",
+   "description": "Anchors the case below. Not every row of this index has an fql_kind: 2,169 of the 59,636 carry an empty one, and the scan's grouping gives them their own group keyed by the empty string. A WHERE that holds for every row changes no group and no count, and it is what disarms the count path -- so this is the authoritative group count, read by building every row.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE line >= 0 GROUP BY fql_kind",
+   "assert": {
+    "total": 42
+   }
+  },
+  {
+   "name": "a_counted_group_by_fql_kind_keeps_the_kindless_rows",
+   "description": "The counted route reaches the control's 42 without building a row. kind_global_counts now emits one pair per kind bitmap INCLUDING the empty kind, so the group arrives as a pair rather than as the remainder fast_group_by_kind used to derive by subtraction; that subtraction is kept as a cross-check that must come out zero. Either way the number is 42, and the point of the pair is that the two routes agree.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols GROUP BY fql_kind",
+   "assert": {
+    "total": 42
+   }
+  },
+  {
+   "name": "control_the_scan_sizes_the_kindless_group",
+   "description": "The authoritative size of that group, and the shape of the row the scan delivers for it: 2,169 rows, represented by the first of them, which carries a name and a line of its own. The counted case below must agree on the count and differ on exactly those two -- that is what makes the pair a route test rather than two spellings of one query.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE line >= 0 GROUP BY fql_kind HAVING count = 2169",
+   "assert": {
+    "row_count": 1,
+    "rows": [
+     { "count": 2169, "name": "Text", "line": 55 }
+    ]
+   }
+  },
+  {
+   "name": "a_counted_group_by_fql_kind_sizes_the_kindless_group",
+   "description": "The counted route puts 2,169 rows in the empty group, the number the scan reaches by reading every row. A HAVING on count is one of the two the group row can answer, so this stays on the counted route -- and the empty name and zero line prove it did, since the scan's row for this group carries 'Text' at line 55.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols GROUP BY fql_kind HAVING count = 2169",
+   "assert": {
+    "row_count": 1,
+    "rows": [
+     { "count": 2169, "name": "", "line": 0 }
+    ]
+   }
+  },
+  {
+   "name": "the_kindless_rows_answer_their_own_equality",
+   "description": "The equality naming the group the two cases above just published. This is the defect the suite is named for: it answered 0 rows, total 0, because the kind lookup resolved the predicate value through a key table the empty kind was never written into, and prefilter_global turns a missing entry into an EMPTY bitmap rather than a scan -- so the zero was reported as a fact about the corpus. The total is the whole answer, not the page: LIMIT bounds delivery only.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = '' LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "total": 2169
+   }
+  },
+  {
+   "name": "the_rendered_kindless_spelling_answers_its_own_equality_too",
+   "description": "'unknown' is the spelling SHOW outline renders for a row that stores no kind, so it is what an agent writes when they filter on what the engine printed. It names the same rows as '' and must return the same total. parse_predicate spells it to the stored value at the one place an agent's text becomes an IR value, so it reads the same bitmap -- serving one spelling without the other would leave the docs wrong in the other direction.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'unknown' LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "total": 2169
+   }
+  },
+  {
+   "name": "the_alias_reaches_the_kindless_rows_too",
+   "description": "'kind' is 'fql_kind' spelled short, and the spelling of the VALUE is decided after the FIELD is canonicalised. Without this case a rule keyed on the literal field name would pass every case above and drop the alias.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE kind = 'unknown' LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "total": 2169
+   }
+  },
+  {
+   "name": "the_equality_and_the_grouping_agree",
+   "description": "The control that ties the two halves together on one corpus, in one query. A WHERE predicate disarms the counted route, so the bitmap selects the rows and the SCAN groups what it selected: one group, and its size must be the 2,169 the counted route reports for the same group two cases up. A bitmap of the right cardinality over the WRONG rows passes the equality cases above and fails here, because those rows would carry kinds of their own and land in more than one group. The name and line are the scan's own -- a counted group row is named by the grouped value and carries no line of its own, where this one is the first row of the group, the same 'Text' at line 55 that control_the_scan_sizes_the_kindless_group pins -- so they say WHICH route produced the number as well as what the number is.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = '' GROUP BY fql_kind",
+   "assert": {
+    "row_count": 1,
+    "rows": [
+     { "count": 2169, "name": "Text", "line": 55 }
+    ]
+   }
+  },
+  {
+   "name": "the_negation_keeps_the_kindless_rows",
+   "description": "The half a missing-field resolution loses in the other direction. fql_kind has no bitmap for a pattern, so this runs on the scan, and a row whose kind resolved to 'no value' failed the equality AND its negation alike -- it was in no group of either, and this grouping reported 41 where the scan's own grouping reported 42. Comparing a kindless row as the empty string is what puts it back. The regex matches nothing, so the answer is every group.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind NOT MATCHES 'zzzz' GROUP BY fql_kind",
+   "assert": {
+    "total": 42
+   }
+  },
+  {
+   "name": "the_outline_answers_the_stored_spelling",
+   "description": "SHOW outline renders these three rows as 'unknown' and has always answered a filter on that spelling -- engine_owned_value_refusal.json pins that half, where an error is a failure, and it is what keeps this pair from being satisfied vacuously by a refusal. The stored spelling answered nothing there, so the two accepted values disagreed on one verb. They no longer do: the predicate is spelled to the stored value and the row's rendered 'unknown' is spelled to match it, so both reach the same three rows.",
+   "use": "forgeql-pub.frozen",
+   "fql": "SHOW outline OF 'crates/forgeql-core/src/ast/enrich/casts.rs' ALL WHERE fql_kind = ''",
+   "assert": {
+    "row_count": 3,
+    "rows": [
+     { "name": "Node", "line": 160 },
+     { "name": "LanguageConfig", "line": 162 },
+     { "name": "Node", "line": 190 }
+    ]
+   }
+  },
+  {
+   "name": "the_outline_answers_the_rendered_spelling",
+   "description": "The other half of the pair above, on the same file: the spelling the outline itself printed still answers the same three rows. Spelling the row side to the stored value must not cost the verb the filter its own output invites.",
+   "use": "forgeql-pub.frozen",
+   "fql": "SHOW outline OF 'crates/forgeql-core/src/ast/enrich/casts.rs' ALL WHERE fql_kind = 'unknown'",
+   "assert": {
+    "row_count": 3,
+    "rows": [
+     { "name": "Node", "line": 160 },
+     { "name": "LanguageConfig", "line": 162 },
+     { "name": "Node", "line": 190 }
+    ]
+   }
+  },
+  {
+   "name": "control_the_counted_grouping_sizes_the_kindless_group_on_zephyr",
+   "description": "Anchors the zephyr cases: 17,830 of this corpus's 3,045,203 rows carry no kind, and the counted grouping reports them as one group. The empty name and zero line say the counted route answered. A second corpus matters because the defect was in a key table built per corpus -- one corpus proves the code path, three prove it is not the fixture.",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols GROUP BY fql_kind HAVING count = 17830",
+   "assert": {
+    "row_count": 1,
+    "rows": [
+     { "count": 17830, "name": "", "line": 0 }
+    ]
+   }
+  },
+  {
+   "name": "the_kindless_rows_answer_their_own_equality_on_zephyr",
+   "description": "The equality reaches the number its control reports, on a corpus fifty times the size of the first. The bitmap is read the same way a real kind's is, so the cost is one binary search and one decode rather than a scan of three million rows.",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE fql_kind = '' LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "total": 17830
+   }
+  },
+  {
+   "name": "the_rendered_kindless_spelling_answers_on_zephyr_too",
+   "description": "Both spellings on the second corpus as well, so the spelling rule is pinned wherever the value is rather than on the corpus it was found on. Without this the suite pinned the stored spelling on three corpora and the rendered one on only two, and the claim that they answer the same total everywhere rested on a gap.",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'unknown' LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "total": 17830
+   }
+  },
+  {
+   "name": "the_equality_and_the_grouping_agree_on_zephyr",
+   "description": "The agreement control on the second corpus: grouping the equality's own answer gives back one group of exactly the size the counted route reports for it, and its name is the group's first row rather than the grouped value, which is what says the scan produced it.",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE fql_kind = '' GROUP BY fql_kind",
+   "assert": {
+    "row_count": 1,
+    "rows": [
+     { "count": 17830, "name": "Z_GENERIC_SECTION" }
+    ]
+   }
+  },
+  {
+   "name": "control_the_counted_grouping_sizes_the_kindless_group_on_pytorch",
+   "description": "Anchors the pytorch cases: 349,599 of this corpus's 3,165,358 rows carry no kind -- 11% of the corpus, the largest kindless group of the three, and the one whose silence cost the most.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "FIND symbols GROUP BY fql_kind HAVING count = 349599",
+   "assert": {
+    "row_count": 1,
+    "rows": [
+     { "count": 349599, "name": "", "line": 0 }
+    ]
+   }
+  },
+  {
+   "name": "the_kindless_rows_answer_their_own_equality_on_pytorch",
+   "description": "The equality reaches its control's number on the third corpus.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "FIND symbols WHERE fql_kind = '' LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "total": 349599
+   }
+  },
+  {
+   "name": "the_rendered_kindless_spelling_answers_on_pytorch_too",
+   "description": "Both spellings on the third corpus, so the spelling rule is pinned everywhere the value is, not only where it was first found.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'unknown' LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "total": 349599
+   }
+  },
+  {
+   "name": "the_equality_and_the_grouping_agree_on_pytorch",
+   "description": "The agreement control on the third corpus. Without it the pytorch block was three cases that a bitmap of the right CARDINALITY over the WRONG rows would pass in full -- exactly the failure this suite's controls exist to catch, and the corpus where the group is largest. A WHERE disarms the counted route, so the bitmap selects and the SCAN groups what it selected: wrong rows would carry kinds of their own and land in more than one group, so one group of the control's size is the assertion.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "FIND symbols WHERE fql_kind = '' GROUP BY fql_kind",
+   "assert": {
+    "row_count": 1,
+    "rows": [
+     { "count": 349599 }
+    ]
+   }
+  },
+  {
+   "name": "control_the_usage_sites_of_the_probe_name_exist",
+   "description": "Anchors the two cases below, which assert a ZERO. Seven sites carry this name on this corpus, so a zero there is the predicate deciding, not the name being absent.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND usages OF 'prefilter_kind'",
+   "assert": {
+    "total": 7
+   }
+  },
+  {
+   "name": "a_usage_site_carries_no_kind_so_the_equality_still_misses_it",
+   "description": "The boundary of every claim in this suite, pinned so it cannot drift. A FIND usages row is one line of one file: it carries no fql_kind COLUMN at all, where a symbol row carries one whose value may be empty. The field is accepted on this verb -- the site's row shape declares it -- and answers nothing, and that is the behaviour this fix deliberately did NOT change. An earlier draft put the empty-string substitution in the shared comparison funnel, where it reached every row resolving to no value: `= ''` and `!= '<any kind>'` then matched all seven sites, a predicate that filtered nothing while still reading as a filtered result. The rows that DO carry a kind column report the empty kind as the value it is, so the funnel needs no substitution and this verb is untouched.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND usages OF 'prefilter_kind' WHERE fql_kind = ''",
+   "assert": {
+    "total": 0,
+    "row_count": 0
+   }
+  },
+  {
+   "name": "a_usage_site_misses_the_rendered_spelling_too",
+   "description": "The spelling rule must not reach this verb either: 'unknown' is spelled to the stored empty value at the parser, and a site still carries no kind to compare it against. Both spellings agree here as they do everywhere else -- on nothing.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND usages OF 'prefilter_kind' WHERE fql_kind = 'unknown'",
+   "assert": {
+    "total": 0,
+    "row_count": 0
+   }
+  },
+  {
+   "name": "a_usage_site_misses_the_negation_too_rather_than_matching_every_site",
+   "description": "The dangerous direction, and the one the first draft actually broke. A predicate that matches nothing is a visible zero; one that matches EVERYTHING is an inert filter reading as a filtered result, which is the shape the engine already refuses out-of-vocabulary values for. Substituting the empty string for a row that resolves to no value turned this query from 0 sites into all 7. A site carries no kind, so the negation misses it exactly as the equality does.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND usages OF 'prefilter_kind' WHERE fql_kind != 'function'",
+   "assert": {
+    "total": 0,
+    "row_count": 0
+   }
+  }
+ ]
+}

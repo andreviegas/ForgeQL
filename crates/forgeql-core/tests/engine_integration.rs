@@ -1045,3 +1045,77 @@ fn an_edit_that_mentions_a_symbol_does_not_hijack_its_resolution() {
         "a dirty declaration still pre-empts the persistent index: {grown}"
     );
 }
+
+// -----------------------------------------------------------------------
+// Regression: the kindless rows are reachable on the LEGACY backend too
+// -----------------------------------------------------------------------
+
+/// `WHERE fql_kind = ''` answers the group `GROUP BY fql_kind` publishes, on the
+/// in-memory backend as much as on the columnar one.
+///
+/// The columnar half of this fix posts the empty kind in the overlay's kind
+/// table. The legacy backend kept its own copy of that skip in
+/// `SecondaryIndexBuilder::insert`, and leaving it there would have been worse
+/// than a smaller index: `find_symbols_prefilter` takes the `fql_kind` index for
+/// an equality and then STRIPS the predicate, because the index is supposed to
+/// have supplied the rows. An unindexed value therefore got an empty candidate
+/// iterator, never reached the scan that could have decided it, and came back as
+/// 0 rows with a success status — the same false zero the whole change exists to
+/// remove, on the backend that serves a source with no `.forgeql.yaml`. Fixing
+/// the row comparison alone does not reach it, because the tier answers first.
+///
+/// The two numbers are compared rather than pinned: a literal count would go on
+/// passing the day the fixture stops producing a row with no kind.
+#[test]
+fn the_kindless_rows_answer_their_own_equality_on_the_legacy_backend() {
+    let (mut engine, sid, _dir) = engine_with_session_legacy();
+
+    // The control is the SCAN's grouping, not the counted one. On this backend
+    // `try_group_by_stats_fast_path` answers a bare `GROUP BY fql_kind` from
+    // `IndexStats::by_fql_kind`, which counts every RAW row, while the scan
+    // collapses duplicates on `(name, path, fql_kind, line)` — so on this
+    // fixture the two disagree for the empty kind, 3 against 2, and they would
+    // disagree the same way for any kind with an intra-file duplicate. That gap
+    // is older than this change and is not what this test is about; comparing
+    // the equality against the counted route would measure it instead of the
+    // thing being fixed. A `WHERE` that holds for every row disarms the count
+    // path and leaves the authoritative, collapsed group size.
+    let grouped = match execute_fql(
+        &mut engine,
+        &sid,
+        "FIND symbols WHERE line >= 0 GROUP BY fql_kind",
+    ) {
+        ForgeQLResult::Query(qr) => qr
+            .results
+            .iter()
+            .find(|r| r.fql_kind.as_deref().unwrap_or("").is_empty())
+            .and_then(|r| r.count)
+            .unwrap_or(0),
+        other => panic!("expected Query, got: {other:?}"),
+    };
+    assert!(
+        grouped > 0,
+        "the fixture stopped producing rows with no kind, so the cases below \
+         would hold vacuously"
+    );
+
+    for query in [
+        "FIND symbols WHERE fql_kind = ''",
+        "FIND symbols WHERE fql_kind = 'unknown'",
+    ] {
+        match execute_fql(&mut engine, &sid, query) {
+            ForgeQLResult::Query(qr) => {
+                assert_eq!(
+                    qr.total, grouped,
+                    "{query} answered {} rows where the grouping counted {grouped}",
+                    qr.total
+                );
+                // Right cardinality over the wrong rows would pass the count.
+                for r in &qr.results {
+                    assert_eq!(r.fql_kind.as_deref(), Some(""), "{query}: {}", r.name);
+                }
+            }
+            other => panic!("{query}: expected Query, got: {other:?}"),
+        }
+    }
+}

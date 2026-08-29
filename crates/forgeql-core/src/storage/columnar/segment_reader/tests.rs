@@ -813,7 +813,8 @@ fn a_row_view_answers_a_prefilterable_predicate_as_the_built_row_does() {
             PredicateValue::String("function".to_owned()),
         ),
         // The empty string is how a segment spells "this row has no kind", and
-        // a built row reports it as absent rather than as "".
+        // both the view and the built row now report it as the VALUE it is
+        // rather than as absent — which is what keeps them agreeing here.
         predicate(
             "fql_kind",
             CompareOp::Eq,

@@ -629,12 +629,16 @@ impl ColumnarStorage {
     /// Deserialises each kind bitmap and reads its cardinality in O(n_kinds) time.
     /// For IN-glob queries, intersects each kind bitmap with the path range bitmap.
     ///
-    /// The bitmaps hold only the rows that carry a kind, so the rows carrying
-    /// none are counted by subtracting the rest from the canonical total the
-    /// selected segments declare — the group the scan keys by the empty string.
-    /// `None` hands the query to the scan, which is what a subtraction that
-    /// cannot hold (or a kind table that cannot be read) means: the two sides are
-    /// not describing the same rows, and a group count is not worth guessing.
+    /// The bitmaps hold EVERY canonical row, the empty kind included —
+    /// `step5_build_kind_postings` posts it like any other — so the kindless
+    /// rows arrive as a pair of their own, keyed by the empty string, the same
+    /// key the scan's grouping gives them. The subtraction against the canonical
+    /// total the selected segments declare survives only as a cross-check that
+    /// must come out zero.
+    /// `None` hands the query to the scan, which is what a remainder that cannot
+    /// hold — or one that can, or a kind table that cannot be read — means: the
+    /// two sides are no longer describing the same rows, and publishing the
+    /// difference would count the kindless rows twice over.
     pub(super) fn fast_group_by_kind(&self, clauses: &Clauses) -> Option<FindPage> {
         // `passes_resolve_glob` decides per source path and a segment is one
         // source path, so IN/EXCLUDE select whole segments: the canonical total
@@ -668,19 +672,24 @@ impl ColumnarStorage {
             .collect();
 
         // A row of a selected segment either carries a kind or it does not, and
-        // `step5_build_kind_postings` skips the empty one, so the bitmaps
-        // partition only the rows that do. The rest are one group keyed by the
-        // empty string — what the grouping pass makes of a row whose field
-        // resolves to nothing — and its size is the canonical total less the rows
-        // the kinds account for. A remainder that cannot exist means the two
-        // sides are not describing the same rows, so the query goes to the scan
-        // rather than carry a count derived from a contradiction.
+        // `step5_build_kind_postings` posts BOTH — the empty kind included — so
+        // the bitmaps partition every canonical row and the kindless group
+        // arrives above as a pair of its own, keyed by the empty string, exactly
+        // the key the grouping pass gives a row whose field resolves to nothing.
+        //
+        // That makes the subtraction below a CROSS-CHECK rather than a source of
+        // rows: it has to come out zero, and anything else means the postings
+        // and the stored canonical totals are no longer describing the same
+        // rows. Publishing the difference as a nameless group would then report
+        // the kindless rows twice — once under the empty key the postings gave
+        // them, once more here — and inflate the group total, so the query goes
+        // to the scan instead of carrying a count derived from a contradiction.
+        // Before the empty kind was posted this subtraction was the only place
+        // those rows were counted at all, which is how the grouping came to
+        // publish a group the equality could not select.
         let unaccounted = canonical_rows.checked_sub(described)?;
         if unaccounted > 0 {
-            results.push(SymbolMatch {
-                count: Some(unaccounted),
-                ..SymbolMatch::default()
-            });
+            return None;
         }
 
         // IN/EXCLUDE already applied via path_mask — strip to avoid re-filtering.
@@ -908,6 +917,14 @@ impl ColumnarStorage {
                     // bitmap immediately rather than None.  None would fall
                     // through to the full-table scan, causing ~8 s regressions
                     // for unknown-kind queries.  See Phase 06d, Root cause 1.
+                    //
+                    // That shortcut is only honest while every kind the engine
+                    // can put on a row HAS a posting, empty string included:
+                    // an absent entry here becomes a zero-row answer, not a
+                    // scan, so a kind the builder declines to post is reported
+                    // as a fact about the corpus. `val` arrives already spelled
+                    // to the stored value, so the `unknown` rendering of the
+                    // empty kind finds the same entry the empty string does.
                     Some(self.overlay().prefilter_kind(val).unwrap_or_default())
                 }
                 ("name", CompareOp::Eq, PredicateValue::String(val)) => {
@@ -2326,9 +2343,11 @@ fn only_the_group_row_is_read(clauses: &Clauses, grouped_field: &str) -> bool {
 ///
 /// Condition: `GROUP BY` on the kind field, an empty dirty overlay, no `WHERE`
 /// at all, and a `HAVING`/`ORDER BY` naming only `count` or the grouped field
-/// ([`only_the_group_row_is_read`]). The kind bitmaps carry no remainder — the
-/// rows with no kind are in none of them — so the counting path derives that
-/// group by subtraction and declines if the arithmetic cannot hold.
+/// ([`only_the_group_row_is_read`]). The kind bitmaps partition EVERY canonical
+/// row, the empty kind included, so the kindless rows arrive as their own pair
+/// keyed by the empty string rather than as a remainder; the subtraction against
+/// the stored canonical total survives only as a cross-check, and any non-zero
+/// remainder declines the path to the scan.
 pub(super) fn group_by_kind_fast_path_eligible(clauses: &Clauses, dirty_empty: bool) -> bool {
     dirty_empty
         && clauses.where_predicates.is_empty()

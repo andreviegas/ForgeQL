@@ -550,11 +550,7 @@ pub(super) fn find_symbols_prefilter(
         results.push(SymbolMatch {
             name: index.name_of(def).to_owned(),
             node_kind: Some(index.node_kind_of(def).to_owned()),
-            fql_kind: if fql.is_empty() {
-                None
-            } else {
-                Some(fql.to_owned())
-            },
+            fql_kind: Some(fql.to_owned()),
             language: if lang.is_empty() {
                 None
             } else {

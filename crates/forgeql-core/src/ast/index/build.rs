@@ -46,13 +46,21 @@ impl SecondaryIndexBuilder<'_> {
             .entry(row.node_kind_id)
             .or_default()
             .push(idx);
-        if !self.strings.fql_kinds.get(row.fql_kind_id).is_empty() {
-            self.fql_kind_index
-                .entry(row.fql_kind_id)
-                .or_default()
-                .push(idx);
-            *self.stats.by_fql_kind.entry(row.fql_kind_id).or_insert(0) += 1;
-        }
+        // The empty kind is indexed and counted like any other, which is the
+        // legacy twin of `step5_build_kind_postings` posting it. Skipping it
+        // here was not merely a smaller index: `find_symbols_prefilter` takes
+        // the `fql_kind` index whenever the predicate is an equality, and then
+        // STRIPS the predicate because the index supplied the candidates — so
+        // `fql_kind = ''` got an empty iterator, never reached the scan that
+        // could have decided it, and returned 0 rows with a success status.
+        // `by_fql_kind` is gated with it for the same reason: it is what the
+        // `GROUP BY fql_kind` stats fast path publishes, and a kind missing
+        // from it is a group the grouping never reports.
+        self.fql_kind_index
+            .entry(row.fql_kind_id)
+            .or_default()
+            .push(idx);
+        *self.stats.by_fql_kind.entry(row.fql_kind_id).or_insert(0) += 1;
         if !self.strings.languages.get(row.language_id).is_empty() {
             *self.stats.by_language.entry(row.language_id).or_insert(0) += 1;
         }
