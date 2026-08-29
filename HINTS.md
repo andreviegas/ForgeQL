@@ -348,3 +348,21 @@ Short, durable facts discovered while working in this codebase.
 - Adding a `Tier` variant with the same body as an existing arm trips clippy's
   `match_same_arms` in `intrinsic_exactness`; merge the pattern and put the
   second reason in the arm's comment.
+- Counting the readers of a hand-maintained list, a narrow criterion
+  undercounts and a raw grep overcounts, and one pass makes both mistakes. The
+  enumeration in the `field_tiers` module doc was scoped to "read at query
+  time" and so missed `CAST_KIND` in `ast/enrich/casts.rs` and
+  `MACRO_CALL_KIND` in `ast/index/file_indexer/rows.rs`, which mint the same
+  constants while INDEXING — the coupling is what puts a site on the list, not
+  the phase it runs in. It also missed `filter::is_known_symbol_field`, which
+  asks `lookup` whether a NAME is real at all: sharing an entry point with a
+  bullet already on the list is enough to hide a reader. The same grep then
+  offered a `#[cfg(test)]` assertion in `ast/index/file_indexer.rs` as a third
+  minting site, which it is not. Grep the whole crate, then open every hit.
+- That grep finds readers of the TABLE, not everything coupled to it. `error`
+  is minted at `ast/index/file_indexer/rows.rs:41,125` through
+  `ast::lang::FQL_ERROR` rather than through `field_tiers::ERROR_KIND` — the
+  same constant, since `ERROR_KIND` is defined as `FQL_ERROR`, and the same
+  coupling to the value universe, in the same file as a site the grep DOES
+  find. A `field_tiers::` grep cannot see a site that reaches the value by its
+  other name.

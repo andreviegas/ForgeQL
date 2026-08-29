@@ -1,9 +1,10 @@
 //! The field/tier table must agree with the code it describes.
 //!
-//! The table is a parallel declaration in almost every respect: four of its
-//! facts are read at query time — the canonical spelling of an alias, a
-//! refusal's text, whether a field is written after materialisation, and
-//! whether a field's value universe belongs to the engine — and nothing else.
+//! The table is a parallel declaration in almost every respect: a handful of
+//! its facts are read while the engine runs, and the `field_tiers` module doc
+//! enumerates them. Do not restate that count here — it has been wrong at
+//! four, at five, at six and at seven, and a second copy of it is one more
+//! place for the next one to go stale.
 //! What makes it worth having before the collapse is this file — every claim
 //! it makes is checked here against the const lists, against the builder's
 //! own budget functions, and against what a query actually returns. A

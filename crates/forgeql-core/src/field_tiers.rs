@@ -35,12 +35,12 @@
 //! that does answer it. That family was the defect this table was built to
 //! surface: each of those names was accepted and answered a confident zero.
 //!
-//! # This table is checked, and in seven places consulted
+//! # This table is checked, and eight questions are asked of it
 //!
 //! Most of it nothing reads while a query runs: the tests in
 //! `tests/field_tier_table.rs` assert that it agrees with the const lists and
 //! the behaviour it describes, so a disagreement is a test failure rather than
-//! a silent wrong answer. Seven things ARE read at query time:
+//! a silent wrong answer. Eight things ARE read while the engine runs:
 //!
 //! - [`canonical`] resolves an alias to the field it spells.
 //! - The refusal family decides a decline and then words it:
@@ -50,6 +50,14 @@
 //! - [`FieldTier::post_group`], reached through [`lookup`], says which CLAUSE
 //!   accepts a field: `count` is refused in `WHERE` and answered after
 //!   grouping because of that one flag.
+//! - [`lookup`] is asked a second and different question by
+//!   `filter::is_known_symbol_field`: not what a field does, but whether the
+//!   NAME is one at all. It is how a misspelling is told apart from a real
+//!   field that simply matched nothing, so `legacy::resolve` and
+//!   `exec_show` word the two situations differently — and a field present in
+//!   this table but in neither `SymbolMatch` list is real on that answer
+//!   alone. Sharing an entry point with the bullet above is exactly why this
+//!   one went uncounted through four review rounds.
 //! - [`written_after_materialisation`] has TWO readers, and they are not the
 //!   same question. `segment_reader::row_field` is the predicate one, where
 //!   getting it wrong runs a filter later than it had to;
@@ -58,13 +66,19 @@
 //!   does not share and sheds rows that belonged in the answer.
 //! - [`engine_owned_values`] decides whether an unrecognised VALUE is a
 //!   refusal or an honest empty answer.
-//! - The constants that universe is built from — `ROLE_CODE`, `ROLE_TEXT`,
-//!   `UNKNOWN_KIND` — are read by the passes that MINT those values
-//!   (`query/find.rs`, `ast/show/members.rs`, `query/outline.rs`), so the role
-//!   a read pass stamps and the set a `WHERE role = …` is refused against
-//!   cannot drift apart. This one is a reference at the writing site rather
-//!   than a lookup, which is why it belongs on the list and is easy to miss
-//!   when counting readers.
+//! - The constants those universes are built from — `ROLE_CODE`, `ROLE_TEXT`,
+//!   `UNKNOWN_KIND`, `CAST_KIND`, `MACRO_CALL_KIND` — are read by the passes
+//!   that MINT those values, so a value a pass stamps and the set a `WHERE` on
+//!   that field is refused against cannot drift apart. Some of those sites are
+//!   read passes (`query/find.rs`, `ast/show/members.rs`, `query/outline.rs`)
+//!   and some are index passes (`ast/enrich/casts.rs`,
+//!   `ast/index/file_indexer/rows.rs`), and the coupling is the same in both:
+//!   scoping this entry to query time is one of the ways it has already been
+//!   undercounted. These are references at the writing site rather than
+//!   lookups, which is why they belong on the list and are the easiest to miss
+//!   when counting readers. `file_indexer`'s own reference to
+//!   [`FQL_KIND_VALUES`] is NOT one of them and does not belong here: it sits
+//!   in a `#[cfg(test)]` module, asserts a subset, and mints nothing.
 //! - [`stamp_default`], with [`is_stamp_default_value`] beside it, says what a
 //!   row the enricher examined and did not write answers.
 //!
@@ -77,12 +91,18 @@
 //! the serving path but part of it, and what it claims about that value is a
 //! claim about the code that runs.
 //!
-//! **This list is maintained by hand and nothing enforces it.** An eighth
+//! **This list is maintained by hand and nothing enforces it.** A ninth
 //! reader would fail no test. Grep `field_tiers::` under
 //! `crates/forgeql-core/src` before relying on it being complete: this list
-//! has been read as closed at four, at five and at six, and was wrong each
-//! time — the sentence you are reading is the only thing standing in for a
-//! check, and it is worth exactly what a sentence is worth.
+//! has been read as closed at four, at five, at six and at seven, and was
+//! wrong every time — the seventh count survived review and then lost two
+//! minting sites and `is_known_symbol_field` to the first run of the grep this
+//! paragraph prescribes. Eight is what the last such run returned,
+//! not a promise that the run after it will agree. Read every hit before
+//! counting it, too: that same run offered a `#[cfg(test)]` assertion as a
+//! reader, and it took a second pair of eyes to throw it back out. The
+//! sentence you are reading is the only thing standing in for a check, and it
+//! is worth exactly what a sentence is worth.
 
 /// Where a field's value comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
