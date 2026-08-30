@@ -24,6 +24,7 @@ use overlay_harness::*;
 /// This is the invariant that stops `CHANGE NODE` from computing a byte range
 /// off a stale line and corrupting the file.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn is_path_fresh_detects_external_edit() {
     use forgeql_core::storage::StorageEngine;
     use forgeql_core::storage::columnar::ColumnarStorage;
@@ -136,6 +137,30 @@ fn is_path_fresh_detects_external_edit() {
         storage.is_path_fresh(rel, &worktree),
         "reindexed file must be fresh again"
     );
+
+    // 4. The dirty segment the reindex built is checked against the disk too:
+    //    a second rewrite outside ForgeQL — the shape a gate's auto-format
+    //    takes, landing after the session's own edit — must read as stale as
+    //    well. It used to be taken as fresh unconditionally.
+    std::fs::write(&file, "void Alpha() {}\nvoid Beta() {}\n").expect("rewrite file again");
+    assert!(
+        !storage.is_path_fresh(rel, &worktree),
+        "a file rewritten after its dirty segment was built must be stale"
+    );
+    // 5. And nothing is answered off the stale rows: a line lookup into the
+    //    file fabricates no handle from offsets the file no longer holds. The
+    //    stale rows put Beta's start past its current end, which underflowed
+    //    here before such a row was skipped.
+    let refs = storage.innermost_nodes_for_lines("fresh.cpp", &worktree, 1, 4);
+    assert!(
+        refs.iter().all(Option::is_none),
+        "stale offsets must never fabricate handles: {refs:?}"
+    );
+    // 6. Fresh again once re-indexed, exactly as the committed case was.
+    storage
+        .reindex_files(std::slice::from_ref(&file))
+        .expect("reindex_files again");
+    assert!(storage.is_path_fresh(rel, &worktree));
 }
 
 /// `purge_file` on `ColumnarStorage` must remove all symbols for the given

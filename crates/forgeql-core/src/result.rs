@@ -251,6 +251,78 @@ impl ForgeQLResult {
         }
     }
 
+    /// Append the notice that `paths` were re-indexed before this answer
+    /// because they had changed on disk outside `ForgeQL`. Carried by every
+    /// `Show` result — each `ShowContent` variant's renderer emits the `hint`
+    /// row, pinned by `every_show_content_renders_the_hint_it_carries` — and by
+    /// `FIND NODE`; the `Query` arm is defensive, since no gated verb returns a
+    /// `Query` result today. A mutation carries none: a stale rev is refused
+    /// before it runs, a matching one names bytes the gate has just verified,
+    /// and the forms that quote no rev at all — an EOF append to a whole-file
+    /// handle, `COPY NODE … TO`, `COPY NODES FOUND TO` — are gated the same way
+    /// but have nothing to refuse, so they act on the re-indexed bytes without
+    /// announcing it. Every mutation's boundary diff shows the lines it wrote.
+    pub fn note_reindexed_outside_forgeql(&mut self, paths: &[PathBuf]) {
+        let notice = Self::reindexed_outside_forgeql_notice(paths);
+        let slot = match self {
+            Self::Show(s) => &mut s.hint,
+            Self::Query(q) => &mut q.hint,
+            Self::FindNode(n) => &mut n.hint,
+            _ => return,
+        };
+        *slot = Some(match slot.take() {
+            Some(existing) => format!("{existing} {notice}"),
+            None => notice,
+        });
+    }
+
+    /// The wording of that notice for an answer that carries lines and revs.
+    /// A refusal issued right after the gate re-indexed a file carries the
+    /// notice too, but with a different tail — see
+    /// [`Self::reindexed_before_refusal_notice`].
+    pub(crate) fn reindexed_outside_forgeql_notice(paths: &[PathBuf]) -> String {
+        Self::reindexed_notice_with(
+            paths,
+            "Handles are stable; the lines and revs in this answer are current, \
+             and a rev read before the change is refused.",
+        )
+    }
+
+    /// The same notice for a command that was REFUSED. A refusal carries no
+    /// lines and no revs, so it cannot claim they are current; all it can say
+    /// is that the re-index happened first, and that handles still resolve.
+    pub(crate) fn reindexed_before_refusal_notice(paths: &[PathBuf]) -> String {
+        Self::reindexed_notice_with(
+            paths,
+            "Handles are stable; this happened before the command was refused, \
+             so the refusal describes the file as it is now.",
+        )
+    }
+
+    /// The shared body: which files, capped, and why — `tail` says what the
+    /// answer carrying it can promise.
+    fn reindexed_notice_with(paths: &[PathBuf], tail: &str) -> String {
+        /// Paths named in full before the notice starts counting instead. A
+        /// `FOUND` sweep can name every file in the worktree, and a notice is
+        /// one row of an answer, not a listing.
+        const NAMED: usize = 5;
+        let listed = paths
+            .iter()
+            .take(NAMED)
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let listed = match paths.len().saturating_sub(NAMED) {
+            0 => listed,
+            more => format!("{listed} and {more} more"),
+        };
+        let subject = if paths.len() == 1 { "the file" } else { "they" };
+        format!(
+            "re-indexed {listed}: {subject} changed on disk outside ForgeQL after being \
+             indexed (a formatter, a build step, an editor). {tail}"
+        )
+    }
+
     /// Count the number of raw source-code lines contained in this result.
     ///
     /// Used by the query logger to track how much source code was disclosed

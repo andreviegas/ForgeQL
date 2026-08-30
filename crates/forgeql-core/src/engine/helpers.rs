@@ -75,6 +75,32 @@ pub(crate) fn load_verify_config(
 }
 
 // -----------------------------------------------------------------------
+// Panic reporting shared by the transports
+// -----------------------------------------------------------------------
+
+/// The message a caught engine panic is reported with, from the payload
+/// `catch_unwind` hands back: the panic's own text when it carried one, a
+/// fixed phrase otherwise.
+///
+/// Shared by the stdio and the HTTP transports so a panic reads the same on
+/// both — and so the HTTP one reports it at all: a panic inside `execute()`
+/// there used to unwind through the request task, which closed the connection
+/// with nothing sent, while the stdio path answered with an error. The engine
+/// sits behind a `tokio::sync::Mutex`, which does not poison, so the next
+/// request proceeds either way; this only decides what THIS request sees.
+#[must_use]
+pub fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    let text = payload
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned());
+    text.map_or_else(
+        || "engine panicked: unknown cause".to_string(),
+        |text| format!("engine panicked: {text}"),
+    )
+}
+
+// -----------------------------------------------------------------------
 // Session ID helpers
 // -----------------------------------------------------------------------
 

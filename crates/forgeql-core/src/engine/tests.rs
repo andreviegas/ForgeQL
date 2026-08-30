@@ -34,6 +34,73 @@ fn generate_session_id_unique() {
     );
 }
 
+/// A freshness stamp is the pair (size, mtime) and nothing less: the same
+/// bytes stamp equal, a rewrite that moves either half stamps different, and
+/// a path that cannot be stat'ed stamps not at all — so the gate hashes it
+/// rather than trusting a half-stamp.
+#[test]
+fn a_file_stamp_moves_with_size_or_mtime_and_is_absent_without_a_stat() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("stamped.txt");
+    std::fs::write(&file, "one").unwrap();
+    let first = crate::session::FileStamp::of(&file).expect("a regular file stamps");
+    assert_eq!(
+        crate::session::FileStamp::of(&file),
+        Some(first),
+        "same bytes, same stamp"
+    );
+    std::fs::write(&file, "one two").unwrap();
+    assert_ne!(
+        crate::session::FileStamp::of(&file),
+        Some(first),
+        "a longer file stamps differently"
+    );
+    // A same-length rewrite: only the mtime separates it from what was there
+    // before, which is why a stamp without one would vouch for the file on its
+    // length alone and skip the hash for every rewrite that keeps the size.
+    let same_length = crate::session::FileStamp::of(&file).expect("a regular file stamps");
+    std::fs::write(&file, "two one").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_times(
+            std::fs::FileTimes::new()
+                .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(5)),
+        )
+        .unwrap();
+    assert_ne!(
+        crate::session::FileStamp::of(&file),
+        Some(same_length),
+        "a same-length rewrite must still move the stamp — that is what the mtime is for"
+    );
+    assert_eq!(
+        crate::session::FileStamp::of(&tmp.path().join("missing")),
+        None
+    );
+}
+
+/// A panic inside `execute()` is reported by both transports with the panic's
+/// own text, through one shared function, so the stdio and HTTP servers cannot
+/// word it differently — and so a payload that is not a string still reads as
+/// a panic rather than as nothing.
+#[test]
+fn a_caught_engine_panic_is_reported_with_its_own_text() {
+    let caught = |f: fn()| std::panic::catch_unwind(f).unwrap_err();
+    assert_eq!(
+        helpers::panic_message(caught(|| std::panic::panic_any("a literal")).as_ref()),
+        "engine panicked: a literal"
+    );
+    assert_eq!(
+        helpers::panic_message(caught(|| std::panic::panic_any(String::from("owned"))).as_ref()),
+        "engine panicked: owned"
+    );
+    assert_eq!(
+        helpers::panic_message(caught(|| std::panic::panic_any(42_u8)).as_ref()),
+        "engine panicked: unknown cause"
+    );
+}
+
 #[test]
 fn require_session_id_empty_fails() {
     let result = require_session_id(None);

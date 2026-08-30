@@ -513,7 +513,14 @@ they share a rev, so `IF REV` alone cannot tell them apart, and only retiring th
 removed one keeps its handle from silently coming to mean the survivor.
 
 A stale rev is refused with `rev_mismatch`, which hands back the node's current
-rev, line range, and source — enough to re-target without another read.
+rev, line range, and source — enough to re-target without another read. That
+includes a rev read before the file was rewritten outside ForgeQL: the command
+re-indexes the file before it compares, so the refusal names the rev the node
+has now, not the one the stale index held. Two cases the rev cannot see: a file
+deleted outside ForgeQL — its handles still resolve from the old rows, and the
+edit then fails on the missing bytes rather than on the rev — and a rewrite that
+keeps both the file's size and its mtime, which the gate's precheck takes for the
+bytes it last verified, so a rev read before it still matches until either moves.
 
 | Variant | Effect | Gate |
 |---|---|---|
@@ -646,7 +653,48 @@ Every indexed symbol has a **stable node handle** — a `node_id` of the form
 of the file path; `<ordinal>` is a per-file counter assigned in source order.
 Node ids are content-addressed per file: they survive line drift, unrelated edits
 elsewhere in the file, and re-parse — the drift-proof way to target code. Read
-once, then mutate by handle instead of by absolute line.
+once, then mutate by handle instead of by absolute line. That holds across a
+rewrite made outside ForgeQL too — a formatter, a build step, an editor: the next
+command that names a node, a symbol or the file itself (`SHOW NODE`, `SHOW LINES`,
+`SHOW outline` of a file or a handle — a directory or glob outline lists many
+files and is not checked — `SHOW body`/`context`/`signature`/`callees`/`members`,
+`FIND NODE`, every node-addressed mutation, the `FOUND` sweeps) checks the file
+against its indexed content first, re-indexes that one file when they differ and
+answers the current lines — a read or `FIND NODE` says so in a `hint`; a
+mutation carries no hint, its boundary diff shows the current lines, a rev read
+before the rewrite is refused with `rev_mismatch` where the node's bytes
+changed, a node whose bytes did not change is edited where it now is, and a
+form that quotes no rev — an EOF append to a whole-file handle, `COPY NODE …
+TO`, `COPY NODES FOUND TO` — is checked the same way but has nothing to refuse,
+so it writes from the
+re-indexed bytes without announcing it. The
+check costs one repeat of the lookup the verb itself runs — a gated command
+resolves its symbol or handle twice, on the same index tier, scanning nothing
+new, and once more per file it re-indexes, since the naming is repeated until a
+pass re-indexes nothing (a re-index can change which file a symbol resolves to)
+— plus one `stat` per named file, a content hash the first time the session
+names it and whenever its size or mtime moved, and a single-file re-index when
+the hash differs; mapping an answer's lines to handles then hashes the file once
+more, uncached, so a read that renders handles and a mutation's boundary diff
+pay a second hash of that file. A rewrite that keeps both size and mtime is not
+seen until either moves; a `FIND` over the corpus, which names no file, is not
+checked, so its rows can carry a stale line for such a file until that file is
+read or edited; and `UNDO` and `ROLLBACK` are not checked either — they restore
+whole files from ForgeQL's own snapshots over whatever a rewrite left since. The
+check reaches only what the stale index can still name: a symbol the rewrite
+introduced or renamed resolves to nothing, so a read by that symbol answers "no
+symbol matches" with nothing re-indexed until the file is read by handle or by
+path; a file created outside ForgeQL has no index to be stale and stays
+unindexed until ForgeQL itself writes it or the next attach rebuilds the index —
+a reconnect re-indexes only the tracked files `git diff HEAD` lists, never an
+untracked one; a file deleted — or made unreadable — outside ForgeQL keeps its
+rows until ForgeQL next writes or re-indexes it, is never taken as verified, and
+a read of it fails on the missing bytes; and a re-index that does not leave the
+file fresh refuses the command with its reason rather than answering from the
+old rows. The in-memory backend (a source with no `.forgeql.yaml`) stores no
+per-file content id, so it answers from its table until ForgeQL next writes or
+re-indexes the file — the ordinal handles it prints on SHOW rows do not resolve
+through `SHOW NODE`/`FIND NODE` anyway.
 
 Comments — including doc comments — index as their own addressable nodes
 (`comment`, and runs of adjacent comments as `comment_block`), separate from the
@@ -776,7 +824,8 @@ payload** so you can re-target without another read:
   "current_rev": "<the node's actual current rev>",
   "line_start": 10,
   "line_end": 14,
-  "current_content": "…the node's current source…"
+  "current_content": "…the node's current source…",
+  "reindexed": "re-indexed <path>: the file changed on disk outside ForgeQL after being indexed …"
 }
 ```
 
@@ -784,7 +833,15 @@ For a large node the `current_content` is elided to its first 24 and last 8
 lines with a note giving the omitted-line count and a `SHOW NODE '<id>'`
 pointer, so a stale-rev refusal on a whole-file node no longer dumps the entire
 file into the error. The rev, line range, and head/tail are enough to re-target
-most edits; `SHOW NODE '<id>'` reads the full source when you need it.
+most edits; `SHOW NODE '<id>'` reads the full source when you need it. The
+`reindexed` field is present only when the command re-indexed the file first
+because it had changed on disk outside ForgeQL — a formatter, a build step, an
+editor — and names that file: the mismatch is then that rewrite, not a phantom.
+The structured rejections — the `FOUND` refusals and a mutation's
+`node_not_found` — carry the field the same way when a re-index preceded them;
+a read's `node_not_found` (`SHOW NODE` or `FIND NODE` on a handle the rewrite
+removed) is a plain `node_id not found` message and gets the same notice as a
+trailing sentence instead, as does every other unstructured refusal.
 
 The bulk `NODES FOUND` verbs refuse in the same self-healing form — each returns
 a JSON object you match on by its `error` tag, carrying a `suggested_next`
@@ -797,10 +854,12 @@ string that names the recovery:
   the FIND to read the master rev off its response, then quote it.
 
 A handle that resolves to nothing returns `{"error": "node_not_found", …}` in
-the same form. Over MCP — stdio and HTTP alike — every one of these structured
-rejections comes back as an error-flagged (`isError`) tool result whose text is
-the JSON payload, not a buried protocol error, so the agent parses and acts on
-it exactly like an ordinary result.
+the same form from a mutation; on the indexed backend a read — `SHOW NODE` or
+`FIND NODE` on a handle the index no longer holds — reports it as a plain
+`node_id not found: <id>` message instead. Over MCP — stdio and HTTP alike —
+every one of these structured rejections comes back as an error-flagged
+(`isError`) tool result whose text is the JSON payload, not a buried protocol
+error, so the agent parses and acts on it exactly like an ordinary result.
 
 ---
 

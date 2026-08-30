@@ -18,6 +18,10 @@ pub struct FindNodeResult {
     pub end_line: usize,
     /// SHA-256 of node bytes as h{:016x}; empty for analysis-only rows.
     pub rev: String,
+    /// Set when the command re-indexed this node's file first because it had
+    /// changed on disk outside `ForgeQL`: the span and rev above are current.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_node_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

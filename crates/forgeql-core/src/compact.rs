@@ -87,7 +87,7 @@ fn compact_show(s: &ShowResult) -> String {
             direction, entries, ..
         } => compact_callgraph(s, direction, entries),
         ShowContent::FileList { files, total } => compact_filelist(files, *total, s),
-        ShowContent::Stats { sessions } => compact_stats(sessions),
+        ShowContent::Stats { sessions } => compact_stats(s, sessions),
         ShowContent::Paged { lines } => compact_paged(s, lines),
     }
 }
@@ -231,6 +231,9 @@ fn compact_signature(s: &ShowResult, line: usize, signature: &str) -> String {
     let lnum = line.to_string();
     let sig = q(signature);
     row(&mut out, &[&op, &sym, &file, &lnum, &sig]);
+    if let Some(ref hint) = s.hint {
+        row(&mut out, &[&q("hint"), &q(hint)]);
+    }
     chomp(&mut out);
     out
 }
@@ -275,6 +278,9 @@ fn compact_outline(s: &ShowResult, entries: &[OutlineEntry]) -> String {
             bracket(&[&e.fql_kind, &display_name, &line])
         };
         row(&mut out, &[&q(&e.depth.to_string()), &q(&val)]);
+    }
+    if let Some(ref hint) = s.hint {
+        row(&mut out, &[&q("hint"), &q(hint)]);
     }
     chomp(&mut out);
     out
@@ -322,6 +328,9 @@ fn compact_members(s: &ShowResult, members: &[MemberEntry]) -> String {
         let val = q(&brackets.join(","));
         row(&mut out, &[&q(kind), &val]);
     }
+    if let Some(ref hint) = s.hint {
+        row(&mut out, &[&q("hint"), &q(hint)]);
+    }
     chomp(&mut out);
     out
 }
@@ -351,6 +360,9 @@ fn compact_callgraph(
             .collect();
         let val = q(&brackets.join(","));
         row(&mut out, &[&q(file), &val]);
+    }
+    if let Some(ref hint) = s.hint {
+        row(&mut out, &[&q("hint"), &q(hint)]);
     }
     chomp(&mut out);
     out
@@ -416,15 +428,22 @@ fn compact_filelist(files: &[FileEntry], total: usize, s: &ShowResult) -> String
     {
         row(&mut out, &[&q("found_rev"), &q(rev)]);
     }
+    if let Some(ref hint) = s.hint {
+        row(&mut out, &[&q("hint"), &q(hint)]);
+    }
     chomp(&mut out);
     out
 }
 
 /// SHOW STATS → one section per session with memory and symbol breakdown.
 #[allow(clippy::cast_precision_loss)]
-fn compact_stats(sessions: &[SessionStats]) -> String {
+fn compact_stats(s: &ShowResult, sessions: &[SessionStats]) -> String {
     if sessions.is_empty() {
-        return "\"show_stats\",\"no sessions loaded\"\n".to_string();
+        let mut out = "\"show_stats\",\"no sessions loaded\"\n".to_string();
+        if let Some(ref hint) = s.hint {
+            row(&mut out, &[&q("hint"), &q(hint)]);
+        }
+        return out;
     }
     let mut out = String::with_capacity(sessions.len() * 512);
     row(
@@ -508,6 +527,9 @@ fn compact_stats(sessions: &[SessionStats]) -> String {
             row(&mut out, &[&format!("kind:{kind}"), &count.to_string()]);
         }
     }
+    if let Some(ref hint) = s.hint {
+        row(&mut out, &[&q("hint"), &q(hint)]);
+    }
     chomp(&mut out);
     out
 }
@@ -551,6 +573,9 @@ fn compact_find_node(r: &FindNodeResult) -> String {
         &mut out,
         &[&q("node_nav"), &q(&r.node_id), &q(&nav.join(","))],
     );
+    if let Some(hint) = &r.hint {
+        row(&mut out, &[&q("hint"), &q(hint)]);
+    }
     out
 }
 fn compact_mutation(r: &MutationResult) -> String {

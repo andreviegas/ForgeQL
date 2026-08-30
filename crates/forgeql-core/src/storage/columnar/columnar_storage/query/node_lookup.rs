@@ -108,6 +108,7 @@ impl ColumnarStorage {
                 line,
                 end_line,
                 rev,
+                hint: None,
                 parent_node_id: opt_nav(dseg.parent_ordinal_of(drow)),
                 first_child_node_id: opt_nav(dseg.first_child_ordinal_of(drow)),
                 next_sibling_node_id: opt_nav(dseg.next_sibling_ordinal_of(drow)),
@@ -320,6 +321,7 @@ impl ColumnarStorage {
             line,
             end_line,
             rev,
+            hint: None,
             parent_node_id: opt_nav(seg.parent_ordinal_of(local_row)),
             first_child_node_id: opt_nav(seg.first_child_ordinal_of(local_row)),
             next_sibling_node_id: opt_nav(seg.next_sibling_ordinal_of(local_row)),
@@ -438,6 +440,14 @@ impl ColumnarStorage {
                 if node_end < start {
                     continue;
                 }
+                // A row whose end — derived from the file's current newlines —
+                // now precedes its stored start describes bytes the file no
+                // longer holds: the segment is stale against the disk. Skip it
+                // rather than underflow; nothing here may fabricate a handle
+                // for a line the row does not cover.
+                if node_end < node_start {
+                    continue;
+                }
                 let node_span = node_end - node_start;
                 let lo = node_start.max(start);
                 let hi = node_end.min(end);
@@ -487,9 +497,14 @@ impl ColumnarStorage {
         let mut out: Vec<Option<(String, usize)>> = vec![None; span];
         let mut best_span: Vec<usize> = vec![usize::MAX; span];
 
-        // Prefer a dirty (reindexed-this-session) segment: its byte offsets match
-        // the file on disk. Otherwise use the committed segment only when it is
-        // content-addressed-fresh — stale offsets must never fabricate handles.
+        // Stale offsets must never fabricate handles, whichever segment holds
+        // them: a dirty (reindexed-this-session) segment is checked against
+        // the disk exactly as a committed one is, since the file can be
+        // rewritten outside ForgeQL after either was built.
+        if !self.is_path_fresh(Path::new(rel_path), root) {
+            return Vec::new(); // stale against the disk: no handle for any line
+        }
+        // Prefer the dirty segment: its rows shadow the committed ones.
         if let Some(ds) = self
             .dirty
             .added
@@ -517,9 +532,6 @@ impl ColumnarStorage {
         else {
             return Vec::new();
         };
-        if !self.is_path_fresh(Path::new(rel_path), root) {
-            return Vec::new();
-        }
         let (Some(seg), Some(seg_meta)) = (
             self.segments().get(seg_idx),
             self.overlay().segments().get(seg_idx),

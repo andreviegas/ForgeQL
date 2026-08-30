@@ -461,10 +461,7 @@ impl ForgeQLEngine {
     ///
     /// Errors are logged but never propagated — re-indexing is best-effort.
     pub(super) fn reindex_session(&mut self, session_id: &str, paths: &[PathBuf]) {
-        let Some(session) = self.sessions.get_mut(session_id) else {
-            return;
-        };
-        if let Err(err) = session.reindex_files(paths) {
+        if let Err(err) = self.try_reindex_session(session_id, paths) {
             warn!(
                 session = %session_id,
                 error = %err,
@@ -477,6 +474,25 @@ impl ForgeQLEngine {
         // by a daemon restart, and (b) on Zephyr the serialize+write costs
         // ~17s per call.  `Session::index_dirty` tracks divergence and
         // `flush_if_dirty` is called from those four boundary points.
+    }
+
+    /// `reindex_session` with the columnar backend's failure handed back
+    /// instead of logged: the freshness gate refuses a command over a file it
+    /// could not re-index, and the refusal has to say why. The legacy
+    /// backend's failure stays logged and non-fatal — it may have no table at
+    /// all — so a refusal here always names a columnar failure or the
+    /// post-condition that the file is still not fresh. A session that no
+    /// longer exists is not a failure of the re-index — there is nothing to
+    /// re-index into.
+    pub(super) fn try_reindex_session(
+        &mut self,
+        session_id: &str,
+        paths: &[PathBuf],
+    ) -> Result<()> {
+        let Some(session) = self.sessions.get_mut(session_id) else {
+            return Ok(());
+        };
+        session.reindex_files_reporting(paths)
     }
 
     // ===================================================================

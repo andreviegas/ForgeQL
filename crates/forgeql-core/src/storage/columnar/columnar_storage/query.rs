@@ -205,16 +205,34 @@ impl StorageEngine for ColumnarStorage {
         self.reindex_files_impl(paths, tombstones)
     }
 
-    fn is_path_fresh(&self, rel_path: &Path, _root: &Path) -> bool {
-        // A dirty segment for this path was built from the current file on
-        // disk, so its line/byte data is authoritative — always fresh.
-        if self.dirty.added.iter().any(|ds| ds.source_path == rel_path) {
-            return true;
+    fn path_freshness(&self, rel_path: &Path, _root: &Path) -> crate::storage::PathFreshness {
+        use crate::storage::PathFreshness;
+        // A dirty segment was built from the file as it was when this session
+        // last wrote it — not from the file as it is now. A formatter, a build
+        // step or an editor can rewrite it after that, and a gate's auto-format
+        // does exactly that after every mutation, so its content id is compared
+        // with the disk like the committed one below. Taking it as fresh once
+        // made every such rewrite invisible until the next mutation.
+        if let Some(ds) = self
+            .dirty
+            .added
+            .iter()
+            .find(|ds| ds.source_path == rel_path)
+        {
+            let abs = self.worktree_root.join(rel_path);
+            let Ok(bytes) = std::fs::read(&abs) else {
+                return PathFreshness::Unknown;
+            };
+            return if git_blob_sha1(&bytes).as_slice() == ds.reader.content_id.as_slice() {
+                PathFreshness::Verified
+            } else {
+                PathFreshness::Stale
+            };
         }
         // No committed segment → nothing indexed for this path; there is no
         // stale absolute line data to serve.
         let Some(stored_hex) = self.path_to_hex_content_id(rel_path) else {
-            return true;
+            return PathFreshness::Unknown;
         };
         // Compare the committed segment's content hash against the live file.
         // The committed overlay is git-sha1 content-addressed (see reindex_files
@@ -224,10 +242,15 @@ impl StorageEngine for ColumnarStorage {
         let abs = self.worktree_root.join(rel_path);
         let Ok(bytes) = std::fs::read(&abs) else {
             // Unreadable (e.g. deleted): don't force a reindex loop — let the
-            // normal mutation/query path surface the I/O error.
-            return true;
+            // normal mutation/query path surface the I/O error. Nothing was
+            // compared, and the answer says so.
+            return PathFreshness::Unknown;
         };
-        bytes_to_hex(&git_blob_sha1(&bytes)) == stored_hex
+        if bytes_to_hex(&git_blob_sha1(&bytes)) == stored_hex {
+            PathFreshness::Verified
+        } else {
+            PathFreshness::Stale
+        }
     }
 
     fn purge_file(&mut self, path: &Path) -> Result<()> {

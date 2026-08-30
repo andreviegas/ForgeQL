@@ -360,6 +360,41 @@ pub struct Session {
     /// columnar index opened, when columnar is not configured, or once a later
     /// attach succeeds. Never persisted: every attach recomputes it.
     pub(crate) index_fallback: Option<String>,
+    /// Files this session has verified against their indexed content, by
+    /// workspace-relative path, with the size and mtime they had when verified.
+    /// A gated command stats the file it names and skips the content hash while
+    /// both still match; a file never verified, or whose stat moved, is hashed
+    /// against the index and re-indexed if it differs (`ensure_file_fresh`).
+    /// Kept in RAM on purpose: after a restart every file is hashed once more,
+    /// which is the safe direction.
+    pub(crate) fresh_stamps: std::collections::HashMap<PathBuf, FileStamp>,
+}
+
+/// The size and modification time a file had when this session last verified
+/// its bytes against the indexed content — the cheap half of the freshness
+/// gate in `ForgeQLEngine::ensure_file_fresh`. A file whose stamp still matches
+/// is taken as the same bytes, so a rewrite that keeps both the length and the
+/// mtime is not seen until either moves; that is the precheck's one blind spot,
+/// and it is stated wherever the gate is documented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FileStamp {
+    len: u64,
+    /// Never optional: a stamp without an mtime would compare equal on length
+    /// alone, and every same-length rewrite would then skip the hash. A file
+    /// whose filesystem yields no mtime gets no stamp and is hashed on every
+    /// command instead.
+    mtime: std::time::SystemTime,
+}
+
+impl FileStamp {
+    /// The current stamp of `abs`, or `None` when it cannot be stat'ed.
+    pub(crate) fn of(abs: &std::path::Path) -> Option<Self> {
+        let meta = std::fs::metadata(abs).ok()?;
+        Some(Self {
+            len: meta.len(),
+            mtime: meta.modified().ok()?,
+        })
+    }
 }
 
 impl Session {
@@ -413,6 +448,7 @@ impl Session {
             prebuilt_segment_map: None,
             pending_tombstones: OrdinalTombstones::new(),
             index_fallback: None,
+            fresh_stamps: std::collections::HashMap::new(),
         }
     }
 

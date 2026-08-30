@@ -1283,3 +1283,104 @@ fn compact_lines_per_line_node_offsets_replace_absolute() {
         "gap line blank handle: {out}"
     );
 }
+
+// -- the re-index notice must reach the rendered answer ----------------
+
+/// `ForgeQLResult::note_reindexed_outside_forgeql` writes into one `hint`
+/// slot shared by every `Show` result, while each `ShowContent` variant has
+/// its own renderer — so a renderer that omits the row drops the notice for
+/// its verbs alone, silently, with the struct still carrying it and any test
+/// that reads the struct still green. Four renderers did exactly that. This
+/// walks every variant, so a new one cannot arrive without a renderer that
+/// delivers what the slot holds.
+#[test]
+fn every_show_content_renders_the_hint_it_carries() {
+    let variants = [
+        (
+            "lines",
+            ShowContent::Lines {
+                lines: Vec::new(),
+                byte_start: None,
+                depth: None,
+            },
+        ),
+        (
+            "signature",
+            ShowContent::Signature {
+                signature: "void f()".into(),
+                line: 1,
+                byte_start: 0,
+            },
+        ),
+        (
+            "outline",
+            ShowContent::Outline {
+                entries: Vec::new(),
+            },
+        ),
+        (
+            "members",
+            ShowContent::Members {
+                members: Vec::new(),
+                byte_start: 0,
+            },
+        ),
+        (
+            "callgraph",
+            ShowContent::CallGraph {
+                direction: CallDirection::Callees,
+                entries: Vec::new(),
+            },
+        ),
+        (
+            "filelist",
+            ShowContent::FileList {
+                files: Vec::new(),
+                total: 0,
+            },
+        ),
+        (
+            "stats",
+            ShowContent::Stats {
+                sessions: Vec::new(),
+            },
+        ),
+        (
+            "paged",
+            ShowContent::Paged {
+                lines: vec!["\"a\",\"b\"".to_owned()],
+            },
+        ),
+    ];
+    for (name, content) in variants {
+        // The list above is an array literal, so on its own it would let a
+        // ninth variant through in silence. This match is exhaustive: adding
+        // one to `ShowContent` fails to compile here until it is listed.
+        match &content {
+            ShowContent::Lines { .. }
+            | ShowContent::Signature { .. }
+            | ShowContent::Outline { .. }
+            | ShowContent::Members { .. }
+            | ShowContent::CallGraph { .. }
+            | ShowContent::FileList { .. }
+            | ShowContent::Stats { .. }
+            | ShowContent::Paged { .. } => {}
+        }
+        let result = ForgeQLResult::Show(ShowResult {
+            op: "show".into(),
+            symbol: None,
+            file: None,
+            start_line: None,
+            end_line: None,
+            total_lines: None,
+            hint: Some("re-indexed src/a.cpp: it changed on disk".into()),
+            metadata: None,
+            content,
+        });
+        let rendered = to_compact(&result);
+        assert!(
+            rendered.lines().any(|line| line.starts_with("\"hint\",")),
+            "{name} carries a hint the agent never sees:\n{rendered}"
+        );
+    }
+}

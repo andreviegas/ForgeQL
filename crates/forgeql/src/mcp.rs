@@ -289,15 +289,7 @@ async fn exec_engine(
             guard.execute(user_id, coords.as_ref(), op)
         }))
         .map_err(|payload| {
-            let msg = payload
-                .downcast_ref::<&str>()
-                .map(|s| format!("engine panicked: {s}"))
-                .or_else(|| {
-                    payload
-                        .downcast_ref::<String>()
-                        .map(|s| format!("engine panicked: {s}"))
-                })
-                .unwrap_or_else(|| "engine panicked: unknown cause".to_string());
+            let msg = forgeql_core::engine::helpers::panic_message(payload.as_ref());
             error!(%msg, "engine panic caught — converting to error response");
             ErrorData::internal_error(msg, None)
         })?;

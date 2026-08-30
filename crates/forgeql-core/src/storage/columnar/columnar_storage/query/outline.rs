@@ -52,8 +52,9 @@ impl ColumnarStorage {
     }
 
     /// Subtree outline: `file` is a node_id. Outline that node and its
-    /// descendants, preferring the committed segment (authoritative nav) and
-    /// falling back to the dirty overlay for a brand-new file.
+    /// descendants from the session's own (dirty) segment when the file has
+    /// one, and from the committed segment otherwise — the same order every
+    /// other read by handle resolves in.
     fn outline_subtree(
         &self,
         workspace: &Workspace,
@@ -64,6 +65,29 @@ impl ColumnarStorage {
         all: bool,
     ) -> Vec<serde_json::Value> {
         let mut results: Vec<serde_json::Value> = Vec::new();
+        // The session's own rows first, exactly as every other handle read: a
+        // file edited this session (or re-indexed by the freshness gate) has a
+        // dirty segment, and its committed segment describes the bytes from
+        // before the edit. Answering the committed one first served a subtree
+        // at its pre-edit lines for as long as the session lived.
+        for ds in &self.dirty.added {
+            let src = ds.source_path.to_string_lossy().into_owned();
+            if crate::node_id::make_node_id(&src, ordinal) != file {
+                continue;
+            }
+            let abs_path = root.join(&ds.source_path);
+            let rel_path = workspace.relative(&abs_path).display().to_string();
+            let node_id_for = |ord: u32| crate::node_id::make_node_id(&src, ord);
+            push_outline_tree(
+                &ds.reader,
+                &rel_path,
+                &node_id_for,
+                all,
+                Some(ordinal),
+                &mut results,
+            );
+            return results;
+        }
         if let Some(seg_idx) = self.overlay().seg_idx_for_node_id_prefix(hex) {
             let seg_idx = seg_idx as usize;
             if let (Some(seg), Some(seg_meta)) = (
@@ -81,26 +105,7 @@ impl ColumnarStorage {
                     Some(ordinal),
                     &mut results,
                 );
-                return results;
             }
-        }
-        for ds in &self.dirty.added {
-            let src = ds.source_path.to_string_lossy().into_owned();
-            if crate::node_id::make_node_id(&src, ordinal) != file {
-                continue;
-            }
-            let abs_path = root.join(&ds.source_path);
-            let rel_path = workspace.relative(&abs_path).display().to_string();
-            let node_id_for = |ord: u32| crate::node_id::make_node_id(&src, ord);
-            push_outline_tree(
-                ds.reader.as_ref(),
-                &rel_path,
-                &node_id_for,
-                all,
-                Some(ordinal),
-                &mut results,
-            );
-            break;
         }
         results
     }

@@ -249,7 +249,9 @@ impl Session {
 
     /// Return a reference to the storage engine to use for a given backend selector.
     ///
-    /// - [`Backend::Default`] and [`Backend::Legacy`] → the legacy in-memory engine.
+    /// - [`Backend::Default`] → the session's default engine: the columnar one
+    ///   when one is installed, the legacy in-memory one otherwise.
+    /// - [`Backend::Legacy`] → the legacy in-memory engine, always.
     /// - [`Backend::Columnar`] → the columnar engine, if one is installed.
     ///   Returns an error when no columnar engine has been installed.
     ///
@@ -305,6 +307,24 @@ impl Session {
     /// Returns `Err` if the index has not been built yet, or if tree-sitter
     /// parsing fails.
     pub fn reindex_files(&mut self, paths: &[PathBuf]) -> Result<()> {
+        if let Err(e) = self.reindex_files_reporting(paths) {
+            tracing::warn!("columnar reindex_files failed (non-fatal): {e}");
+        }
+        Ok(())
+    }
+
+    /// As [`Self::reindex_files`], but the columnar backend's failure is
+    /// RETURNED rather than logged. The freshness gate refuses a command whose
+    /// file it could not bring up to date, and a refusal that cannot name its
+    /// cause states one it never checked. The legacy backend's failure stays
+    /// non-fatal and logged either way: it may have no table at all after
+    /// `drop_legacy_index()`, which is not a failure to re-index anything.
+    ///
+    /// # Errors
+    /// Returns the columnar backend's error when re-indexing `paths` into it
+    /// failed. The index is marked dirty regardless, since a partial write is
+    /// still a write.
+    pub fn reindex_files_reporting(&mut self, paths: &[PathBuf]) -> Result<()> {
         // A node-removal verb may have staged tombstones for this reindex; take
         // them (so they never leak into a later mutation) and hand them to both
         // backends. The tombstoned root ordinals stop a byte-identical
@@ -317,13 +337,12 @@ impl Session {
         {
             tracing::warn!("legacy reindex_files (non-fatal): {e}");
         }
-        if let Some(columnar) = self.backends.columnar_engine_mut()
-            && let Err(e) = columnar.reindex_files_tombstoned(paths, &tombstones)
-        {
-            tracing::warn!("columnar reindex_files failed (non-fatal): {e}");
-        }
+        let outcome = self.backends.columnar_engine_mut().map_or_else(
+            || Ok(()),
+            |columnar| columnar.reindex_files_tombstoned(paths, &tombstones),
+        );
         self.index_dirty = true;
-        Ok(())
+        outcome
     }
 
     /// Persist the current in-memory index to `.forgeql-index`.

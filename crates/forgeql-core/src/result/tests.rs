@@ -924,3 +924,34 @@ fn display_rollback_result_contains_name_and_oid() {
     assert!(output.contains("abc123def456"), "OID must appear");
     assert!(output.contains("Rolled back"), "action label must appear");
 }
+
+/// The notice is one row of an answer, not a listing. A `FOUND` sweep can name
+/// every file a formatter just rewrote, so the paths are capped and the rest
+/// counted — and the sentence agrees with how many there were.
+#[test]
+fn the_reindex_notice_caps_the_paths_it_names() {
+    let many: Vec<std::path::PathBuf> = (0..9)
+        .map(|i| std::path::PathBuf::from(format!("src/f{i}.rs")))
+        .collect();
+    let notice = ForgeQLResult::reindexed_outside_forgeql_notice(&many);
+    assert!(notice.contains("src/f4.rs"), "{notice}");
+    assert!(!notice.contains("src/f5.rs"), "{notice}");
+    assert!(notice.contains("and 4 more"), "{notice}");
+    assert!(notice.contains("they changed"), "{notice}");
+
+    let one = [std::path::PathBuf::from("src/only.rs")];
+    let notice = ForgeQLResult::reindexed_outside_forgeql_notice(&one);
+    assert!(notice.contains("src/only.rs"), "{notice}");
+    assert!(notice.contains("the file changed"), "{notice}");
+    assert!(!notice.contains(" more"), "{notice}");
+
+    // A refusal carries no lines and no revs, so its notice must not claim
+    // they are current — only that the re-index happened before the refusal.
+    let refused = ForgeQLResult::reindexed_before_refusal_notice(&one);
+    assert!(refused.contains("outside ForgeQL"), "{refused}");
+    assert!(refused.contains("src/only.rs"), "{refused}");
+    assert!(
+        !refused.contains("in this answer are current"),
+        "a refusal has no lines or revs to vouch for: {refused}"
+    );
+}

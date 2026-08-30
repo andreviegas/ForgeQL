@@ -347,7 +347,17 @@ async fn execute_fql(
         let ExecOutcome {
             result,
             coach: coach_hint,
-        } = guard.execute(user_id, coords.as_ref(), op);
+        } = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            guard.execute(user_id, coords.as_ref(), op)
+        }))
+        .map_err(|payload| {
+            // Report the panic as this request's error rather than letting it
+            // unwind through the request task, which closed the connection with
+            // nothing sent — the stdio transport already does the same.
+            let msg = forgeql_core::engine::helpers::panic_message(payload.as_ref());
+            tracing::error!(%msg, "engine panic caught — converting to error response");
+            ExecFailure::from(msg)
+        })?;
         let result = match result {
             Ok(r) => r,
             Err(e) => {

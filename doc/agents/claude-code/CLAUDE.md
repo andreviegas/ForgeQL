@@ -205,7 +205,35 @@ back, and overwrite it from a mental model that is now stale. A wrong rev is
 refused with `rev_mismatch`, which hands back the node's current rev, line range,
 and source — enough to re-target on the spot. A large node's source is elided
 to a head and tail with a `SHOW NODE` pointer, so a whole-file refusal stays
-small rather than dumping the entire file into the error.
+small rather than dumping the entire file into the error. A file rewritten
+outside ForgeQL — a formatter, a build step, an editor — is re-indexed by the
+next command that names a node, a symbol or the file (a directory or glob
+outline lists many files and is not checked), which answers the current lines
+(a read or `FIND NODE` adds a `hint` saying so; a mutation carries none, its
+boundary diff shows them, and a rev-less form — an EOF append to a whole-file
+handle, `COPY NODE … TO`, `COPY NODES FOUND TO` — is checked the same way but
+has nothing to refuse,
+so it writes from the re-indexed bytes unannounced); a rev from before the
+rewrite is refused where the
+node's bytes changed, so a `rev_mismatch` right after a gate run is that rewrite,
+not a phantom (the refusal names the file that was re-indexed), and a node whose
+bytes did not change is edited where it now is. A `FIND` over the corpus names
+no file and is not checked, so its rows can carry a stale line for such a file
+until that file is read or edited, and `UNDO` and `ROLLBACK` are not checked
+either — they restore whole files from ForgeQL's own snapshots over whatever a
+rewrite left since; a rewrite that keeps both size and mtime is not seen until
+either moves; the check reaches only what the stale index can still name — a
+symbol the rewrite introduced or renamed answers "no symbol matches" with
+nothing re-indexed until the file is read by handle or by path, a file created
+outside ForgeQL stays unindexed until ForgeQL itself writes it or the next
+attach rebuilds the index (a reconnect re-indexes only tracked files `git diff
+HEAD` lists, never an untracked one), a file deleted or made unreadable outside
+ForgeQL keeps its rows until ForgeQL next writes or re-indexes it, is never
+taken as verified, and a read of it fails on the missing bytes, and a re-index
+that does not leave the file fresh refuses the command with its reason; and the
+in-memory backend (a source with no `.forgeql.yaml`) stores no per-file content
+id, so it is not covered at all — the ordinal handles it prints on SHOW rows do
+not resolve through `SHOW NODE`/`FIND NODE` anyway.
 
 Creation is ungated: `INSERT NODE FOR`, `COPY NODE … TO`, and appending to a
 whole-file handle. There is nothing there to fingerprint, and they cannot clobber.

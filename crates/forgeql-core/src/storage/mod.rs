@@ -226,6 +226,7 @@ pub mod path_node {
             // to land against, and that is the create-then-write bootstrap.
             end_line: count_lines(&bytes).max(1),
             rev: crate::node_id::format_rev(crate::node_id::rev_of_bytes(&bytes)),
+            hint: None,
             parent_node_id: None,
             first_child_node_id: None,
             next_sibling_node_id: None,
@@ -264,6 +265,7 @@ pub mod path_node {
             // suffix on it rather than underflowing.
             end_line: 0,
             rev: crate::node_id::format_rev_exact(rev),
+            hint: None,
             parent_node_id: None,
             first_child_node_id: None,
             next_sibling_node_id: None,
@@ -336,6 +338,22 @@ pub struct SymbolLocation {
     ///
     /// `None` for legacy segments and rows without an assigned ordinal.
     pub ordinal: Option<u32>,
+}
+
+/// The answer of [`StorageEngine::path_freshness`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathFreshness {
+    /// The file's bytes were hashed, compared with the indexed content id,
+    /// and matched.
+    Verified,
+    /// The file's bytes were hashed, compared with the indexed content id,
+    /// and differed.
+    Stale,
+    /// Nothing could be compared: no content id is held for the path, or the
+    /// file cannot be read. There is nothing stale to serve, so a gate lets
+    /// the command through — but nothing was verified, so a cache of the
+    /// verdict must not record it as such.
+    Unknown,
 }
 
 // -----------------------------------------------------------------------
@@ -748,13 +766,25 @@ pub trait StorageEngine: Send + Sync + 'static {
     /// disk (content-addressed freshness check).
     ///
     /// Returns `true` when this backend keeps no content-addressed index — it
-    /// has no stale absolute line data to serve — or when the stored segment
-    /// hash equals the live file's hash. A `false` result tells the caller to
-    /// reindex `rel_path` before trusting any line/byte offset for it, which is
-    /// what stops a stale committed segment from corrupting a file on
-    /// `CHANGE NODE` (BUG-001) or misresolving `FIND NODE` (BUG-002).
-    fn is_path_fresh(&self, _rel_path: &Path, _root: &Path) -> bool {
-        true
+    /// has no stale absolute line data to serve — or when the stored content
+    /// id equals the live file's hash. That holds for the committed segment
+    /// and for a per-session dirty one alike: a formatter, a build step or an
+    /// editor can rewrite the file after either was built, and a segment the
+    /// session wrote itself is no more current than one it inherited. A
+    /// `false` result tells the caller to reindex `rel_path` before trusting
+    /// any line or byte offset for it — that is what stops a mutation from
+    /// splicing at lines that have moved and a handle lookup from resolving
+    /// into a span that is no longer there.
+    fn is_path_fresh(&self, rel_path: &Path, root: &Path) -> bool {
+        self.path_freshness(rel_path, root) != PathFreshness::Stale
+    }
+
+    /// Whether the indexed content of `rel_path` matches the file on disk,
+    /// three-valued — see [`PathFreshness`]. `is_path_fresh` is this answer
+    /// collapsed to "not stale". A backend that holds no content id answers
+    /// `Unknown` for every path, which is what this default does.
+    fn path_freshness(&self, _rel_path: &Path, _root: &Path) -> PathFreshness {
+        PathFreshness::Unknown
     }
 
     /// Return all indexed source files as typed [`FileEntry`] rows.
