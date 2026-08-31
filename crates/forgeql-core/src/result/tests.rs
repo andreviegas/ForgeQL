@@ -955,3 +955,86 @@ fn the_reindex_notice_caps_the_paths_it_names() {
         "a refusal has no lines or revs to vouch for: {refused}"
     );
 }
+
+/// A row answering a stamp-only field's DEFAULT renders that value, not the
+/// column that follows it.
+///
+/// `has_todo` is written onto a row only when it holds, so a row answering
+/// `has_todo = 'false'` carries no such field. The metric column used to read
+/// that absence as "no value" and fall through to `usages`, which put a usage
+/// count under a `has_todo` header — `0` and `3` for two rows whose real
+/// answer was `false` both times.
+///
+/// The two rows here differ ONLY in usages, so a fix that still fell through
+/// would print two different values where the answer is the same; and asserting
+/// against `usages` rather than a literal is what keeps this from passing on a
+/// row whose usage count happened to equal the value.
+#[test]
+fn a_stamp_only_default_renders_its_value_and_not_the_usage_count() {
+    let make = |usages: usize| SymbolMatch {
+        name: "f".to_string(),
+        node_kind: None,
+        fql_kind: Some("function".to_string()),
+        language: Some("rust".to_string()),
+        path: Some(PathBuf::from("src/lib.rs")),
+        line: Some(1),
+        usages_count: Some(usages),
+        fields: HashMap::new(),
+        count: None,
+        node_id: None,
+        rev: None,
+    };
+    let ctx = QueryContext {
+        metric_hint: Some("has_todo"),
+        group_by_field: None,
+    };
+    for usages in [0_usize, 3] {
+        let row = SymbolRow::from_match_with_ctx(&make(usages), &ctx);
+        assert_eq!(
+            row.metric_str(),
+            "false",
+            "a row answering the default must render it, not its {usages} usages",
+        );
+        assert_ne!(
+            row.metric_str(),
+            usages.to_string(),
+            "the metric column fell through to `usages` under a `has_todo` header",
+        );
+    }
+}
+
+/// A row the declaration does NOT speak for renders no value rather than a
+/// number belonging to another field.
+///
+/// `has_todo` is declared for the languages whose configs name a comment kind.
+/// A `cmake` function is examined by no comment-scanning enricher, so nothing
+/// answers the field for it — stamping `false` there would claim a row the
+/// corpus arithmetic deliberately excludes, and falling through to `usages`
+/// would relabel a usage count. Neither is right; the honest column is empty.
+#[test]
+fn a_row_outside_the_declared_languages_renders_no_metric_value() {
+    let row = SymbolRow::from_match_with_ctx(
+        &SymbolMatch {
+            name: "f".to_string(),
+            node_kind: None,
+            fql_kind: Some("function".to_string()),
+            language: Some("cmake".to_string()),
+            path: Some(PathBuf::from("CMakeLists.txt")),
+            line: Some(1),
+            usages_count: Some(7),
+            fields: HashMap::new(),
+            count: None,
+            node_id: None,
+            rev: None,
+        },
+        &QueryContext {
+            metric_hint: Some("has_todo"),
+            group_by_field: None,
+        },
+    );
+    assert_eq!(
+        row.metric_str(),
+        "",
+        "nothing answers has_todo for a cmake row; it must not borrow `usages`",
+    );
+}

@@ -2355,8 +2355,17 @@ All compact output follows a uniform 2-column structure:
 "class","[MotorControl,include/motor_control.hpp,5,2]"
 ```
 
-When a numeric `WHERE` or `ORDER BY` targets an enrichment field, the last
-column shows that field's value instead of `usages`:
+When a `WHERE` or `ORDER BY` targets an enrichment field, the last column
+shows that field's value instead of `usages`, and the schema line names the
+field. Any predicate does this, not only a numeric one: `WHERE has_doc =
+'false'` puts `false` there. Four fields — `has_todo`, `has_escape`,
+`has_shadow`, `is_recursive` — are written onto a row only when they hold, and
+a row answering one of them by its declared default shows that default, not the
+absence of a stored value. **The cell is EMPTY when nothing answers the field
+for that row** — a `cmake` function has no `has_todo` either way, so
+`ORDER BY has_todo` leaves its cell blank rather than printing a number
+belonging to another column. An empty cell means "this field does not apply
+here", never zero and never a rendering fault:
 ```csv
 -- FIND symbols WHERE member_count > 10
 "find_symbols",3

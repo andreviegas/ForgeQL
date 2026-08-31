@@ -232,6 +232,42 @@ pub(crate) struct SymbolRow {
     pub rev: Option<String>,
 }
 
+/// The value the metric column carries for `field` on this row.
+///
+/// A row that stores the field answers with what it stores. A row that does
+/// NOT store it is not always a row with no answer: a stamp-only field is
+/// written only where it holds, and its declaration answers for every row the
+/// enricher examined and did not write. Reading the absence as "no value" sent
+/// the column through to `usages`, so `WHERE has_todo = 'false'` rendered a
+/// usage count under a `has_todo` header — the right rows and the right total,
+/// under a label naming a different field.
+///
+/// The declaration is asked whether it speaks for THIS row, not merely whether
+/// the field has one. A `cmake` function is examined by no comment-scanning
+/// enricher, so nothing answers `has_todo` for it, and stamping the default
+/// there would contradict the population the query itself selected — the same
+/// distinction that makes the corpus arithmetic close. Such a row renders an
+/// empty value rather than a number belonging to another field.
+fn metric_value_of(field: &str, row: &SymbolMatch) -> Option<String> {
+    if let Some(stored) = row.fields.get(field) {
+        return Some(stored.clone());
+    }
+    let canonical = crate::field_tiers::canonical(field);
+    // Only a stamp-only field answers without storing, so only one can reach
+    // the resolver below. Asking `filter::resolved_field_str` rather than the
+    // declaration directly is what keeps this render from drifting: it is the
+    // same reader the row-level evaluator and the `ORDER BY` comparator use, so
+    // a rendered value cannot disagree with the value that matched or with the
+    // key the rows were sorted on. A second copy of the resolve would be inert
+    // today and wrong the moment the resolve grows a step.
+    let _declared = crate::field_tiers::stamp_default(canonical)?;
+    Some(
+        crate::filter::resolved_field_str(row, canonical)
+            .unwrap_or("")
+            .to_owned(),
+    )
+}
+
 impl SymbolRow {
     /// Build a display row from a query match, using query-level context to
     /// decide which enrichment fields to extract.
@@ -257,7 +293,7 @@ impl SymbolRow {
             count: row.count,
             metric_value: ctx
                 .metric_hint
-                .and_then(|field| row.fields.get(field).cloned()),
+                .and_then(|field| metric_value_of(field, row)),
             group_key: ctx
                 .group_by_field
                 // Canonical, so the render keys a group the way the collapse
