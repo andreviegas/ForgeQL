@@ -704,6 +704,7 @@ impl ColumnarStorage {
 
         let mut sites = Vec::new();
         let mut unread = 0usize;
+        let mut not_text = 0usize;
         // Paths whose site set is now known: the bytes were decoded and every
         // site they hold is in `sites`, or the file is not there at all and
         // holds none. Both settle the question, and both let the caller drop a
@@ -737,6 +738,11 @@ impl ColumnarStorage {
             // Bytes that are not text hold no sites. `decode_text` draws that
             // line and applies the file's own declared encoding; see its doc.
             let Some(text) = decode_text(&bytes) else {
+                // The skip is by design; going unmentioned was not. Whatever
+                // sites these bytes hold are absent from the answer, and
+                // nothing else in the response would show that, so the file is
+                // counted and the count is stated in the hint.
+                not_text += 1;
                 continue;
             };
             // Recorded only once the bytes have actually been decoded as text.
@@ -762,7 +768,7 @@ impl ColumnarStorage {
             }
         }
 
-        (sites, settled, unread_hint(unread, needle))
+        (sites, settled, unsearched_hint(unread, not_text, needle))
     }
 
     pub(super) fn indexed_files_impl(&self) -> Vec<crate::result::FileEntry> {
@@ -1270,17 +1276,41 @@ fn decode_utf16(bytes: &[u8], unit: fn([u8; 2]) -> u16) -> String {
     out
 }
 
-/// What to say when a candidate file could not be read.
+/// What to say when a candidate file was not searched, and why.
 ///
-/// Whatever sites it holds are missing from the answer, and nothing else in the
-/// response would show that — so the count is stated rather than swallowed.
-fn unread_hint(unread: usize, needle: &str) -> Option<String> {
-    (unread > 0).then(|| {
-        format!(
-            "{unread} candidate file(s) for '{needle}' could not be read, so any site they \
-             hold is missing from this answer"
-        )
-    })
+/// Two different things can leave a file's sites out of the answer, and an
+/// agent needs both stated, because in either case a confident zero is being
+/// returned over a file that was never read:
+///
+/// * `unread` — the file exists and could not be opened (a permission, an I/O
+///   fault). Nothing is known about what it holds.
+/// * `not_text` — the file opened and its bytes are not text this engine
+///   decodes: binary (a NUL near the start), UTF-32 even when its mark
+///   declares it, and UTF-16 written without a mark, which is
+///   indistinguishable from binary. The skip is deliberate and documented;
+///   what was missing was any per-query sign that it happened, so a name
+///   living only in such a file answered zero with nothing to say a file had
+///   been passed over.
+///
+/// A file the worktree no longer holds is NOT counted by either: it has no
+/// bytes, so the answer over it is complete rather than short.
+fn unsearched_hint(unread: usize, not_text: usize, needle: &str) -> Option<String> {
+    let mut causes: Vec<String> = Vec::new();
+    if unread > 0 {
+        causes.push(format!("{unread} could not be read"));
+    }
+    if not_text > 0 {
+        causes.push(format!("{not_text} with bytes that are not text"));
+    }
+    if causes.is_empty() {
+        return None;
+    }
+    let total = unread.saturating_add(not_text);
+    let causes = causes.join(", ");
+    Some(format!(
+        "{total} candidate file(s) for '{needle}' went unsearched ({causes}), \
+         so any site they hold is missing from this answer"
+    ))
 }
 
 /// Is `path` inside what the query's own `IN` / `EXCLUDE` globs select?
@@ -1431,9 +1461,48 @@ mod tests {
 
     use super::{
         Clauses, decode_text, dedupe_file_entries, dedupe_symbol_matches, dedupe_with, holds,
-        in_scope, needle_pieces,
+        in_scope, needle_pieces, unsearched_hint,
     };
     use crate::result::{FileEntry, SymbolMatch};
+
+    /// Both cause fragments, pinned POSITIVELY.
+    ///
+    /// Two tests in `usages_read_universe.rs` assert the ABSENCE of
+    /// `"could not be read"` from a hint to prove their own subject — a
+    /// deleted path, a created directory — is not misreported as unreadable.
+    /// Nothing pinned that the string can still occur, so rewording the
+    /// fragment would have left both passing over a phrase the engine no
+    /// longer emits — vacuous without ever failing. This is the guard for
+    /// that: reword either fragment and this goes red first, naming what the
+    /// negatives depend on.
+    #[test]
+    fn each_unsearched_cause_keeps_the_wording_other_tests_key_on() {
+        let unread_only = unsearched_hint(1, 0, "k_sleep").expect("a cause fired");
+        assert!(
+            unread_only.contains("could not be read"),
+            "three negative assertions elsewhere key on this phrase: {unread_only}"
+        );
+
+        let not_text_only = unsearched_hint(0, 1, "k_sleep").expect("a cause fired");
+        assert!(
+            not_text_only.contains("not text"),
+            "the skip test keys on this phrase: {not_text_only}"
+        );
+
+        // Both causes: one sentence, both counts, and the total is their sum
+        // rather than either alone.
+        let both = unsearched_hint(1, 2, "k_sleep").expect("a cause fired");
+        assert!(both.contains("could not be read"), "{both}");
+        assert!(both.contains("not text"), "{both}");
+        assert!(
+            both.contains('3'),
+            "the total is the sum of the causes: {both}"
+        );
+
+        // Silence when nothing was skipped — a hint that always fires says
+        // nothing when it fires.
+        assert_eq!(unsearched_hint(0, 0, "k_sleep"), None);
+    }
 
     #[test]
     fn a_hash_collision_does_not_let_a_duplicate_through() {

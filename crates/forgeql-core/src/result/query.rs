@@ -56,10 +56,30 @@ pub struct QueryResult {
     /// the outer column with it and groups by its value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_by_field: Option<String>,
-    /// One-line guidance appended by the engine when the query shape is a
-    /// known footgun (e.g. a WHERE field that no row type carries — the
-    /// query silently matches nothing). Static text keyed on the observed
-    /// input; never populated on ordinary results.
+    /// One line the engine attaches to a result, either as guidance about
+    /// something that would otherwise go unsaid or, for `VACUUM`, as the
+    /// answer's own payload. Static text keyed on what the engine observed,
+    /// never inferred.
+    ///
+    /// Populated by, at the time of writing: a `WHERE` field no row type
+    /// carries (the query silently matches nothing); a name the index knows
+    /// only as a usage; files withheld from a `FIND usages` page by the file
+    /// cap; candidate files that page could not read or skipped as not text;
+    /// and `VACUUM`, which reports here what a preview could reclaim or what
+    /// an applied run did reclaim, with any deletion-error count beside it.
+    /// One more writer exists and is unreachable today — the notice attached
+    /// when a file was rewritten outside `ForgeQL`, whose `Query` arm no gated
+    /// verb currently returns.
+    /// Treat that list as what is here now rather than as a closed set: it has
+    /// grown before, and an enumeration is only true until the next writer.
+    ///
+    /// It is NOT limited to footguns, and an unscoped `FIND usages` over a
+    /// workspace holding any binary file the read universe lists carries the
+    /// skip count — a binary an ignore rule excludes, or one recognised as a
+    /// runtime artifact, is not a candidate and is not counted. So a caller
+    /// must treat a present hint as ordinary rather than exceptional. An
+    /// `IN`-scoped query over text-only files carries none. Several sentences
+    /// may be joined into one line when more than one applies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
     /// Master rev of the `LAST` set this FIND armed — the handle a bulk

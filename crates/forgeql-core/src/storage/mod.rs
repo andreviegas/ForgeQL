@@ -535,7 +535,22 @@ pub struct UsagePage {
     pub total: usize,
     /// Which files matched but were not rendered, and why.
     pub withheld: Option<crate::filter::Withheld>,
-    /// Files that exist and could not be read, reported as a count.
+    /// Candidate files that were NOT searched, reported as a count with the
+    /// reason — those that exist and could not be opened, and those whose
+    /// bytes are not text this engine decodes (binary, UTF-32, and UTF-16
+    /// written without a mark). Either way a name living only in such a file
+    /// answers zero, so the count is stated rather than swallowed.
+    ///
+    /// One count covers every source the scan draws candidates from — indexed
+    /// segments, file-only entries, a session's dirty segments and the
+    /// non-indexed files a session created — because they are collected into
+    /// one path list and read by one loop. It is filled by the indexed backend
+    /// alone: the in-memory backend answers `find_usages` from its index and
+    /// reads no file, so it leaves this `None` and its zero carries no such
+    /// signal — a boundary, not a gap to fill.
+    ///
+    /// A path the worktree no longer holds is in neither count: it has no
+    /// bytes, so the answer over it is complete rather than short.
     pub unread: Option<String>,
 }
 
@@ -673,12 +688,15 @@ pub trait StorageEngine: Send + Sync + 'static {
     /// character outside that alphabet is matched literally, so reading the
     /// files widens no name into a substring search.
     ///
-    /// [`UsagePage::unread`] is not a budget or a ceiling: it reports a specific
-    /// thing that went wrong, how many files exist and could not be read, so the
-    /// sites they hold are known to be absent instead of silently so. It carries
-    /// the count and not the paths. A path the index lists but the worktree no
-    /// longer holds is not that case at all — it has no bytes, so the answer over
-    /// it is complete.
+    /// [`UsagePage::unread`] is not a budget or a ceiling: it reports specific
+    /// things that went wrong — how many candidate files exist and could not be
+    /// opened, and how many held bytes that are not text this engine decodes —
+    /// so the sites they hold are known to be absent instead of silently so. It
+    /// carries the counts and the reasons, not the paths. A path the index
+    /// lists but the worktree no longer holds is neither case — it has no
+    /// bytes, so the answer over it is complete. An implementor that reads no
+    /// files, as the in-memory backend does, leaves it `None`; that is a
+    /// boundary to state, not a gap to fill.
     fn find_usages(
         &self,
         name: &str,

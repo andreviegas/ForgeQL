@@ -341,9 +341,19 @@ fn withholding_files_is_announced_in_a_hint() {
     let mut t = three_file_workspace();
 
     let complete = query(&mut t, &format!("FIND usages OF '{MARKER}'"));
+    // Not "no hint": a `TestSession` puts the engine's own data directory
+    // inside the workspace root, so a workspace-wide scan reads ForgeQL's own
+    // binary files, skips them as not text, and now says so — truthfully, and
+    // in a count that depends on what the engine happened to write. This case
+    // is about the FILE CAP, so what it pins is that a complete listing is not
+    // announced as capped. The assertion used to read `hint.is_none()`, which
+    // held only while a skipped file was passed over in silence.
     assert!(
-        complete.hint.is_none(),
-        "a complete listing needs no hint: {:?}",
+        !complete
+            .hint
+            .as_deref()
+            .is_some_and(|h| h.contains("LIMIT") || h.contains("total")),
+        "a complete listing must not be announced as capped: {:?}",
         complete.hint
     );
 

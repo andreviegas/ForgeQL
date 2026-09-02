@@ -298,6 +298,12 @@ impl StorageEngine for LegacyMemoryStorage {
         };
 
         prefilter::validate_order_by_field(&remaining, &views, &configs)?;
+        // The trailing `None` is `UsagePage::unread`, and it is `None` here on
+        // purpose: this backend answers from its index and opens no file, so it
+        // has neither an unreadable file nor a not-text skip to report. Its
+        // zero therefore carries no signal about unsearched candidates — a
+        // boundary the trait doc and the agent docs state, not a gap to fill by
+        // making this path read files.
         Ok(crate::storage::usage_page_from_sites(
             views, &remaining, bound, None,
         ))

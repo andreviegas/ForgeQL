@@ -204,6 +204,78 @@ fn a_file_whose_first_bytes_hold_a_nul_is_not_searched() {
     );
 }
 
+#[test]
+fn a_file_skipped_as_not_text_is_counted_in_the_hint() {
+    // The skip itself is by design and documented in six places. What was
+    // missing was any per-query sign that it happened: `idle.o` holds the
+    // searched name in plain ASCII after a NUL, so the answer over it is a
+    // confident zero with nothing to say a candidate file was passed over.
+    // The response now carries the count and the reason.
+    //
+    // Scoped to the one file on purpose. A `TestSession` puts the engine's own
+    // data directory INSIDE the workspace root, so a workspace-wide scan reads
+    // ForgeQL's own binary files and counts them too — truthfully, but the
+    // number then depends on what the engine happened to write, which is not
+    // something this case should be pinned to.
+    let mut t = read_universe_workspace();
+
+    let q = query(&mut t, &format!("FIND usages OF '{NEEDLE}' IN 'idle.o'"));
+    assert!(
+        q.results.is_empty(),
+        "the file is skipped, so it contributes no sites"
+    );
+    let hint = q
+        .hint
+        .as_deref()
+        .expect("a file was skipped as not-text, so the response owes a hint");
+    assert!(
+        hint.contains("not text"),
+        "the hint must name the reason, not just a number: {hint}"
+    );
+    assert!(
+        hint.contains('1'),
+        "exactly one candidate was in scope and it was skipped: {hint}"
+    );
+}
+
+#[test]
+fn a_skipped_file_is_still_skipped_and_a_text_file_is_still_read() {
+    // The counted file must stay out of the results — the hint is a signal
+    // beside the answer, not a licence to return bytes the scan rejected —
+    // and the control that text files are still searched, without which the
+    // assertion above could pass because nothing was read at all.
+    let mut t = read_universe_workspace();
+
+    let found = files(&query(&mut t, &format!("FIND usages OF '{NEEDLE}'")));
+    assert!(
+        !found.contains(&"idle.o".to_owned()),
+        "the counted file must stay out of the results: {found:?}"
+    );
+    assert!(
+        found.contains(&"notes.txt".to_owned()),
+        "control: text files are still searched: {found:?}"
+    );
+}
+
+#[test]
+fn a_query_that_skipped_nothing_carries_no_such_hint() {
+    // The control that keeps the case above honest. Scoped to one ordinary
+    // text file, nothing is skipped and nothing is unread, so the hint must be
+    // absent rather than a zero-valued sentence — a hint that always fires
+    // says nothing when it fires.
+    let mut t = read_universe_workspace();
+
+    let q = query(&mut t, &format!("FIND usages OF '{NEEDLE}' IN 'notes.txt'"));
+    assert!(
+        !q.results.is_empty(),
+        "the scoped query must still find its site, or this control is vacuous"
+    );
+    assert_eq!(
+        q.hint, None,
+        "nothing was skipped or unread, so no hint is owed"
+    );
+}
+
 /// The mark is the difference between the two files above. `wide.txt` and
 /// `idle.o` both hold NUL bytes; only one of them says what it is.
 #[test]
@@ -421,8 +493,17 @@ fn a_recorded_path_the_worktree_no_longer_holds_is_skipped_in_silence() {
 
     let q = query(&mut t, &format!("FIND usages OF '{NEEDLE}'"));
 
+    // The subject is the deleted path, so what is pinned is that it is not
+    // reported as unreadable. The hint may still carry the other cause: this
+    // workspace holds `idle.o`, and a `TestSession` keeps the engine's own
+    // data directory inside the root, so files skipped as not text are counted
+    // there. Asserting "no hint at all" would pin those too, which is a fact
+    // about the harness rather than about a removed file.
     assert!(
-        q.hint.as_deref().unwrap_or_default().is_empty(),
+        !q.hint
+            .as_deref()
+            .unwrap_or_default()
+            .contains("could not be read"),
         "a file that is not there is not a file that could not be read: {:?}",
         q.hint
     );
@@ -454,8 +535,13 @@ fn creating_a_directory_does_not_add_it_to_the_files_that_are_read() {
         "a directory holds no lines: {:?}",
         files(&q)
     );
+    // As above: the claim is about the created directory, so it is the unread
+    // cause that must stay silent, not the hint as a whole.
     assert!(
-        q.hint.as_deref().unwrap_or_default().is_empty(),
+        !q.hint
+            .as_deref()
+            .unwrap_or_default()
+            .contains("could not be read"),
         "nothing was unreadable, so nothing may claim it was: {:?}",
         q.hint
     );
