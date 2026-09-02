@@ -295,8 +295,10 @@ impl ColumnarStorage {
         );
     }
 
-    /// Stage 4b (BUG-006 U3): overwrite each row's `usages_count` with the
-    /// workspace-total usage-site count from the overlay usages aggregate.
+    /// Overwrite each row's `usages_count` with the workspace-total usage-site
+    /// count from the overlay usages aggregate — on every row except one the
+    /// aggregate cannot speak for, which is dropped to `None` here rather than
+    /// stamped (see [`SymbolMatch::drop_meaningless_usage_count`]).
     ///
     /// The per-segment `usages_count` column is a legacy always-zero field;
     /// the overlay FST is the source of truth. One O(log n) FST lookup per
@@ -305,6 +307,13 @@ impl ColumnarStorage {
     /// each row's value is corrected for the sites the session shadowed and
     /// added — one hash lookup per row on top, over a table built once per
     /// dirty state (see the `usage_adjust` module).
+    ///
+    /// This is the ONE funnel every columnar route stamps through — the
+    /// persistent-row page, the row-view page, the per-segment build, the
+    /// order-by-name fast path, the dirty-overlay union, and the symbol
+    /// lookup that serves the `SHOW` verbs — which is what makes the
+    /// suppression above complete on this backend rather than merely applied
+    /// in the places somebody remembered.
     pub(in super::super) fn stamp_usage_counts(&self, results: &mut [SymbolMatch]) {
         let adjust = self.usage_stamper();
         self.stamp_usage_counts_with(adjust.as_deref(), results);
@@ -333,6 +342,11 @@ impl ColumnarStorage {
                 || usize::try_from(aggregate).unwrap_or(usize::MAX),
                 |a| a.corrected(&row.name, aggregate),
             ));
+            // Stamped first and dropped after, deliberately: the rule is a
+            // property of the finished row, so it is read from the row here
+            // exactly as the in-memory backend reads it, and neither backend
+            // can grow a private idea of which rows are excluded.
+            row.drop_meaningless_usage_count();
         }
     }
 

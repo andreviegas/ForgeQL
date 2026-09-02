@@ -70,7 +70,7 @@ cleanly.
 | File listing | `FIND files [IN 'path/**'] [WHERE name = '...'] [WHERE extension = '...']` — every row carries `node_id` + `rev`; directories are rows too, marked by a trailing slash (`WHERE path LIKE '%/'`): a directory row exists when files lie beneath it, its `size` is their total bytes — an empty directory created this session is addressable by its handle but not listed |
 | Whole file / directory as a node | `n<hex>` with no ordinal (straight from `FIND files`): `SHOW NODE '<hex>'` reads it, `'<hex>(k-m)'` a line range, `INSERT AFTER NODE '<hex>'` appends at EOF |
 | Review an uncommitted change | `SHOW DIFF STAT` — the file map; then `SHOW DIFF IN 'path/**'` for hunks. `EXPORT PATCH` covers **committed** work only. |
-| Hotspots | `FIND symbols WHERE fql_kind = 'function' ORDER BY usages DESC LIMIT 10` — `usages` is a real workspace-total count |
+| Hotspots | `FIND symbols WHERE fql_kind = 'function' ORDER BY usages DESC LIMIT 10` — `usages` is a real workspace-total count of `role = 'code'` sites on every row EXCEPT a local-scope variable, which carries no `usages` value at all (its name identifies nothing outside its block, so the number would be the corpus-wide count of the name), and therefore ranks behind every row that has one and matches no `usages` predicate, `= 0` included; a function PARAMETER is the one local-looking row that still carries its name's count, the scope enricher not having examined it |
 
 ## Efficiency
 

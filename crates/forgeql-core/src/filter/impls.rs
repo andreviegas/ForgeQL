@@ -102,7 +102,20 @@ impl ClauseTarget for RowRef<'_> {
     fn field_num(&self, field: &str) -> Option<i64> {
         match field {
             "line" => Some(i64::try_from(self.row.line).unwrap_or(i64::MAX)),
-            "usages" => Some(i64::from(self.row.usages_count)),
+            // The one rule, read here too. This view never becomes a
+            // `SymbolMatch`: the in-memory backend's symbol lookup — what
+            // serves `SHOW body` / `signature` / `context` / `outline` /
+            // `members` — filters its candidates straight through this
+            // `field_num`, so a raw column here answers a `usages` predicate
+            // for a row `FIND symbols` has stopped answering it for. The
+            // FIND path never reaches this arm (its prefilter splits
+            // `usages` predicates out and applies them to the built row),
+            // which is exactly why the divergence was invisible.
+            "usages" => (!crate::result::usages_is_absent_on(
+                Some(self.table.fql_kind_of(self.row)),
+                self.table.strings.field_str(&self.row.fields, "scope"),
+            ))
+            .then(|| i64::from(self.row.usages_count)),
             // Dynamic enrichment fields — resolve string then parse.
             _ => self
                 .table

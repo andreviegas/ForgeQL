@@ -120,10 +120,19 @@ impl ColumnarStorage {
     fn prune_seg_order_by_zone_maps(&self, seg_order: &mut Vec<u32>, clauses: &Clauses) {
         'zone: for pred in &clauses.where_predicates {
             if let PredicateValue::Number(val_i64) = &pred.value {
-                let col = match pred.field.as_str() {
-                    "usages" => "usages_count",
-                    other => other,
-                };
+                let col = pred.field.as_str();
+                // `usages` is stamped at query time from the overlay usage
+                // aggregate; the per-segment `usages_count` zone map is a stale
+                // all-zeros column, so pruning on it drops every segment for
+                // `usages > 0` and keeps every segment for `usages = 0`. The
+                // FIND path has always skipped it here; this path mapped the
+                // field onto that column instead, which is why
+                // `SHOW body OF 'populate_usage_counts' WHERE usages > 0`
+                // answered "no symbol matches" for a symbol with three usages.
+                // All other numeric columns keep zone-map pruning.
+                if col == "usages" || col == "usages_count" {
+                    continue;
+                }
                 // Impossible-predicate short-circuit for u32 columns: no stored
                 // value can satisfy col < 0 (val <= 0 for Lt), col <= negative,
                 // or col = negative.  Clear all candidates without needing zone maps.
@@ -158,6 +167,10 @@ impl ColumnarStorage {
         enclosing_owner: Option<&str>,
         prefer_kinds: Option<&[&str]>,
     ) -> ResolveCandidates {
+        // One correction for the whole resolve, not one per candidate: the
+        // check that a cached adjust table still matches the dirty overlay
+        // walks that overlay.
+        let stamper = self.usage_stamper();
         let mut all: Vec<(u32, u32)> = Vec::new();
         let mut preferred: Vec<(u32, u32)> = Vec::new();
 
@@ -203,10 +216,23 @@ impl ColumnarStorage {
                 // symbol-not-found for a symbol that exists. Splitting the
                 // clause first is what makes evaluating it here correct.
                 if !clauses.where_predicates.is_empty() {
-                    let Some(row) = seg.materialize_one_row(local_row, meta.source_path.as_path())
+                    let Some(mut row) =
+                        seg.materialize_one_row(local_row, meta.source_path.as_path())
                     else {
                         continue;
                     };
+                    // The row a predicate is tested against must be the row a
+                    // FIND would have served. `usages_count` arrives here from
+                    // the per-segment column, which is a stale always-zero
+                    // legacy field; the workspace total — and the absence of
+                    // one on a local-scope variable — is stamped on. Without
+                    // this, `WHERE usages > 0` matched nothing on this path and
+                    // `WHERE usages = 0` matched everything, while the same
+                    // predicate on `FIND symbols` answered correctly.
+                    self.stamp_usage_counts_with(
+                        stamper.as_deref(),
+                        std::slice::from_mut(&mut row),
+                    );
                     if !clauses
                         .where_predicates
                         .iter()
@@ -266,6 +292,8 @@ impl ColumnarStorage {
         root: &Path,
         prefer_kinds: Option<&[&str]>,
     ) -> (Option<SymbolLocation>, Option<SymbolLocation>) {
+        // One correction for the whole resolve, as on the persistent branch.
+        let stamper = self.usage_stamper();
         let mut dirty_all: Vec<SymbolLocation> = Vec::new();
         let mut dirty_preferred: Vec<SymbolLocation> = Vec::new();
         let mut dirty_mentions: Vec<SymbolLocation> = Vec::new();
@@ -297,10 +325,25 @@ impl ColumnarStorage {
                 // lookup is the half the returned rows cannot answer, so a
                 // candidate must satisfy all of it.
                 if !clauses.where_predicates.is_empty() {
-                    let Some(row) = ds.reader.materialize_one_row(local_row, &ds.source_path)
+                    let Some(mut row) = ds.reader.materialize_one_row(local_row, &ds.source_path)
                     else {
                         continue;
                     };
+                    // Stamped exactly as the persistent branch stamps: the
+                    // `usages_count` this row arrives with is the per-segment
+                    // column, an always-zero legacy field, so an unstamped
+                    // predicate here answers `usages > 0` with nothing and
+                    // `usages = 0` with everything. It matters most on THIS
+                    // branch, because Stage 2d drops the persistent segments a
+                    // dirty file shadows — so once a session edits a file, its
+                    // symbols are resolved only here, and the lookup would
+                    // disagree with `FIND` for exactly the files being worked
+                    // on. The stamp also applies the local-scope absence, so
+                    // both branches read the one rule.
+                    self.stamp_usage_counts_with(
+                        stamper.as_deref(),
+                        std::slice::from_mut(&mut row),
+                    );
                     if !clauses
                         .where_predicates
                         .iter()

@@ -34,24 +34,29 @@
   },
   {
    "name": "control_scoped_variables_share_one_name_count",
-   "description": "Anchors the case below, and documents the defect's shape: ten let-bindings named session_id in ten different test files all report the identical usages value — the corpus-wide count of the NAME, not references to any binding.",
+   "description": "Anchors the case below and records the defect's shape: ten let-bindings named session_id, in ten different test files, every one reporting the identical usages value of 236 — the corpus-wide count of the NAME, not references to any binding. The assertion that pinned that shape (all_same on usages) cannot survive the fix and was replaced here rather than kept: once no row carries the field, all_same over an absent key is satisfied by every result, an empty one included, so it would have gone on passing while proving nothing. What this control anchors now is the fixture — ten rows, every one a local-scope variable — and the absence itself is pinned by the case below.",
    "use": "forgeql-pub.frozen",
-   "fql": "FIND symbols WHERE name = 'session_id' WHERE fql_kind = 'variable' IN 'crates/forgeql-core/tests/**'",
+   "fql": "FIND symbols WHERE name = 'session_id' WHERE fql_kind = 'variable' WHERE scope = 'local' IN 'crates/forgeql-core/tests/**'",
    "assert": {
     "row_count": 10,
-    "all_same": "usages"
+    "all_same": "kind",
+    "pointer": {
+     "/results/0/kind": "variable",
+     "/results/0/name": "session_id"
+    }
    }
   },
   {
    "name": "a_local_variables_usages_is_not_a_corpus_wide_name_count",
-   "description": "For the blast-radius workflow the agent docs recommend (FIND usages, ORDER BY usages DESC), a local variable carrying a global name-frequency is a trap. The engine does not track scoped references, so the honest answers are suppressing the field on locals (what this asserts: the key absent from the row) or a real per-binding count (re-aim this assert when that is built).",
+   "description": "PROMOTED. `usages` is the workspace-total count of a NAME's role='code' occurrence sites, which is a real dependency count only where the name identifies the symbol across the workspace. A local binding's name identifies nothing outside its block — the engine does not resolve scoped references — so every one of these ten rows reported 236, and the blast-radius workflow the agent docs teach (ORDER BY usages DESC) read that as references. A local-scope variable now carries NO usages value at all. row_count is asserted alongside the pointers so the absence cannot be satisfied by an empty result: /results/0/usages is null on a zero-row answer too, and that is exactly how this pin could pass while proving nothing. The last row is pinned as well as the first, so a suppression that reached only part of the answer would be caught.",
    "use": "forgeql-pub.frozen",
-   "enforcement": "expect_fail",
-   "expect_fail_reason": "every local variable row carries the corpus-wide count of its name (236 for session_id on this corpus), meaningless for a scoped binding and indistinguishable from a real reference count; suppress the field on local-scope variables or compute a per-binding count",
-   "fql": "FIND symbols WHERE name = 'session_id' WHERE fql_kind = 'variable' IN 'crates/forgeql-core/tests/**'",
+   "fql": "FIND symbols WHERE name = 'session_id' WHERE fql_kind = 'variable' WHERE scope = 'local' IN 'crates/forgeql-core/tests/**'",
    "assert": {
+    "row_count": 10,
     "pointer": {
-     "/results/0/usages": null
+     "/results/0/usages": null,
+     "/results/9/usages": null,
+     "/results/0/kind": "variable"
     }
    }
   }
@@ -223,25 +228,128 @@
   ,
   {
    "name": "control_zephyr_locals_share_one_name_count",
-   "description": "Anchors the case below at corpus scale and documents the shape: 11,964 local bindings named ret, every row carrying the identical corpus-wide count of the NAME. Verified live 2026-08-24 on 0.183.0.",
+   "description": "Anchors the case below at corpus scale and records the defect's shape there: 11,964 local bindings named ret, every row carrying the identical corpus-wide count of the NAME (83,611). Verified live 2026-08-24 on 0.183.0. As with its forgeql-pub twin, the all_same-on-usages assertion this control carried is vacuous once no row carries the field, so it anchors the fixture instead — three rows, every one a local-scope variable — and the absence is pinned below.",
    "use": "zephyr-andre.frozen",
    "fql": "FIND symbols WHERE name = 'ret' WHERE fql_kind = 'variable' WHERE scope = 'local' LIMIT 3",
    "assert": {
     "row_count": 3,
-    "all_same": "usages"
+    "all_same": "kind",
+    "pointer": {
+     "/results/0/kind": "variable",
+     "/results/0/name": "ret"
+    }
    }
   },
   {
    "name": "a_local_usages_is_not_a_name_count_on_zephyr",
-   "description": "The fixture case above pins ten session_id bindings; this pins the same defect where it hurts most — ret, the most reused local name in C, where the number is not merely wrong but absurd, and the blast-radius recipe in every agent doc would read it as real references.",
+   "description": "PROMOTED. The forgeql-pub case pins ten session_id bindings; this pins the same rule where it hurt most — ret, the most reused local name in C, where 83,611 is not merely wrong but absurd, and the blast-radius recipe in every agent doc would have read it as real references. row_count is asserted with the pointers because a zero-row answer also yields null at /results/0/usages.",
    "use": "zephyr-andre.frozen",
-   "enforcement": "expect_fail",
-   "expect_fail_reason": "every local ret reports the same corpus-wide name count; suppress the field on local-scope variables or compute a per-binding count — re-aim this assert if the per-binding count is built",
    "fql": "FIND symbols WHERE name = 'ret' WHERE fql_kind = 'variable' WHERE scope = 'local' LIMIT 3",
    "assert": {
+    "row_count": 3,
     "pointer": {
-     "/results/0/usages": null
+     "/results/0/usages": null,
+     "/results/2/usages": null,
+     "/results/0/kind": "variable"
     }
+   }
+  },
+  {
+   "name": "control_a_file_scope_variable_keeps_its_usage_count",
+   "description": "The other half of the ruling, and the reason the suppression is written as fql_kind='variable' AND scope='local' rather than as 'variables have no usage count'. A FILE-scope variable's name does identify it across the workspace, so its count is real and must not move: ENRICH_VER is referenced 13 times on this corpus, before the fix and after. Widen the suppression to file scope — the obvious over-reach — and this control goes red while every local pin stays green, which is the mutation check that says the boundary is where the ruling put it.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE name = 'ENRICH_VER' WHERE fql_kind = 'variable' WHERE scope = 'file'",
+   "assert": {
+    "row_count": 1,
+    "pointer": {
+     "/results/0/usages": 13,
+     "/results/0/path": "crates/forgeql-core/src/storage/columnar/mod.rs"
+    }
+   }
+  },
+  {
+   "name": "control_a_function_keeps_its_usage_count",
+   "description": "The same guard for the row kind the hotspot recipe is actually about. A function is never suppressed, so its count must read exactly as it did before: populate_usage_counts is referenced 3 times on this corpus. A suppression keyed on scope alone rather than on scope AND kind would take this row too, since the scope enricher writes 'local' on any declaration node inside a function body.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE name = 'populate_usage_counts' WHERE fql_kind = 'function'",
+   "assert": {
+    "row_count": 1,
+    "pointer": {
+     "/results/0/usages": 3
+    }
+   }
+  },
+  {
+   "name": "control_the_zephyr_file_scope_variable_keeps_its_count",
+   "description": "The file-scope guard at corpus scale: dev, the most reused file-scope name on this corpus, keeps its 98,605 while the 11,964 local ret rows lose theirs. Without it, a suppression that leaked to every variable would leave the two local pins above green and nothing red.",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE name = 'dev' WHERE fql_kind = 'variable' WHERE scope = 'file' LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "all_same": "usages",
+    "pointer": {
+     "/results/0/usages": 98605
+    }
+   }
+  },
+  {
+   "name": "control_a_zephyr_function_keeps_its_usage_count",
+   "description": "The function guard at corpus scale. z_impl_k_sleep is declared twice on this corpus and both rows report 3, unchanged by the suppression.",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE name = 'z_impl_k_sleep' WHERE fql_kind = 'function'",
+   "assert": {
+    "row_count": 2,
+    "all_same": "usages",
+    "pointer": {
+     "/results/0/usages": 3
+    }
+   }
+  },
+  {
+   "name": "a_local_variable_cannot_be_ranked_by_a_usage_count_it_does_not_have",
+   "description": "The hotspot recipe the agent docs teach, aimed at the row kind that used to poison it. Before, the top of this ranking was three local bindings named new in transforms/diff.rs, each reporting 1,544 — the corpus-wide count of the name. After, a row with no value ranks behind every row that has one, in both directions, so the page is the file-scope variables whose counts are real. The language is pinned to rust because every scope-less variable row on this corpus is a C++ parameter that keeps its name count (see the case below), and this pin is about the ordering, not about that residual. The ordering half of the fix is not free: the comparator takes its numeric branch only when BOTH rows answer with a number, and its string fallback reads nothing on either side for a field the row type declares numeric — so without the new arm a local and a file-scope variable compared EQUAL and a name/line tie-break decided the page, which is a worse answer than the one it replaced.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'variable' WHERE language = 'rust' ORDER BY usages DESC LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "rows": [
+     { "name": "count", "usages": 264, "path": "tests/fixtures/canonical/canonical.rs" },
+     { "name": "ENTRY_NAME_LEN", "usages": 20 },
+     { "name": "TOC_ENTRY_SIZE", "usages": 18 }
+    ]
+   }
+  },
+  {
+   "name": "a_cpp_parameter_still_carries_its_names_corpus_count",
+   "description": "PINS CURRENT BEHAVIOUR, NOT THE DESIRED ANSWER — promote it when the gap closes. The ruling suppresses `usages` on a variable row whose `scope` enrichment reads `local`, and deliberately not on a variable row carrying no `scope` at all: the enricher writes the field only on nodes its language declares a declaration kind, so an unexamined row is not a row known to be local, and inventing an absence there would hide counts that are real. On this corpus that boundary has exactly one population — 157 C++ function PARAMETERS, every scope-less variable row here — and a parameter is as local as any binding: `int len` in `void rangeForLoop(int arr[], int len)` still reports 745, the corpus-wide count of the name `len`, while the 11 rust `let len` bindings report nothing. Closing it means teaching the scope enricher about parameter declarations, which changes index output and needs its own enrichment-version bump; this case asserts the CURRENT number so that the day it closes, it goes red and this text is read.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'variable' WHERE name = 'len' IN 'tests/fixtures/enrichment_patterns.cpp'",
+   "assert": {
+    "row_count": 2,
+    "all_same": "usages",
+    "pointer": {
+     "/results/0/usages": 745,
+     "/results/0/line": 364
+    }
+   }
+  },
+  {
+   "name": "a_local_variable_matches_no_numeric_usages_predicate",
+   "description": "The WHERE half. 105 rows on this corpus answered fql_kind = 'variable' WHERE usages > 1000, every one a local binding carrying its name's corpus-wide count; the highest count any file-scope variable here carries is 264, so the honest answer is none. A row with no value for a field matches no numeric predicate on it — including usages = 0, which is why the dead-code recipe no longer sweeps every local into its result.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'variable' WHERE usages > 1000",
+   "assert": {
+    "row_count": 0,
+    "total": 0
+   }
+  },
+  {
+   "name": "a_usages_predicate_answers_the_same_on_show_body_as_on_find",
+   "description": "Found while enumerating every reader of the column, and fixed with the rest: the symbol-resolution path that serves SHOW body/signature/outline/members mapped a usages predicate onto the per-segment usages_count column — a stale always-zero legacy field — in its zone-map prune, and then evaluated the predicate against a row it had never stamped. Both halves said zero, so WHERE usages > 0 answered 'no symbol matches' for a symbol FIND reports 3 usages for, and WHERE usages = 0 matched every symbol. The prune now skips the field exactly as the FIND path always did, and the candidate row is stamped before the predicate reads it. The control above pins the number this must agree with.",
+   "use": "forgeql-pub.frozen",
+   "fql": "SHOW body OF 'populate_usage_counts' DEPTH 0 WHERE usages > 0",
+   "assert": {
+    "row_count": 1
    }
   },
   {

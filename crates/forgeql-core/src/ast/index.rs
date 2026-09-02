@@ -82,9 +82,17 @@ pub struct IndexRow {
     pub byte_range: Range<usize>,
     /// 1-based start line number of the node.
     pub line: usize,
-    /// Number of times this symbol name appears as an identifier reference
-    /// across the indexed workspace.  Precomputed at build time so queries
-    /// can filter/sort by `usages` without a per-row `HashMap` lookup.
+    /// Number of times this symbol NAME appears as an identifier reference
+    /// across the indexed workspace.  Precomputed at build time so queries can
+    /// filter/sort by `usages` without a per-row `HashMap` lookup.
+    ///
+    /// It is the NAME's count, not the row's, and a query must read it through
+    /// [`crate::result::usages_is_absent_on`], which suppresses it on a
+    /// local-scope variable — a binding whose name identifies nothing outside
+    /// its block, where this number is the corpus-wide total for every row
+    /// alike. Reading the field straight off the row is what let the in-memory
+    /// backend's symbol lookup answer a `usages` predicate that `FIND symbols`
+    /// no longer answers.
     #[serde(default)]
     pub usages_count: u32,
     /// Stable per-file node ordinal used to build `node_id` handles.

@@ -1003,6 +1003,78 @@ fn a_stamp_only_default_renders_its_value_and_not_the_usage_count() {
     }
 }
 
+/// Build a symbol row of the given kind, carrying `scope` when one is given.
+fn row_with_scope(kind: &str, scope: Option<&str>, usages: usize) -> SymbolMatch {
+    let mut fields = HashMap::new();
+    if let Some(scope) = scope {
+        let _ = fields.insert("scope".to_string(), scope.to_string());
+    }
+    SymbolMatch {
+        name: "session_id".to_string(),
+        node_kind: None,
+        fql_kind: Some(kind.to_string()),
+        language: Some("rust".to_string()),
+        path: Some(PathBuf::from("src/lib.rs")),
+        line: Some(1),
+        usages_count: Some(usages),
+        fields,
+        count: None,
+        node_id: None,
+        rev: None,
+    }
+}
+
+#[test]
+fn only_a_local_scope_variable_loses_its_usage_count() {
+    // The boundary is `fql_kind = 'variable'` AND `scope = 'local'`, and each
+    // half of that conjunction is load-bearing. Keyed on scope alone, the rule
+    // would take any row an enricher marks local — the scope enricher writes
+    // `local` on declaration nodes inside a function body, not only on
+    // variables. Keyed on kind alone, it would take file-scope variables,
+    // whose names DO identify them across the workspace and whose counts are
+    // real. A variable row with no `scope` at all keeps its count on purpose:
+    // the enricher writes the field only on nodes its language declares a
+    // declaration kind, so an unexamined row is not a row known to be local.
+    let cases = [
+        (("variable", Some("local")), None, "a local variable"),
+        (("variable", Some("file")), Some(7), "a file-scope variable"),
+        (("variable", None), Some(7), "a variable carrying no scope"),
+        (("function", Some("local")), Some(7), "a function"),
+        (("field", Some("local")), Some(7), "a struct field"),
+    ];
+    for ((kind, scope), expected, what) in cases {
+        let mut row = row_with_scope(kind, scope, 7);
+        row.drop_meaningless_usage_count();
+        assert_eq!(row.usages_count, expected, "{what} was judged wrongly");
+    }
+}
+
+#[test]
+fn a_row_with_no_usage_count_renders_an_empty_metric_column() {
+    // The column's header names `usages`; a row that carries none must leave
+    // the cell empty rather than print `0`, which reads as "referenced
+    // nowhere" — a fact the row does not hold. This is the same fall-through
+    // that once rendered a stamp-only default's row as the usage count under
+    // its own field's header, one step further down the chain.
+    let ctx = QueryContext {
+        metric_hint: None,
+        group_by_field: None,
+    };
+    let mut local = row_with_scope("variable", Some("local"), 370);
+    local.drop_meaningless_usage_count();
+    let rendered = SymbolRow::from_match_with_ctx(&local, &ctx);
+    assert_eq!(
+        rendered.metric_str(),
+        "",
+        "a row with no usage count rendered a number under the `usages` header",
+    );
+
+    // The control: a row that HAS a count still renders it.
+    let counted = row_with_scope("function", Some("local"), 370);
+    let rendered = SymbolRow::from_match_with_ctx(&counted, &ctx);
+    assert_eq!(rendered.metric_str(), "370");
+}
+
 /// A row the declaration does NOT speak for renders no value rather than a
 /// number belonging to another field.
 ///

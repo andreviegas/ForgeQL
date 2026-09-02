@@ -547,7 +547,7 @@ pub(super) fn find_symbols_prefilter(
         let usages = def.usages_count as usize;
         let fql = index.fql_kind_of(def);
         let lang = index.language_of(def);
-        results.push(SymbolMatch {
+        let mut hit = SymbolMatch {
             name: index.name_of(def).to_owned(),
             node_kind: Some(index.node_kind_of(def).to_owned()),
             fql_kind: Some(fql.to_owned()),
@@ -563,7 +563,12 @@ pub(super) fn find_symbols_prefilter(
             count: None,
             node_id: None,
             rev: None,
-        });
+        };
+        // The same rule the columnar backend applies in `stamp_usage_counts_with`,
+        // read off the finished row through the same method, so the two backends
+        // cannot disagree about which rows carry no usage count.
+        hit.drop_meaningless_usage_count();
+        results.push(hit);
 
         // Running top-K: hold the retained set to a bounded window without
         // letting scan order decide the page. A row leaves only once enough

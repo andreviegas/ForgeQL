@@ -28,7 +28,7 @@
 //! dead and nothing will say so.
 
 use super::*;
-use crate::ir::{Clauses, OrderBy, Predicate, PredicateValue};
+use crate::ir::{Clauses, OrderBy, Predicate, PredicateValue, SortDirection};
 use crate::result::SymbolMatch;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -1618,6 +1618,68 @@ fn order_cmp_consults_only_the_published_tie_breakers() {
         std::cmp::Ordering::Equal,
         "with no ORDER BY the comparator is the tie-breakers alone, so a field \
          outside the published list must not order these rows"
+    );
+}
+
+#[test]
+fn a_row_with_no_usage_count_ranks_after_every_row_that_has_one() {
+    // The regression this pins is not "a local sorts wrongly" — it is that
+    // the comparator could not tell the two rows apart at all. Its numeric
+    // branch fires only when BOTH sides answer with a number, and the string
+    // fallback reads nothing on either side for `usages`, which the row type
+    // declares numeric and no row stores as text. So a row carrying 500 and a
+    // row carrying nothing compared Equal, the name/line tie-break decided the
+    // page, and `FIND symbols ORDER BY usages DESC LIMIT 10` could seat a
+    // local variable among the most-depended-on symbols in the corpus.
+    let ranked = make_symbol("aaa_ranked", "function", 500);
+    let mut unranked = make_symbol("zzz_unranked", "variable", 0);
+    unranked.usages_count = None;
+
+    for direction in [SortDirection::Desc, SortDirection::Asc] {
+        let clauses = Clauses {
+            order_by: Some(OrderBy {
+                field: "usages".to_owned(),
+                direction,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            order_cmp(&ranked, &unranked, &clauses),
+            std::cmp::Ordering::Less,
+            "a row with a usage count must rank before one with none, {direction:?}"
+        );
+        assert_eq!(
+            order_cmp(&unranked, &ranked, &clauses),
+            std::cmp::Ordering::Greater,
+            "the same comparison must reverse when the arguments do, {direction:?}"
+        );
+    }
+}
+
+#[test]
+fn an_enrichment_numeric_absent_on_one_row_still_sorts_through_the_string_fallback() {
+    // The control for the arm above, and the reason it is guarded on BOTH
+    // sides resolving to nothing rather than on "one side has no number".
+    // `lines` is an open enrichment field: a row that carries it resolves to
+    // its digits as a string, so a mixed pair is decided by the fallback, and
+    // a row carrying nothing sorts under the empty string — first ascending,
+    // last descending. Widening the new arm to every mixed numeric pair would
+    // silently flip that for every enrichment metric in the engine.
+    let without = make_symbol("aaa", "function", 1);
+    let mut with = make_symbol("bbb", "function", 1);
+    let _ = with.fields.insert("lines".to_owned(), "42".to_owned());
+
+    let asc = Clauses {
+        order_by: Some(OrderBy {
+            field: "lines".to_owned(),
+            direction: SortDirection::Asc,
+        }),
+        ..Default::default()
+    };
+    assert_eq!(
+        order_cmp(&without, &with, &asc),
+        std::cmp::Ordering::Less,
+        "an enrichment numeric the row does not carry must still sort under the empty string"
     );
 }
 

@@ -113,7 +113,12 @@ pub enum Source {
     /// enricher wrote it to.
     EnrichmentColumn,
     /// Not stored per row: computed workspace-wide and attached at
-    /// materialisation (the usage-count aggregate).
+    /// materialisation (the usage-count aggregate). Keyed by NAME, so it is
+    /// attached to every row EXCEPT one whose name does not identify it across
+    /// the workspace — a local-scope variable, which is served with no value
+    /// for the field at all (`SymbolMatch::drop_meaningless_usage_count`), and
+    /// therefore matches no predicate on it, ranks behind every row that has a
+    /// value, and renders an empty metric column.
     Aggregate,
     /// Not stored per row: taken from the owning segment, which is one file.
     SegmentPath,
@@ -1480,10 +1485,27 @@ pub const FIELD_TIERS: &[FieldTier] = &[
     FieldTier {
         field: "usages",
         aliases: &[],
+        // The column exists so this table and `ZONEMAP_NUMERIC_FIELDS` agree as
+        // sets — `every_zone_mapped_column_is_declared` checks exactly that —
+        // and for no other reason: `usages_count` on a segment is a stale
+        // all-zeros legacy field, and its zone map must never prune. Both
+        // pruners now skip the name outright (`query/find.rs`,
+        // `query/resolve.rs`), so the serving below is the truth: a complete
+        // row scan, with the workspace total attached at materialisation.
+        // Claiming `ZoneMap` here described a prune that provably cannot run.
         column: Some("usages_count"),
         source: Source::Aggregate,
-        serving: ZONE_MAP_SERVING,
-        gaps: &[Gap::DirtySession],
+        serving: SCAN_ALL,
+        // No gap, like every other `SCAN_ALL` row: the scan reads every row,
+        // and the value's one dirty-session caveat is not a gap in the answer
+        // either. On a session with uncommitted edits the aggregate the value
+        // comes from is the master's, and `stamp_usage_counts_with` corrects
+        // each row through `UsageAdjust::corrected` before any predicate sees
+        // it — so the number served is exact. `Gap::DirtySession` would have
+        // been the wrong declaration twice over: it describes what a serving
+        // structure cannot see, and its fallback names the row union, which
+        // adds rows rather than correcting counts.
+        gaps: &[],
         budget: None,
         elsewhere: None,
         post_group: false,

@@ -27,7 +27,10 @@ use tempfile::tempdir;
 
 mod common;
 
-use common::{engine_with_session, engine_with_session_with_extra_files, execute_fql, fql_err};
+use common::{
+    engine_with_session, engine_with_session_legacy, engine_with_session_with_extra_files,
+    execute_fql, fql_err, try_fql,
+};
 
 // -----------------------------------------------------------------------
 // FIND symbols
@@ -1489,6 +1492,269 @@ fn find_symbols_usages_count_is_real() {
     assert!(
         !fq.results.is_empty(),
         "WHERE usages > 0 must not be pruned by the stale zone map"
+    );
+}
+
+#[test]
+fn a_local_variable_carries_no_usage_count_on_either_backend() {
+    // Universe completeness, exercised rather than argued: the rule is written
+    // once, on the finished row, and both backends call it — the columnar one
+    // from `stamp_usage_counts_with`, the in-memory one from
+    // `find_symbols_prefilter`. The fixture holds both populations, so a
+    // suppression that reached only one backend, or that reached too far,
+    // fails here rather than on a corpus.
+    for (label, (mut engine, session_id, _dir)) in [
+        ("columnar", engine_with_session()),
+        ("in-memory", engine_with_session_legacy()),
+    ] {
+        // `vel` (line 52) and `velocidad` (line 109) are declared inside
+        // function bodies. Their names identify nothing outside those bodies,
+        // so the workspace-total count of the NAME is not a fact about them.
+        for name in ["vel", "velocidad"] {
+            let fql = format!(
+                "FIND symbols WHERE name = '{name}' WHERE fql_kind = 'variable' \
+                 WHERE scope = 'local'"
+            );
+            let ForgeQLResult::Query(qr) = execute_fql(&mut engine, &session_id, &fql) else {
+                panic!("expected Query result");
+            };
+            let row = qr.results.first().expect("the fixture declares this local");
+            assert_eq!(
+                row.fields.get("scope").map(String::as_str),
+                Some("local"),
+                "{label}: {name} is the wrong fixture row for this test",
+            );
+            assert_eq!(
+                row.usages_count, None,
+                "{label}: {name} still carries a usage count",
+            );
+        }
+
+        // The control on the same fixture, the same backend and the same
+        // query: a file-scope variable's name DOES identify it across the
+        // workspace, so its count is real and must survive.
+        let ForgeQLResult::Query(qr) = execute_fql(
+            &mut engine,
+            &session_id,
+            "FIND symbols WHERE name = 'motorPrincipal' WHERE fql_kind = 'variable'",
+        ) else {
+            panic!("expected Query result");
+        };
+        let row = qr.results.first().expect("motorPrincipal row");
+        assert_eq!(row.fields.get("scope").map(String::as_str), Some("file"));
+        assert!(
+            row.usages_count.is_some(),
+            "{label}: suppression leaked past local scope onto motorPrincipal",
+        );
+
+        // The other edge of the same boundary, pinned where the ruling draws
+        // it. This fixture declares `velocidad` twice more as a function
+        // PARAMETER (lines 48 and 232), and the scope enricher writes `scope`
+        // only on the declaration kinds a language declares — so a parameter
+        // row carries none, is not a row KNOWN to be local, and keeps the
+        // corpus-wide count of its name. That is the deliberate residual:
+        // inventing an absence for every unexamined row would hide counts
+        // that are real, and closing it properly means teaching the enricher
+        // about parameters, which changes index output.
+        let ForgeQLResult::Query(qr) = execute_fql(
+            &mut engine,
+            &session_id,
+            "FIND symbols WHERE name = 'velocidad' WHERE fql_kind = 'variable' WHERE line = 48",
+        ) else {
+            panic!("expected Query result");
+        };
+        let param = qr.results.first().expect("the parameter row at line 48");
+        assert_eq!(
+            param.fields.get("scope"),
+            None,
+            "{label}: the fixture drifted — this row now carries a scope",
+        );
+        assert!(
+            param.usages_count.is_some(),
+            "{label}: the absence reached a row that is not known to be local",
+        );
+
+        // A row with no value matches NO numeric predicate on the field —
+        // `= 0` included, which is why the dead-code recipe no longer sweeps
+        // every local binding into its result.
+        for pred in ["usages > 0", "usages = 0"] {
+            let fql =
+                format!("FIND symbols WHERE name = 'vel' WHERE fql_kind = 'variable' WHERE {pred}");
+            let ForgeQLResult::Query(qr) = execute_fql(&mut engine, &session_id, &fql) else {
+                panic!("expected Query result");
+            };
+            assert!(
+                qr.results.is_empty(),
+                "{label}: a row with no usages value answered `{pred}`",
+            );
+        }
+    }
+}
+
+#[test]
+fn a_usages_predicate_answers_the_same_on_a_symbol_lookup_as_on_find() {
+    // The symbol-resolution path — what serves SHOW body / signature / context
+    // / outline / members — read the column differently from FIND on BOTH
+    // backends, in two different ways, and this test runs over both because
+    // fixing one of them left the other saying the opposite.
+    //
+    // Columnar: the zone-map prune mapped `usages` onto the per-segment
+    // `usages_count` column, a stale always-zero legacy field, so `> 0`
+    // dropped every candidate segment; and the candidate row it tested the
+    // predicate against was never stamped, so the row-level check said zero
+    // too. `WHERE usages > 0` answered "no symbol matches" for a symbol FIND
+    // reports usages for, and `WHERE usages = 0` matched every symbol.
+    //
+    // In-memory: candidates are filtered through the raw index row, whose
+    // `field_num("usages")` returned the stored name count with the
+    // local-scope rule never applied — so a lookup matched a local variable on
+    // a count FIND no longer serves for it. `>= 0` is the probe because it
+    // holds for every count and for no absence, whatever the number happens
+    // to be.
+    for (label, (mut engine, session_id, _dir)) in [
+        ("columnar", engine_with_session()),
+        ("in-memory", engine_with_session_legacy()),
+    ] {
+        let ForgeQLResult::Query(qr) = execute_fql(
+            &mut engine,
+            &session_id,
+            "FIND symbols WHERE name = 'encenderMotor' WHERE fql_kind = 'function'",
+        ) else {
+            panic!("expected Query result");
+        };
+        let found = qr
+            .results
+            .first()
+            .and_then(|r| r.usages_count)
+            .expect("encenderMotor carries a usage count on the FIND path");
+        assert!(found > 0, "{label}: fixture must give encenderMotor usages");
+
+        drop(
+            try_fql(
+                &mut engine,
+                &session_id,
+                "SHOW body OF 'encenderMotor' DEPTH 0 WHERE usages > 0",
+            )
+            .unwrap_or_else(|e| {
+                panic!("{label}: the lookup must resolve a symbol FIND reports usages for: {e}")
+            }),
+        );
+
+        assert!(
+            try_fql(
+                &mut engine,
+                &session_id,
+                "SHOW body OF 'encenderMotor' DEPTH 0 WHERE usages = 0",
+            )
+            .is_err(),
+            "{label}: the lookup matched a symbol on a count it does not have",
+        );
+
+        // The local-variable half: `vel` carries no usage count, so no
+        // `usages` predicate may resolve it — while `motorPrincipal`, a
+        // file-scope variable in the same file, still resolves through one.
+        assert!(
+            try_fql(
+                &mut engine,
+                &session_id,
+                "SHOW context OF 'vel' WHERE usages >= 0",
+            )
+            .is_err(),
+            "{label}: the lookup resolved a local variable on a usage count it does not carry",
+        );
+        drop(
+            try_fql(
+                &mut engine,
+                &session_id,
+                "SHOW context OF 'motorPrincipal' WHERE usages >= 0",
+            )
+            .unwrap_or_else(|e| {
+                panic!("{label}: the absence reached a file-scope variable's lookup: {e}")
+            }),
+        );
+    }
+}
+
+#[test]
+fn a_dirty_session_lookup_reads_the_usage_count_the_same_way() {
+    // The dirty-overlay branch of the symbol lookup is a SECOND copy of the
+    // predicate test, and it was the copy left unstamped. It matters more than
+    // its twin, not less: Stage 2d drops the persistent segments a dirty file
+    // shadows, so the moment a session edits a file, that file's symbols are
+    // resolved only here — and the lookup would have disagreed with `FIND`
+    // for exactly the files being worked on. Dirty rows exist only on the
+    // columnar backend, so this case does not run over the in-memory one.
+    let (mut engine, session_id, _dir) = engine_with_session();
+
+    let motor_principal = |engine: &mut ForgeQLEngine| {
+        let ForgeQLResult::Query(qr) = execute_fql(
+            engine,
+            &session_id,
+            "FIND symbols WHERE name = 'motorPrincipal' WHERE fql_kind = 'variable'",
+        ) else {
+            panic!("expected Query result");
+        };
+        let row = qr.results.first().expect("motorPrincipal row");
+        (
+            row.node_id.clone().expect("a node handle"),
+            row.rev.clone().expect("a rev"),
+            row.line.expect("a line"),
+        )
+    };
+
+    let (node, rev, line_before) = motor_principal(&mut engine);
+
+    // Any edit to the file will do: what matters is that it becomes dirty, so
+    // the lookup stops answering from the persistent segment. It is inserted
+    // BEFORE the node deliberately — see the assertion below.
+    let edit = format!("INSERT BEFORE NODE '{node}' IF REV '{rev}' WITH '// touched'");
+    match execute_fql(&mut engine, &session_id, &edit) {
+        ForgeQLResult::Mutation(m) => assert!(m.applied, "the fixture edit did not apply"),
+        other => panic!("expected Mutation, got {other:?}"),
+    }
+
+    // Without this the whole test is vacuous, and vacuous in the direction
+    // that looks like success: if the edit did not put the file in the dirty
+    // overlay, every probe below is answered by the persistent branch — which
+    // this change already stamps — and the case would stay green with the
+    // dirty branch left exactly as broken as it was found.
+    //
+    // The signal has to be one the edit actually moves. A node's `rev` is the
+    // hash of that node's OWN span, so inserting a sibling after it leaves the
+    // rev identical and the file dirty all the same — this assertion was
+    // written that way first and fired, which is how the line below is here
+    // rather than a comment saying revs move. A line number does move, and a
+    // moved line is the file re-indexed into this session's overlay.
+    let (_, _, line_after) = motor_principal(&mut engine);
+    assert_eq!(
+        line_after,
+        line_before + 1,
+        "the edit did not reach the session's overlay, so the probes below \
+         would be answered by the persistent branch and prove nothing",
+    );
+
+    // The function keeps a real count on a dirty session — the aggregate is
+    // the master's, corrected by `UsageAdjust`. An unstamped dirty branch
+    // reads the stale all-zeros column instead, so this probe fails in one
+    // direction and the `>= 0` probe below in the other.
+    drop(
+        try_fql(
+            &mut engine,
+            &session_id,
+            "SHOW context OF 'encenderMotor' WHERE usages > 0",
+        )
+        .unwrap_or_else(|e| panic!("a dirty session lost a function's usage count: {e}")),
+    );
+
+    // And the local still carries none.
+    assert!(
+        try_fql(
+            &mut engine,
+            &session_id,
+            "SHOW context OF 'vel' WHERE usages >= 0",
+        )
+        .is_err(),
+        "a dirty session resolved a local variable on a usage count it does not carry",
     );
 }
 

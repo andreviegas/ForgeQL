@@ -974,32 +974,57 @@ pub(crate) fn order_cmp<T: ClauseTarget>(a: &T, b: &T, clauses: &Clauses) -> Ord
     // Primary key — only when an explicit ORDER BY clause is present.
     if let Some(ref order_by) = clauses.order_by {
         let field = crate::field_tiers::canonical(&order_by.field);
-        let primary = if let (Some(va), Some(vb)) = (a.field_num(field), b.field_num(field)) {
-            match order_by.direction {
+        let (na, nb) = (a.field_num(field), b.field_num(field));
+        let primary = match (na, nb) {
+            (Some(va), Some(vb)) => match order_by.direction {
                 SortDirection::Desc => vb.cmp(&va),
                 SortDirection::Asc => va.cmp(&vb),
+            },
+            // One row answers this ordering with a number, the other carries
+            // no value for the field AND has no string form either — so the
+            // fallback below would read "" on both sides and call them equal,
+            // leaving a name tie-break to decide their rank. `usages` is where
+            // that bites: a local-scope variable carries no usage count, and
+            // `FIND symbols ORDER BY usages DESC LIMIT 10`, the hotspot query
+            // the agent docs teach, would otherwise seat such a row among the
+            // most-depended-on symbols. A row with no value ranks AFTER every
+            // row that has one, in both directions — absent is not a number
+            // and cannot outrank one. The guard keeps this away from every
+            // field the fallback can actually tell apart: an enrichment
+            // numeric a row does not carry still resolves to a string on the
+            // rows that do, so those pairs take the branch below unchanged.
+            (Some(_), None) | (None, Some(_))
+                if resolved_field_str(a, field).is_none()
+                    && resolved_field_str(b, field).is_none() =>
+            {
+                if na.is_some() {
+                    Ordering::Less
+                } else {
+                    Ordering::Greater
+                }
             }
-        } else {
-            // Through the same resolver the predicates use, so a row that
-            // answers `has_todo = 'false'` sorts among the falses instead of
-            // among the rows that carry nothing. A field read one way for
-            // WHERE and another for ORDER BY is the disagreement this whole
-            // declaration exists to prevent.
-            //
-            // On `fql_kind` the two agree without help: a row whose kind is
-            // empty carries that as a value, so it sorts under the empty string
-            // and compares as the empty string. They part company on ONE thing,
-            // and deliberately — a verb that RENDERS the kindless row as
-            // `unknown` has its equality spelled back to the stored empty value,
-            // while the sort key stays the spelling the verb printed, so a
-            // `SHOW outline … ORDER BY fql_kind` puts those rows under `u`,
-            // where the reader can see them, and the equality still answers them
-            // under either spelling.
-            let sa = resolved_field_str(a, field).unwrap_or("");
-            let sb = resolved_field_str(b, field).unwrap_or("");
-            match order_by.direction {
-                SortDirection::Asc => sa.cmp(sb),
-                SortDirection::Desc => sb.cmp(sa),
+            _ => {
+                // Through the same resolver the predicates use, so a row that
+                // answers `has_todo = 'false'` sorts among the falses instead of
+                // among the rows that carry nothing. A field read one way for
+                // WHERE and another for ORDER BY is the disagreement this whole
+                // declaration exists to prevent.
+                //
+                // On `fql_kind` the two agree without help: a row whose kind is
+                // empty carries that as a value, so it sorts under the empty string
+                // and compares as the empty string. They part company on ONE thing,
+                // and deliberately — a verb that RENDERS the kindless row as
+                // `unknown` has its equality spelled back to the stored empty value,
+                // while the sort key stays the spelling the verb printed, so a
+                // `SHOW outline … ORDER BY fql_kind` puts those rows under `u`,
+                // where the reader can see them, and the equality still answers them
+                // under either spelling.
+                let sa = resolved_field_str(a, field).unwrap_or("");
+                let sb = resolved_field_str(b, field).unwrap_or("");
+                match order_by.direction {
+                    SortDirection::Asc => sa.cmp(sb),
+                    SortDirection::Desc => sb.cmp(sa),
+                }
             }
         };
         if primary != Ordering::Equal {

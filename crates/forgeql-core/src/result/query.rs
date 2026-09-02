@@ -116,7 +116,10 @@ pub struct SymbolMatch {
     /// 1-based line number of the symbol's definition or usage site.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
-    /// Number of times this symbol is referenced across the codebase.
+    /// Workspace-total count of `role = 'code'` occurrence sites for this
+    /// row's NAME — `None` on a row whose name does not identify it across the
+    /// workspace, which today is exactly a local-scope variable (see
+    /// [`SymbolMatch::drop_meaningless_usage_count`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usages_count: Option<usize>,
     /// Dynamic metadata fields from the index row.
@@ -138,6 +141,60 @@ pub struct SymbolMatch {
     /// the rev costs a round trip per edit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rev: Option<String>,
+}
+
+/// Whether a row must carry NO value for `usages`.
+///
+/// `usages` is the workspace-total number of `role = 'code'` occurrence sites
+/// of a row's NAME, and it is a real dependency count only for a symbol whose
+/// name identifies it across the workspace — a function, a type, a file-scope
+/// variable. A local binding's name identifies nothing outside the block that
+/// declares it: the engine does not resolve scoped references, so all 11,964
+/// locals named `ret` in a Zephyr checkout would each report the corpus-wide
+/// 83,611. Rather than serve a number that reads as a reference count and is
+/// not one, such a row carries NO value for the field, and every reader sees
+/// it as value-absent — `WHERE`, `ORDER BY`, `HAVING`, and the rendered column
+/// alike.
+///
+/// The exclusion is exactly `fql_kind = 'variable'` AND `scope = 'local'`. A
+/// variable row carrying no `scope` at all keeps its count: the scope enricher
+/// writes the field only on nodes its language declares a declaration kind, so
+/// a row it never examined is not a row known to be local, and inventing an
+/// absence there would hide counts that are real.
+///
+/// **This is the ONE place the rule lives**, and every reader of the column
+/// reaches it from here:
+///
+/// * the columnar backend's `stamp_usage_counts_with` — the single funnel
+///   every columnar route stamps through (persistent rows, dirty-session rows,
+///   the row-view page route, the order-by-name fast path, and the symbol
+///   lookup that serves the `SHOW` verbs) — via
+///   [`SymbolMatch::drop_meaningless_usage_count`];
+/// * the in-memory backend's `find_symbols_prefilter`, via the same method on
+///   the row it has just built;
+/// * the in-memory backend's ROW VIEW (`RowRef::field_num`), which is what its
+///   own symbol lookup filters candidates through — a reader that never builds
+///   a `SymbolMatch` at all, and the one this rule was first written without.
+///   Leaving it on the raw column made `SHOW context OF '<local>' WHERE
+///   usages >= 0` resolve a row `FIND symbols` no longer answers for.
+// pub(crate), not pub: re-exported at crate scope via `pub use query::*` in the
+// parent module, where the pub(crate)-vs-pub distinction is meaningful.
+#[allow(clippy::redundant_pub_crate)]
+#[must_use]
+pub(crate) fn usages_is_absent_on(fql_kind: Option<&str>, scope: Option<&str>) -> bool {
+    fql_kind == Some(crate::ast::lang::FQL_VARIABLE) && scope == Some("local")
+}
+
+impl SymbolMatch {
+    /// Apply [`usages_is_absent_on`] to a finished row.
+    pub(crate) fn drop_meaningless_usage_count(&mut self) {
+        if usages_is_absent_on(
+            self.fql_kind.as_deref(),
+            self.fields.get("scope").map(String::as_str),
+        ) {
+            self.usages_count = None;
+        }
+    }
 }
 
 /// A `SHOW COMMITS` row: the commit hash and its subject line, and nothing else.
@@ -339,10 +396,17 @@ impl SymbolRow {
 
     /// The display string for the last column in CSV output.
     ///
-    /// Unlike `metric()`, this preserves non-numeric enrichment strings
-    /// (e.g. `cast_style = "c_style"`) instead of falling back to 0.
+    /// This preserves non-numeric enrichment strings (e.g.
+    /// `cast_style = "c_style"`) instead of falling back to 0.
     ///
-    /// Priority: `count` (GROUP BY) → `metric_value` (enrichment, verbatim) → `usages`.
+    /// Priority: `count` (GROUP BY) → `metric_value` (enrichment, verbatim) →
+    /// `usages` — and EMPTY when the row carries none of the three, rather
+    /// than `0`. The column's header names the field it renders, so a row
+    /// with no usage count (a local-scope variable; see
+    /// [`SymbolMatch::drop_meaningless_usage_count`]) must not print a number
+    /// there: printing `0` would state a fact the row does not hold, which is
+    /// the same fall-through that once rendered a stamp-only default's row as
+    /// the usage count under its own field's header.
     pub(crate) fn metric_str(&self) -> String {
         if let Some(c) = self.count {
             return c.to_string();
@@ -350,6 +414,6 @@ impl SymbolRow {
         if let Some(ref v) = self.metric_value {
             return v.clone();
         }
-        self.usages.unwrap_or(0).to_string()
+        self.usages.map_or_else(String::new, |n| n.to_string())
     }
 }
