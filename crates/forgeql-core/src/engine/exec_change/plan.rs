@@ -242,8 +242,20 @@ impl ForgeQLEngine {
     ///
     /// Mechanical and language-agnostic: it rewrites the exact bytes `apply()`
     /// captured before the edit, reindexes the restored files, and invalidates
-    /// the commit gate like any other mutation. `UNDO LAST-n` restores the slot
-    /// `n` back, reversing the `n + 1` most recent mutations at once.
+    /// the commit gate like any other mutation. `UNDO LAST-n` reaches the slot
+    /// `n` back and rewrites the files THAT mutation touched, which reverses the
+    /// `n + 1` most recent mutations only where they touched the same files — a
+    /// newer mutation to a different file survives it and needs its own call.
+    ///
+    /// A bare `UNDO` is `LAST-0` on every call and advances no cursor, so
+    /// issuing it twice addresses one slot twice. That is deliberate — retrying
+    /// a destructive verb after a timeout must not step further back than the
+    /// first call would have — and it is why a file already holding the slot's
+    /// bytes is left alone. A call that rewrites nothing answers
+    /// `applied: false` with an empty `files_changed` instead of reporting a
+    /// restore it did not perform, and touches nothing downstream: a tree that
+    /// did not change cannot have made the index, the `FOUND` set or a
+    /// satisfied commit gate stale.
     pub(in crate::engine) fn exec_undo(
         &mut self,
         session_id: Option<&str>,
@@ -262,12 +274,59 @@ impl ForgeQLEngine {
             );
         };
 
-        // Restore each captured file to its pre-edit bytes.
+        // Restore each captured file, skipping any that already holds the bytes
+        // this slot would write. A bare UNDO is LAST-0 on every call and never
+        // walks the ring, so a second one addresses the slot the first already
+        // restored; rewriting those bytes would change nothing while reporting a
+        // restore that did not happen.
+        //
+        // The test is per-file bytes, deliberately, and the report below says
+        // only that — not that the tree is back at its pre-mutation state. A
+        // snapshot entry of zero bytes means both "the file was empty" and "the
+        // file did not exist" (`TransformPlan::apply` records an empty vector for
+        // a file it creates), so a mutation that created an EMPTY file leaves
+        // nothing here to distinguish, and its UNDO reports no rewrite while the
+        // created file is still there. Skipping empty bytes anyway would be the
+        // wrong cure: `INSERT NODE FOR` followed by `INSERT AFTER NODE` has a
+        // legitimately empty snapshot and must keep being skipped on a repeat.
         let mut files_changed: Vec<PathBuf> = Vec::with_capacity(snapshot.files.len());
         for file in &snapshot.files {
             let abs = root.join(&file.rel_path);
+            if std::fs::read(&abs).is_ok_and(|current| current == file.bytes) {
+                continue;
+            }
             crate::workspace::file_io::write_atomic(&abs, &file.bytes)?;
             files_changed.push(abs);
+        }
+
+        if files_changed.is_empty() {
+            // Nothing on disk moved, so nothing downstream is stale: the index,
+            // the FOUND set and any satisfied commit gate all still describe the
+            // tree that is there, and none of them is invalidated here.
+            // `applied: false` is what lets an agent branch on the difference —
+            // the field already means "not written to disk" on a dry run.
+            return Ok(ForgeQLResult::Mutation(MutationResult {
+                op: "undo".to_string(),
+                applied: false,
+                structural_errors: Vec::new(),
+                edit_count: 0,
+                files_changed,
+                lines_written: 0,
+                lines_removed: 0,
+                diff: Some(format!(
+                    "UNDO: every file the '{}' slot covers already holds its \
+                     pre-edit bytes — nothing changed. Bare UNDO always addresses \
+                     the most recent mutation (LAST-0), so repeating it does not \
+                     step further back; use UNDO LAST-n to reach the slot n \
+                     mutations back, which rewrites the files THAT mutation \
+                     touched — a newer mutation to a different file is not \
+                     reversed by it.",
+                    snapshot.op
+                )),
+                suggestions: Vec::new(),
+                new_node_id: None,
+                new_rev: None,
+            }));
         }
 
         // The working tree changed: reindex the restored files and invalidate
@@ -294,7 +353,7 @@ impl ForgeQLEngine {
             op: "undo".to_string(),
             applied: true,
             structural_errors: Vec::new(),
-            edit_count: snapshot.files.len(),
+            edit_count: files_changed.len(),
             files_changed,
             lines_written: 0,
             lines_removed: 0,

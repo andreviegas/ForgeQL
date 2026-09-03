@@ -78,7 +78,7 @@ You are a code exploration and transformation agent. All source code is accessed
 | Sweep a whole FIND result | `CHANGE NODES FOUND IF REV '<master>' MATCHING 'old' WITH 'new'` — a handle contributes its whole span, a usage row its one line (a usage row displays its file's handle so you can edit the site directly, but still contributes only its line here) |
 | Delete a whole FIND result | `DELETE NODES FOUND IF REV '<master>'` — `IF REV` mandatory |
 | Relocate a whole FIND result | `MOVE NODES FOUND IF REV '<master>' TO 'dir/'` · `COPY NODES FOUND TO 'dir/'` (ungated) — each member keeps its basename; two members sharing a basename are refused, never merged |
-| Reverse a bad edit | `UNDO` (most recent) · `UNDO LAST-n` |
+| Reverse a bad edit | `UNDO` (most recent; it is `LAST-0` every call, so a repeat rewrites nothing and answers `applied: false`) · `UNDO LAST-n` (how you step further back) |
 | Long test gate | `JOB START 'step'` → `JOB STATUS <id>` / `JOB LIST` (background, queued) |
 | Page/grep buffered output | `SHOW MORE [HEAD n \| TAIL n \| n-m] [WHERE text MATCHES '...']` |
 
@@ -201,8 +201,10 @@ TAG
 -- Raw-text CHANGE FILE / line-range copy/move: non-indexed files only
 -- (CHANGE FILE on indexed files is disabled — see syntax reference)
 
-UNDO                     -- reverse the most recent mutation
-UNDO LAST-n              -- restore the state from n mutations back
+UNDO                     -- reverse the most recent mutation (always LAST-0;
+                         --   a repeat changes nothing and says applied: false)
+UNDO LAST-n              -- reach the slot n back; rewrites the files THAT
+                         --   mutation touched (a newer edit to another file survives)
 
 BEGIN TRANSACTION 'name'
   -- CHANGE / INSERT / DELETE / MOVE NODE / VERIFY commands

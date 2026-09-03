@@ -63,7 +63,7 @@ The local workspace may be empty — never fall back to local filesystem tools (
 | Insert around a node | `INSERT BEFORE/AFTER NODE '<id>' WITH '...'` |
 | Delete a node | `DELETE NODE '<id>' IF REV '<rev>'` — `'<id>(n-m)'` deletes lines within it |
 | Relocate a node | `MOVE NODE '<src>' BEFORE/AFTER NODE '<dst>'` — verbatim payload, atomic, cross-file; source removal absorbs trailing blanks |
-| Reverse a bad edit | `UNDO` (most recent) · `UNDO LAST-n` |
+| Reverse a bad edit | `UNDO` (most recent; it is `LAST-0` every call, so a repeat rewrites nothing and answers `applied: false`) · `UNDO LAST-n` (how you step further back) |
 | Long test gate | `JOB START 'step'` → `JOB STATUS <id>` / `JOB LIST` (background, FIFO-queued) |
 
 ## Anti-Patterns
@@ -171,8 +171,10 @@ COPY NODES FOUND TO 'dir/'                              -- creation only, so ung
 
 -- Heredoc form when content contains quotes: WITH <<TAG … TAG (tag uppercase, own line)
 
-UNDO                     -- reverse the most recent mutation
-UNDO LAST-n              -- restore the state from n mutations back
+UNDO                     -- reverse the most recent mutation (always LAST-0;
+                         --   a repeat changes nothing and says applied: false)
+UNDO LAST-n              -- reach the slot n back; rewrites the files THAT
+                         --   mutation touched (a newer edit to another file survives)
 
 BEGIN TRANSACTION 'name'
   -- CHANGE / INSERT / DELETE / MOVE NODE / VERIFY commands

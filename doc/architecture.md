@@ -279,7 +279,7 @@ The engine never auto-corrects the text it splices — no comma fixing, no brace
 - every mutation reindexes the touched files and answers with `new_node_id`, `lines_written`, and `lines_removed` (the destructive-edit signal);
 - the response includes a **boundary diff** — context lines above and below the change, each carrying an inline `node_id(offset)` handle — built *after* apply + reindex so the handles address the post-edit tree;
 - an optimistic-concurrency guard (`IF REV`) rejects a mutation when the node changed since it was read, returning the node's current content;
-- `UNDO [LAST-n]` restores the pre-edit bytes from a 10-slot per-session ring;
+- `UNDO [LAST-n]` restores the pre-edit bytes from a 10-slot per-session ring; bare `UNDO` is `LAST-0` on every call, so a repeat re-addresses that slot, rewrites nothing and answers `applied: false` rather than a second restore;
 - transactions checkpoint the worktree and `ROLLBACK` restores it wholesale.
 
 ### Verify, Commit Gate, and Background Jobs

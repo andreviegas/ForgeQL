@@ -6,7 +6,8 @@
 //! captures specifically so a write can be reversed. Instead of dropping it,
 //! the engine writes it here as the most-recent ring slot. `UNDO [LAST-n]`
 //! reads slot `n` back and rewrites those bytes: restoring `LAST-0` reverses the
-//! most recent mutation, `LAST-1` reverses the two most recent, and so on.
+//! most recent mutation, and `LAST-1` rewrites the files the mutation before it
+//! touched — which reverses both only where the two touched the same files.
 //!
 //! # Storage and lifecycle
 //!

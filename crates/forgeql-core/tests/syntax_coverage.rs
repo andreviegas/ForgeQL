@@ -2664,8 +2664,11 @@ fn undo_restores_previous_file_contents() {
     assert_eq!(common::as_mutation(&r).op, "undo");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "first");
 
-    // UNDO LAST-1 reverses two mutations back: the file returns to its
-    // pre-creation (empty) state, matching rollback semantics.
+    // BOTH mutations here touched the SAME file, so the slot one back holds
+    // that file's pre-creation (empty) bytes and UNDO LAST-1 empties it. A slot
+    // holds only the files its own mutation touched, so this is not a whole-tree
+    // rewind — see undo_last_n_rewrites_only_the_files_that_mutation_touched for
+    // the different-file case, where the newer edit survives LAST-1.
     let _ = exec(&mut e, &sid, "UNDO LAST-1");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
 }
@@ -2673,6 +2676,97 @@ fn undo_restores_previous_file_contents() {
 #[test]
 fn undo_with_no_snapshot_errors() {
     let (mut e, sid, _dir) = engine_with_session();
+    // The n = 0 end of the same question the repeat case above asks: with
+    // NOTHING mutated in the session, the ring holds no slot at all. That is
+    // not the same defect — it does not claim a restore, it refuses — and this
+    // assertion is what keeps it from quietly becoming one.
     let msg = exec_err(&mut e, &sid, "UNDO");
     assert!(msg.contains("nothing to undo"), "got: {msg}");
+}
+
+#[test]
+fn a_repeated_bare_undo_reports_that_it_changed_nothing() {
+    let (mut e, sid, _dir) = engine_with_session();
+    let root = e.session_worktree(&sid).expect("worktree");
+    let first = root.join("undo_first.txt");
+    let second = root.join("undo_second.txt");
+
+    // Two mutations in DIFFERENT files, so a second restore of the same ring
+    // slot cannot be mistaken for a restore of the other file's edit.
+    let _ = exec(&mut e, &sid, "CHANGE FILE 'undo_first.txt' WITH 'one'");
+    let _ = exec(&mut e, &sid, "CHANGE FILE 'undo_second.txt' WITH 'two'");
+
+    let r = exec(&mut e, &sid, "UNDO");
+    let m = common::as_mutation(&r);
+    assert!(
+        m.applied,
+        "the first UNDO restores the most recent mutation"
+    );
+    assert_eq!(m.files_changed.len(), 1, "got: {:?}", m.files_changed);
+    assert_eq!(fs::read_to_string(&second).unwrap(), "");
+    assert_eq!(fs::read_to_string(&first).unwrap(), "one");
+
+    // Bare UNDO is LAST-0 on every call and advances no cursor, so this one
+    // addresses the slot the first already restored. It must report that it
+    // changed nothing instead of claiming a restore it did not perform.
+    let r = exec(&mut e, &sid, "UNDO");
+    let m = common::as_mutation(&r);
+    assert_eq!(m.op, "undo");
+    assert!(!m.applied, "a repeat that rewrites no bytes is not applied");
+    assert!(m.files_changed.is_empty(), "got: {:?}", m.files_changed);
+    assert_eq!(m.edit_count, 0);
+    let diff = m.diff.as_deref().unwrap_or("");
+    assert!(diff.contains("nothing changed"), "got: {diff}");
+    assert!(diff.contains("UNDO LAST-n"), "got: {diff}");
+
+    // And the earlier mutation is untouched: the repeat did not step further
+    // back, which is the whole point of keeping bare UNDO at LAST-0.
+    assert_eq!(fs::read_to_string(&first).unwrap(), "one");
+}
+
+#[test]
+fn undo_then_undo_last_1_restores_both_mutations() {
+    let (mut e, sid, _dir) = engine_with_session();
+    let root = e.session_worktree(&sid).expect("worktree");
+    let first = root.join("undo_first.txt");
+    let second = root.join("undo_second.txt");
+
+    let _ = exec(&mut e, &sid, "CHANGE FILE 'undo_first.txt' WITH 'one'");
+    let _ = exec(&mut e, &sid, "CHANGE FILE 'undo_second.txt' WITH 'two'");
+
+    // The control for the case above: the ring holds both snapshots the whole
+    // time, and LAST-n is how a caller steps. So a repeated bare UNDO reporting
+    // nothing is a report about that call, never a lost or exhausted snapshot.
+    let _ = exec(&mut e, &sid, "UNDO");
+    let r = exec(&mut e, &sid, "UNDO LAST-1");
+    let m = common::as_mutation(&r);
+    assert!(m.applied, "UNDO LAST-1 reaches the earlier mutation");
+    assert_eq!(fs::read_to_string(&first).unwrap(), "");
+    assert_eq!(fs::read_to_string(&second).unwrap(), "");
+}
+
+#[test]
+fn undo_last_n_rewrites_only_the_files_that_mutation_touched() {
+    let (mut e, sid, _dir) = engine_with_session();
+    let root = e.session_worktree(&sid).expect("worktree");
+    let first = root.join("undo_first.txt");
+    let second = root.join("undo_second.txt");
+
+    let _ = exec(&mut e, &sid, "CHANGE FILE 'undo_first.txt' WITH 'one'");
+    let _ = exec(&mut e, &sid, "CHANGE FILE 'undo_second.txt' WITH 'two'");
+
+    // A slot holds the files ITS OWN mutation touched, so LAST-1 does not
+    // "reverse the two most recent mutations at once" when they touched
+    // different files — it rewrites the older mutation's file and leaves the
+    // newer edit standing. The docs said otherwise until this was measured.
+    let r = exec(&mut e, &sid, "UNDO LAST-1");
+    let m = common::as_mutation(&r);
+    assert!(m.applied);
+    assert_eq!(m.files_changed.len(), 1, "got: {:?}", m.files_changed);
+    assert_eq!(fs::read_to_string(&first).unwrap(), "");
+    assert_eq!(
+        fs::read_to_string(&second).unwrap(),
+        "two",
+        "LAST-1 must not reverse a newer mutation to a different file"
+    );
 }

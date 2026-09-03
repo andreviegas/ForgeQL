@@ -45,7 +45,7 @@ The right way to find and read code:
 - Relocate a node: `MOVE NODE '<src>' BEFORE/AFTER NODE '<dst>'` — verbatim payload, atomic, cross-file; source removal absorbs trailing blanks; the engine never re-indents
 - Create a file/directory: `INSERT NODE FOR 'src/new.rs'` · `INSERT NODE FOR 'docs/'` — returns the new handle; write into it with `INSERT AFTER NODE '<hex>' WITH '...'`
 - Rename/move/copy a file: `MOVE NODE '<hex>' IF REV '<rev>' TO 'path/new.rs'` (or `TO '<dir_hex>'`) · `COPY NODE '<hex>' TO 'api/v2/'` — MOVE is gated, COPY is not; the destination is never clobbered
-- Reverse a bad edit: `UNDO` (most recent) · `UNDO LAST-n`
+- Reverse a bad edit: `UNDO` (most recent; it is `LAST-0` every call, so a repeat rewrites nothing and answers `applied: false`) · `UNDO LAST-n` (how you step further back)
 - Act on a whole FIND result — `FOUND` is the set the previous FIND returned, and its response carries a **master rev** (`found_rev`) that gates the mutation. Every member is edited in ONE atomic plan:
   - Sweep: `CHANGE NODES FOUND IF REV '<master>' MATCHING 'old' WITH 'new'` — a handle contributes its whole span, a `FIND usages` row its one line (it displays its file's handle so you can edit the site directly, but still contributes only its line here)
   - Delete: `DELETE NODES FOUND IF REV '<master>'` — `IF REV` mandatory

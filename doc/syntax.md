@@ -907,11 +907,24 @@ UNDO LAST-n
 
 Every mutation snapshots the pre-edit bytes of the files it touched into a
 per-session **undo ring** (10 slots deep). `UNDO` restores the most recent
-mutation's pre-edit state; `UNDO LAST-n` restores the state from `n` mutations
-further back (reversing the last `n+1` mutations at once). The restore reindexes
-the touched files and invalidates the commit gate exactly like a forward
-mutation. The ring lives in the session worktree, is excluded from commits, and
-dies with the worktree.
+mutation's pre-edit state — it means `LAST-0` on every call and advances no
+cursor, so repeating it addresses that same slot again rather than walking
+further back; `UNDO LAST-n` reaches the slot `n` mutations further back and is
+how you step — it rewrites the files THAT mutation touched, so it reverses the
+last `n+1` mutations only where they touched the same files, and a newer edit to
+a different file survives it and needs its own call. A restore
+that rewrites bytes reindexes the touched files and invalidates the commit gate
+exactly like a forward mutation; a call that finds every file already holding
+the slot's bytes writes nothing, reindexes nothing, leaves the gate as it was,
+and answers `applied: false` with an empty `files_changed` and a note saying so
+— so a bare `UNDO` retried after a timeout is safe, and a repeat is never
+reported as a second restore. That note claims only what was checked, that every
+file the slot covers already holds its pre-edit bytes: a snapshot entry of zero
+bytes cannot tell "was empty" from "did not exist", so undoing a mutation that
+CREATED an empty file reports nothing rewritten while the file remains.
+`UNDO` with nothing yet mutated in the
+session is an error, not an empty success. The ring lives in the session
+worktree, is excluded from commits, and dies with the worktree.
 
 ---
 

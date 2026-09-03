@@ -133,7 +133,7 @@ Edit indexed code by stable `node_id` **only**: `CHANGE NODE` replaces a node, `
 | `MOVE NODE '<hex>' IF REV '<rev>' TO '<path>'` | Rename or move a file: `TO` takes a directory handle (basename kept) or a path. The source is unlinked, not emptied. `COPY NODE … TO …` is the ungated twin. |
 | `INSERT NODE FOR '<path>'` | Create an empty file — or a directory, with a trailing slash — and get its handle back. Then write into it with `INSERT AFTER NODE '<hex>' WITH …`. |
 | `<mutation> IF REV '<rev>'` | Guard a mutation on the node's content rev |
-| `UNDO` / `UNDO LAST-n` | Reverse recent mutations from the per-session undo ring |
+| `UNDO` / `UNDO LAST-n` | Reverse recent mutations from the per-session undo ring — bare `UNDO` is `LAST-0` on every call, so a repeat rewrites nothing and answers `applied: false`; `UNDO LAST-n` is how you step further back |
 | `CHANGE NODES FOUND IF REV '<master>' MATCHING 'a' WITH 'b'` | Sweep the replacement across **every member of the previous FIND** — a handle contributes its whole span, a usage row its one line (a usage row displays its file's handle so you can edit the site directly, but still contributes only its line here) |
 | `DELETE NODES FOUND IF REV '<master>'` | Delete every member. `IF REV` **mandatory** |
 | `MOVE NODES FOUND IF REV '<master>' TO 'dir/'` · `COPY NODES FOUND TO 'dir/'` | Relocate every member into a directory, each keeping its basename; two members sharing a basename are refused, never merged. MOVE is gated, COPY is not |
