@@ -6,6 +6,181 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.196.0] — 2026-09-03 — four answers that were wrong about themselves
+
+**No re-index and no overlay rebuild:** nothing stored changes. The
+enrichment version stays at 73 and the overlay schema version at 17. The new
+`member_wrapper_kinds` plugin config key is read only by `SHOW members`; a
+config that omits it behaves exactly as before.
+
+**Two fields answer differently now, so read this before upgrading.** A
+variable whose `scope` is `local` no longer carries `usages` at all — it used
+to report the corpus-wide count of its NAME, the same number for every
+binding sharing it — so a numeric `usages` predicate no longer matches such a
+row, `= 0` and `!=` included, and `ORDER BY usages` ranks it as
+value-absent. And a repeated bare `UNDO` now answers `applied: false` with an
+empty `files_changed` instead of reporting a restore it did not perform.
+
+- A local variable no longer reports a `usages` count. The column is the
+  workspace-total number of `role = 'code'` occurrence sites of a row's NAME,
+  which is a real dependency count where the name identifies the symbol across
+  the workspace and meaningless where it does not: the engine does not resolve
+  scoped references, so all 11,964 local bindings named `ret` in a Zephyr
+  checkout each reported the same 83,611, and the blast-radius workflow the
+  agent docs teach reads that as references. Such a row now carries no value
+  for the field at all, and every reader agrees on the absence — it matches no
+  `usages` predicate (`= 0` included, so the dead-code recipe no longer sweeps
+  in every local binding), it renders an empty metric column instead of `0`,
+  and under `ORDER BY usages` it ranks behind every row that has a count in
+  both directions rather than tying with one, which is what the comparator did
+  before: its numeric branch fires only when both rows answer with a number,
+  and `usages` has no string form to fall back on, so a local and a function
+  compared equal and a name tie-break decided the page. The rule is written
+  once and every reader reaches it from there: the query-time stamp on the
+  columnar backend, the row build on the in-memory one, and the in-memory row
+  VIEW its own symbol lookup filters through — a reader that builds no row at
+  all, and the one the first draft of this change left answering the raw
+  count, so `SHOW context OF '<local>' WHERE usages >= 0` resolved a row
+  `FIND symbols` had stopped answering for. A file-scope variable and a
+  function are untouched; a variable row carrying no `scope` enrichment keeps
+  its count on purpose, which today leaves function parameters counted by name.
+
+- `WHERE usages` now answers the same on a symbol lookup as on `FIND`. The path
+  that resolves the name for `SHOW body`, `SHOW signature`, `SHOW outline` and
+  `SHOW members` read the count two ways and both were wrong: its segment prune
+  mapped the field onto the per-segment `usages_count` column, a stale
+  always-zero legacy field, and the candidate row it then tested the predicate
+  against had never been stamped with the workspace total. So
+  `SHOW body OF 'f' WHERE usages > 0` answered "no symbol matches" for a symbol
+  `FIND` reports usages for, and `WHERE usages = 0` matched every symbol. The
+  `FIND` path had always skipped that prune; the lookup now skips it too and
+  stamps the row before reading it.
+
+- `SHOW members` no longer omits a decorated method. A grammar routinely puts a
+  member inside a node of its own — Python wraps a decorated method in a
+  `decorated_definition` with its decorators, C++ wraps a template member in a
+  `template_declaration` with its parameter list — and the wrapper, not the
+  member, is the direct child of the class body. The classifier tested each
+  direct child against the language's field / function / declaration /
+  enumerator kinds, so every wrapped member matched none of them and was
+  dropped: `torch.nn.Module` declares `to` four times and `state_dict` three,
+  and the listing showed one of each. A verb whose whole purpose is
+  completeness was silently omitting every `@property`, `@staticmethod`,
+  `@classmethod` and `@overload` in every Python class.
+
+  Which kinds are wrappers is DECLARED by the language, in a new
+  `member_wrapper_kinds` config key — `decorated_definition` for Python,
+  `template_declaration` for C++. The classifier looks through a node of a
+  declared wrapper kind for the single member inside it, and a language that
+  gains a wrapper adds it there rather than in the engine.
+
+  Inferring the wrappers instead — "a node that names no member and holds
+  exactly one member child" — is the obvious design and it is wrong twice. It
+  admits a C++ `friend_declaration`, whose single function is not a member of
+  the class at all, so a verb that had merely been incomplete would begin
+  asserting something untrue; and the only way to keep that out without naming
+  wrappers is to forbid unwrapping to a declaration, which then loses a real
+  member — a template method declared in the class and defined out of line is a
+  `template_declaration` wrapping a `declaration`. Both halves are STRUCTURAL,
+  read off the grammars rather than observed: the corpus that was measured holds
+  no out-of-line-defined template member and no friend the inferred rule was
+  ever run against, so neither was seen listed. What IS measured is that the
+  declared rule recovers real C++ members at all — a nested class in that header
+  lists 6 methods before the fix and 7 after, the seventh an inline conversion
+  operator inside a `template_declaration`. A separate measurement is what
+  killed the inferred design outright: an earlier draft listed 24 of `Module`'s
+  class attributes as methods, because Python declares `assignment` a
+  declaration kind and a class body wraps every attribute in an
+  `expression_statement`. Golden cases pin all three outcomes — no member row
+  that is not a `def` line, no C++ member row without a parameter list, and no
+  member row naming a friend operator.
+
+  A row carries the INNER node's line and text, so a decorated method is listed
+  by its `def` line: the decorator says how a method is bound, not what it is.
+  A golden case pins that line directly — an overload whose decorator sits one
+  line above its `def` must be listed at the `def` — because a count of the
+  overloads cannot tell the two lines apart. The handle on that row still
+  resolves to the indexed `function_definition` row, whose span is folded back
+  to its leading decorator — the index emits no row for the wrapper itself — so
+  the listed line and the handle's own start line differ for a decorated method
+  exactly as they already do for a C++ field declared under an attribute.
+
+  Two censuses are pinned but NOT claimed equal, because they are not. On
+  `torch.nn.Module` the listing reaches 76 methods where the row path
+  attributes 81; the 76 is the complete one, and the five extra are
+  method-local closures that `enclosing_type` attributes to the class although
+  they are not members of it. On a C++ class the listing reaches 78 where the
+  row path attributes 72; that delta is a cardinality difference whose
+  composition is not yet measured, and it is recorded as such rather than
+  guessed — the Python residue was described from inference first and the
+  inference ran backwards. Pinning both sides means closing either shows up as
+  two numbers moving together, and a regression as one moving alone.
+
+  Rust is exempt by construction rather than by omission: a Rust method is
+  declared in an `impl` block and not in the struct body, so `SHOW members` over
+  a struct lists its fields and a parity claim there would assert something
+  false. That is pinned too.
+
+- `FIND usages OF` now says when it skipped a file for its bytes. The scan
+  passes over anything that is not text it decodes — binary, UTF-32 even when
+  its mark declares it, and UTF-16 written without a mark, which is
+  indistinguishable from binary. That boundary is deliberate and documented,
+  but the response's `hint` counted only files that failed to OPEN, so a name
+  living only in a skipped file came back as a confident zero with nothing to
+  say a candidate had never been read. The two causes are now reported
+  together in that one hint, each with its own count and named reason.
+
+  The count covers every source the scan draws candidates from — indexed
+  segments, file-only entries, a session's dirty segments, and the
+  non-indexed files a session created — not by four separate additions but
+  because those sources are collected into one path list and read by one
+  loop, so a source cannot be added later and quietly go uncounted. The
+  in-memory backend reads no files at all, answering from its index alone, so
+  it has nothing to count and makes no such claim.
+
+  The count is about what the scan did, so it includes any binary file the
+  workspace holds — an object file, an image, and ForgeQL's own index blobs
+  where a data directory sits inside the worktree root. That is honest rather
+  than noisy: such a file embeds symbol names, which is exactly why its sites
+  must not be swept, and the whole point of the count is to say that bytes
+  holding the name may have gone unread.
+
+- A repeated bare `UNDO` no longer reports a restore it did not perform. Bare
+  `UNDO` means `LAST-0` on every call and advances no cursor — deliberately, so
+  that retrying a destructive verb after a timeout cannot step further back than
+  the first call would have — which means a second `UNDO` addresses the slot the
+  first one already restored. It rewrote those same bytes and answered
+  `applied: true` with "restored 1 file(s)" naming the file, while the earlier
+  mutation it appeared to be reversing stayed applied. An agent reading that had
+  every reason to believe it had rolled back twice.
+
+  A restore now skips any file that already holds the slot's bytes, and a call
+  that rewrites nothing answers `applied: false` with an empty `files_changed`,
+  `edit_count: 0`, and a note saying so and pointing at `UNDO LAST-n` for
+  stepping further back — a distinct shape an agent can branch on. The note
+  claims only what was checked, that every file the slot covers already holds
+  its pre-edit bytes, and not that the tree is back at its pre-mutation state:
+  a snapshot entry of zero bytes means both "was empty" and "did not exist", so
+  the one mutation that CREATES an empty file is reported as nothing-to-rewrite
+  while the created file is still there. Such a call also touches nothing
+  downstream: a tree that did not change cannot have made the index, the `FOUND`
+  set or a satisfied commit gate stale, so none of them is invalidated. A
+  restore that does rewrite bytes behaves as before, except that `edit_count`
+  and `files_changed` now count the files actually written rather than every
+  file the slot holds.
+
+  `UNDO` with nothing yet mutated in the session was checked at the same time
+  and is NOT the same defect: it refuses with "nothing to undo" rather than
+  claiming a restore. A test now pins that, so it cannot quietly become an
+  empty success.
+
+  Documenting the repeat turned up a second, older inaccuracy in the same
+  paragraph and it is corrected too: `UNDO LAST-n` was described as "reversing
+  the last n+1 mutations at once". A ring slot holds only the files ITS OWN
+  mutation touched, so `LAST-n` rewrites those files and reverses the n+1 most
+  recent mutations only where they touched the same files — a newer mutation to
+  a different file survives it and needs its own call. A test pins that.
+
 ## [0.195.0] — 2026-08-31 — the CSV metric column answers the field its header names
 
 **No re-index and no overlay rebuild:** rendering only. The enrichment
