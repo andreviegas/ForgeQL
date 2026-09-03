@@ -127,6 +127,11 @@ pub struct LanguageConfig {
     /// Raw kind for the body of a type (e.g. `"field_declaration_list"`).
     pub(crate) member_body_raw_kind: String,
 
+    /// Raw kinds that WRAP a single member inside a type body without being a
+    /// member themselves. Declared by the language, never inferred — see
+    /// `DefinitionsSection::member_wrapper_kinds`.
+    pub(crate) member_wrapper_raw_kinds: Vec<String>,
+
     /// Raw kinds for members inside a type body.
     pub(crate) member_raw_kinds: Vec<String>,
 

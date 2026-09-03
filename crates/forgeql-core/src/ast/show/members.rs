@@ -39,17 +39,102 @@ fn is_method_declaration(node: tree_sitter::Node<'_>, fn_decl_kind: &str) -> boo
     has_fn_declarator(node, fn_decl_kind)
 }
 
+/// Does `node`'s own kind name a member this classifier can describe?
+fn is_member_kind(node: tree_sitter::Node<'_>, config: &LanguageConfig) -> bool {
+    let k = node.kind();
+    config.is_field_kind(k)
+        || config.is_function_kind(k)
+        || config.is_declaration_kind(k)
+        || config.is_enumerator_kind(k)
+}
+
+/// Look through a declared wrapper for the member it wraps.
+///
+/// A grammar routinely puts a member inside a node of its own: Python wraps a
+/// decorated method in a `decorated_definition` together with its decorators,
+/// C++ wraps a template member in a `template_declaration` together with its
+/// parameter list. The wrapper is the direct child of the class body; the
+/// member is not. A classifier that only looks at direct children therefore
+/// omits it — silently, from a verb whose whole purpose is completeness.
+/// `torch.nn.Module` declares `to` four times and listed one.
+///
+/// Which kinds are wrappers is DECLARED by the language, never inferred here.
+/// The inferred rule — "a node that names no member and has exactly one member
+/// child" — is the obvious one and it is wrong twice over. It admits a C++
+/// `friend_declaration`, whose single `function_definition` is not a member of
+/// the class at all, so the verb would begin asserting something untrue. And
+/// to keep that out by narrowing what may be unwrapped TO, it must exclude
+/// declaration kinds, which then loses a real C++ member: a template method
+/// declared in the class and defined out of line is a `template_declaration`
+/// wrapping a `declaration`. Naming the wrappers costs one config key and
+/// closes both, because the judgement lives with the grammar that knows it.
+///
+/// The descent follows wrappers as well as members, so a wrapper inside a
+/// wrapper resolves rather than stopping at the outer one. It needs no step
+/// bound to terminate: every iteration moves strictly to a NAMED CHILD of the
+/// current node, so a finite tree runs the walk out on its own — and a cap
+/// could only ever turn a deep tree into a dropped member.
+///
+/// Where it cannot decide it returns the wrapper, which `classify_member`
+/// classifies as nothing — the member is OMITTED, exactly the silence this
+/// function exists to remove. That is deliberate for the two undecidable
+/// shapes (a declared wrapper holding two members, or none) because naming
+/// one of two members would be a wrong answer rather than a missing one.
+fn unwrap_to_member<'t>(
+    node: tree_sitter::Node<'t>,
+    config: &LanguageConfig,
+) -> tree_sitter::Node<'t> {
+    let mut current = node;
+    loop {
+        if !config.is_member_wrapper_kind(current.kind()) {
+            return current;
+        }
+        // A wrapper may hold either the member or another wrapper, so both are
+        // candidates; without the second the walk would stop at the outer
+        // wrapper of a nested pair and DROP the member, which is the failure
+        // this whole function exists to remove.
+        let mut cursor = current.walk();
+        let mut inner = None;
+        for child in current.named_children(&mut cursor) {
+            if is_member_kind(child, config) || config.is_member_wrapper_kind(child.kind()) {
+                if inner.is_some() {
+                    // Two candidates: not a shape this can describe. Returning
+                    // the wrapper means `classify_member` yields None and the
+                    // member is omitted — the same silence this fix removes,
+                    // kept deliberately for a shape nobody has declared,
+                    // because guessing which of two members to name would be
+                    // worse than saying nothing.
+                    return current;
+                }
+                inner = Some(child);
+            }
+        }
+        match inner {
+            // Likewise: a declared wrapper holding no member and no wrapper is
+            // returned as itself and classified as nothing.
+            None => return current,
+            Some(child) => current = child,
+        }
+    }
+}
 /// Classify one body-child node into its member JSON entry.
 ///
 /// Returns `None` for non-member nodes (punctuation, access specifiers, …).
+///
+/// The node is first looked through for the member it wraps, so a decorated
+/// Python method or a C++ template member is classified as the definition it
+/// contains rather than dropped for the wrapper's kind. The row therefore
+/// carries the INNER node's line, byte offset and text — for a decorated
+/// method that is the `def` line, because the decorator is not the
+/// declaration: it says how the method is bound, not what it is.
 fn classify_member(
     child: tree_sitter::Node<'_>,
     source: &[u8],
     config: &LanguageConfig,
 ) -> Option<Value> {
+    let child = unwrap_to_member(child, config);
     let ln = byte_to_line(source, child.start_byte()) + 1;
     let ck = child.kind();
-
     if config.is_field_kind(ck) {
         if is_method_declaration(child, config.function_declarator()) {
             let sig = std::str::from_utf8(&source[child.start_byte()..child.end_byte()])

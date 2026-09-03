@@ -415,6 +415,18 @@ impl LanguageConfig {
         self.enumerator_raw_kind == kind
     }
 
+    /// Does `kind` name a node that WRAPS a single member without being one?
+    ///
+    /// Declared per language rather than inferred. "A node inside a type body
+    /// with exactly one member child" looks like a workable definition and is
+    /// not: a C++ `friend_declaration` fits it exactly, and the function it
+    /// holds is not a member of the class at all. Naming the wrappers keeps
+    /// that judgement with the grammar that knows it.
+    #[must_use]
+    pub fn is_member_wrapper_kind(&self, kind: &str) -> bool {
+        self.member_wrapper_raw_kinds.iter().any(|k| k == kind)
+    }
+
     /// Is this a binary expression kind?
     #[must_use]
     pub fn is_binary_expression_kind(&self, kind: &str) -> bool {

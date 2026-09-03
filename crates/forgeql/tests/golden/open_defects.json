@@ -353,6 +353,129 @@
    }
   },
   {
+   "name": "control_show_members_lists_an_undecorated_method",
+   "description": "Anchors the two cases below on the same class. torch.nn.Module declares add_module once, undecorated, at line 642; SHOW members lists it. This is the shape every method row should have, decorated or not.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "SHOW members OF 'Module' IN 'torch/nn/modules/module.py' WHERE declaration LIKE 'def add_module(%'",
+   "assert": {
+    "row_count": 1,
+    "rows": [
+     { "line": 642 }
+    ]
+   }
+  },
+  {
+   "name": "show_members_lists_the_decorated_overloads_of_a_method",
+   "description": "PROMOTED. torch.nn.Module declares `to` four times in its body: three @overload stubs (lines 1240-1252, each a decorated_definition) and the undecorated implementation at 1254. FIND symbols counted all four as functions with enclosing_type Module; SHOW members listed ONE, so a verb whose whole purpose is completeness silently omitted every decorated method of every Python class — @property, @staticmethod, @classmethod, @overload alike. classify_member now looks through a node whose kind the LANGUAGE declares a member wrapper — decorated_definition for Python — and classifies the function_definition inside it. The row carries the inner node's line and text, which is the `def` line: the decorator says how a method is bound, not what it is. This row_count cannot see that line — it is satisfied by rows carrying either one — so the case immediately below pins it.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "SHOW members OF 'Module' IN 'torch/nn/modules/module.py' WHERE declaration LIKE 'def to(%'",
+   "assert": {
+    "row_count": 4
+   }
+  },
+  {
+   "name": "a_decorated_method_row_carries_the_def_line_not_the_decorator_line",
+   "description": "The behaviour the case above cannot see: a row_count of 4 is satisfied by rows carrying either line, and the def-line choice is claimed in three places — that case's description, the changelog fragment and the classify_member doc comment — so it needs a pin of its own. This overload's decorator sits at 1248 and its `def` at 1249, so the row must say 1249; classify_member reads the line off the node it classifies, which is now the inner function_definition, and a regression that classified the wrapper instead would answer 1248 and turn this red. Verified red before the fix on the deployed 0.195.0, where this query returns no rows at all. The handle the row carries still addresses the indexed function_definition row, whose span is folded back to its leading decorator and so starts at 1248 — the index deliberately emits NO decorated_definition row of its own, and stamp_member_handles resolves the def byte through the smallest containing row for exactly this reason, the same way a C++ field row's line differs from the attribute line its indexed node starts on.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "SHOW members OF 'Module' IN 'torch/nn/modules/module.py' WHERE declaration LIKE 'def to(self, dtype%'",
+   "assert": {
+    "row_count": 1,
+    "rows": [
+     { "line": 1249 }
+    ]
+   }
+  },
+  {
+   "name": "show_members_lists_a_second_decorated_method_family",
+   "description": "PROMOTED. Same class, a second method NAME, so a fix keyed to `to` could not pass by luck: state_dict is declared three times — two @overload stubs and the implementation — and SHOW members listed one. This case does NOT establish a second DECORATOR: every decorator in Module's body is @overload, so a fix that special-cased that one name would still pass here. What makes the rule decorator-blind is structural rather than pinned by a corpus that happens to use one decorator — the unwrap tests the WRAPPER kind (decorated_definition) and never reads a decorator name at all, which is why one rule closes both families and the C++ template_declaration case with them.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "SHOW members OF 'Module' IN 'torch/nn/modules/module.py' WHERE declaration LIKE 'def state_dict(%'",
+   "assert": {
+    "row_count": 3
+   }
+  },
+  {
+   "name": "control_the_python_class_declares_this_many_methods",
+   "description": "The authoritative count for the parity pin below, taken from the row path rather than from the verb under test. FIND counts a decorated method like any other, so this number did not move when SHOW members was fixed — which is what makes it a control and not a restatement.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' WHERE enclosing_type = 'Module' IN 'torch/nn/modules/module.py'",
+   "assert": {
+    "total": 81
+   }
+  },
+  {
+   "name": "show_members_lists_the_python_methods_it_reaches",
+   "description": "The census the wrapper fix was checked against, pinned on BOTH sides so either verb going astray shows up. It is NOT a parity claim, and the direction matters: SHOW members lists 76 methods for this class body and the row path attributes 81, but the 76 is the complete one. The five extra are method-local closures — compute_should_use_set_data (937), convert (1360), inner (1794), remove_from (1972), load (2584), each a `def` nested inside another method — which `enclosing_type` attributes to Module although they are not members of it. So the residue is over-attribution by the row path, not a shortfall in this verb, and a contributor sent to fix SHOW members would be fixing the wrong side. Measured, not inferred: the first draft of this description guessed the opposite direction and was wrong.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "SHOW members OF 'Module' IN 'torch/nn/modules/module.py' WHERE fql_kind = 'method'",
+   "assert": {
+    "row_count": 76
+   }
+  },
+  {
+   "name": "control_the_cpp_class_declares_this_many_methods",
+   "description": "The same authoritative count for C++, scoped to the one header so the number is about a class body rather than about every instantiation the corpus holds.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' WHERE enclosing_type = 'sherwood_v3_table' IN 'c10/util/order_preserving_flat_hash_map.h'",
+   "assert": {
+    "total": 72
+   }
+  },
+  {
+   "name": "show_members_lists_the_cpp_methods_it_reaches",
+   "description": "The same census for C++: SHOW members reaches 78 methods where the row path attributes 72. Every row listed here carries a parameter list, pinned separately, so none of them is junk the unwrap admitted. What is NOT established is that the 72 are a subset of the 78: only the two cardinalities are measured, and a delta of six is equally consistent with rows gained and lost at once. The exact composition of the six is NOT yet measured, and this description says so rather than guessing: the Python case was described from inference first and the inference ran backwards. One row the wrapper rule RECOVERS is known, which is a different measurement and not a claim about the six: templated_iterator, a nested class in this same header, lists 6 methods on the pre-fix binary and 7 after, and the seventh is the inline conversion operator at 472 — a function_definition inside a template_declaration. Whether it is among the six is not measured.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "SHOW members OF 'sherwood_v3_table' IN 'c10/util/order_preserving_flat_hash_map.h' WHERE fql_kind = 'method'",
+   "assert": {
+    "row_count": 78
+   }
+  },
+  {
+   "name": "a_friend_function_is_not_listed_as_a_member",
+   "description": "The guard for the design this fix settled on, asserted directly rather than by a count. An inferred wrapper rule — descend through any node naming no member that holds exactly one member child — is the obvious rule, and a C++ `friend_declaration` fits it exactly while the function it holds is not a member of the class at all. Listing it would make a verb that had merely been incomplete start asserting something untrue, and the parameter-list guard cannot catch it because a friend function has parameters. templated_iterator declares `friend bool operator==` and `operator!=` at lines 441 and 446; wrappers are declared by the language and friend_declaration is not one, so no member row names them. A count alone would not prove this — 6 real members plus 1 recovered template member also totals 7 — so the operator is named.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "SHOW members OF 'templated_iterator' IN 'c10/util/order_preserving_flat_hash_map.h' WHERE fql_kind = 'method' WHERE declaration LIKE '%operator==%'",
+   "assert": {
+    "row_count": 0
+   }
+  },
+  {
+   "name": "control_the_wrapper_fix_reaches_a_nested_cpp_class_too",
+   "description": "The control that keeps the friend guard from passing because nothing is listed at all. templated_iterator listed 6 methods before wrappers were unwrapped and lists 7 after — the seventh being the inline conversion operator at 472, a function_definition inside a template_declaration — while the two friend operators stayed out. If this drops to 6 the unwrap stopped reaching a nested class; if it rises to 8 or 9 the friends got in.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "SHOW members OF 'templated_iterator' IN 'c10/util/order_preserving_flat_hash_map.h' WHERE fql_kind = 'method'",
+   "assert": {
+    "row_count": 7
+   }
+  },
+  {
+   "name": "a_rust_struct_lists_its_fields_and_not_its_impl_methods",
+   "description": "The boundary, pinned so the two censuses above are not read as universal. In Rust a method is declared in an `impl` block, NOT in the struct body, so `SHOW members` over a struct lists its fields and nothing else while `enclosing_type` attributes 33 functions to the same name. That is not a wrapper this fix missed and not a shortfall to close — the two verbs are answering about different syntax, and a parity pin for Rust would assert something false. SegmentReader declares 13 fields; if that moves, the fixture changed.",
+   "use": "forgeql-pub.frozen",
+   "fql": "SHOW members OF 'SegmentReader'",
+   "assert": {
+    "row_count": 13
+   }
+  },
+  {
+   "name": "unwrapping_a_wrapper_does_not_turn_a_class_attribute_into_a_method",
+   "description": "The guard that caught this fix's first draft, kept because it caught it. That draft inferred wrappers instead of taking them from the language: it descended through any node naming no member that held exactly one member child. Python declares `assignment` a declaration kind, a class body wraps every attribute in an `expression_statement`, and `classify_member`'s declaration arm labels a declaration `method` — so the draft listed 24 of torch.nn.Module's class attributes AS METHODS. A verb that had been merely incomplete would have started reporting things that are not methods, which is worse. What keeps them out now is that `expression_statement` is not a declared member wrapper; the unwrap still targets ANY member kind, deliberately, because forbidding declaration targets is what would lose a C++ template member declared in-class and defined out of line. Every method row here must be a `def` line.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "SHOW members OF 'Module' IN 'torch/nn/modules/module.py' WHERE fql_kind = 'method' WHERE declaration NOT LIKE 'def %'",
+   "assert": {
+    "row_count": 0
+   }
+  },
+  {
+   "name": "every_cpp_member_row_the_unwrap_adds_is_a_function",
+   "description": "The same guard on the other grammar. A C++ method row must carry a parameter list; a `using` alias or a data member does not. It says the rows SHOW members finds beyond what the row path attributes are real member functions rather than junk the unwrap admitted — but only that. It does NOT establish that the 72 the row path attributes are a subset of the 78 listed here: two cardinalities are consistent with rows gained and lost at once, and the Python census is the precedent for a count delta hiding its direction.",
+   "use": "pytorch-andre.pytorch-frozen",
+   "fql": "SHOW members OF 'sherwood_v3_table' IN 'c10/util/order_preserving_flat_hash_map.h' WHERE fql_kind = 'method' WHERE declaration NOT LIKE '%(%'",
+   "assert": {
+    "row_count": 0
+   }
+  },
+  {
    "name": "control_line_463_is_still_the_subscript",
    "description": "Anchors the identity of the line, not just the row: the pin below is addressed by line number against a frozen snapshot, so a re-pin that shifts the fixture could put an `int x = 0;` declaration on 463 and turn the pin green while proving nothing.",
    "use": "forgeql-pub.frozen",

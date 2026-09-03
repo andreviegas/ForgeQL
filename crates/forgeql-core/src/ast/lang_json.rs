@@ -284,6 +284,19 @@ pub struct DefinitionsSection {
     #[serde(default)]
     pub member_body_kind: String,
 
+    /// Node kinds that WRAP a single member inside a type body without being
+    /// a member themselves — Python's `decorated_definition`, C++'s
+    /// `template_declaration`.
+    ///
+    /// The wrapper is the direct child of the body and the member is not, so
+    /// `SHOW members` must look through it or omit the member silently. The
+    /// vocabulary is declared here rather than inferred, because "a node with
+    /// exactly one member child" also describes shapes that are NOT wrappers:
+    /// a C++ `friend_declaration` holds one `function_definition` and that
+    /// function is not a member of the class at all.
+    #[serde(default)]
+    pub member_wrapper_kinds: Vec<String>,
+
     /// Member kinds inside a type body.
     #[serde(default)]
     pub member_kinds: Vec<String>,
@@ -714,6 +727,7 @@ impl LanguageConfigJson {
             field_raw_kinds: self.definitions.field_kinds,
             parameter_raw_kind: self.definitions.parameter_kind,
             member_body_raw_kind: self.definitions.member_body_kind,
+            member_wrapper_raw_kinds: self.definitions.member_wrapper_kinds,
             member_raw_kinds: self.definitions.member_kinds,
             owner_container_raw_kinds: self.definitions.owner_container_kinds,
             comment_raw_kind: self.syntax.comment,
